@@ -8,8 +8,9 @@ monotonic `last_sequence` powers replay protection on ingest (rule 5.4).
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, ForeignKey, String
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -34,3 +35,8 @@ class Device(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     # Revocation / rotation.
     is_revoked: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+    # Last time we received a sample from this device (health / online status).
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )

@@ -69,9 +69,10 @@ class ActivityService:
             flags=flags,
         )
 
-        # Advance the high-water mark only after a successful insert.
+        # Advance the high-water mark + mark the device seen, only after insert.
         db_device = await self._devices.get(device.device_id)
         if db_device is not None:
             await self._devices.advance_sequence(db_device, payload.sequence)
+            await self._devices.touch_last_seen(db_device, received_at)
 
         return sample

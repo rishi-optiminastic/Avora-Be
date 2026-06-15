@@ -110,6 +110,16 @@ class EmployeeRepository:
         )
         return rows.scalars().all(), int(total or 0)
 
+    async def all_in_scope(self, caller: CurrentUser) -> Sequence[Employee]:
+        """Every active employee visible to the caller (no pagination) — used by
+        attendance/activity rollups that must include people with zero samples."""
+        clauses = self._scope_clause(caller)
+        clauses.append(Employee.is_active.is_(True))
+        rows = await self._session.execute(
+            select(Employee).where(*clauses).order_by(Employee.full_name)
+        )
+        return rows.scalars().all()
+
     async def upsert_from_hr(
         self,
         *,

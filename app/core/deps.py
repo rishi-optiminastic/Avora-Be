@@ -37,12 +37,14 @@ from app.repositories.leave_comment import LeaveCommentRepository
 from app.repositories.task import TaskRepository
 from app.schemas.auth import AuthIdentity, CurrentDevice, CurrentUser
 from app.services.activity_service import ActivityService
+from app.services.device_service import DeviceService
 from app.services.email_service import EmailService
 from app.services.employee_service import EmployeeService
 from app.services.holiday_service import HolidayService
 from app.services.hr_service import HRService
 from app.services.invitation_service import InvitationService
 from app.services.leave_service import LeaveService
+from app.services.monitoring_service import MonitoringService
 from app.services.task_service import TaskService
 
 # --------------------------------------------------------------------------- #
@@ -119,6 +121,22 @@ def get_hr_service(
     return HRService(employees, audit)
 
 
+def get_device_service(
+    settings: SettingsDep,
+    devices: Annotated[DeviceRepository, Depends(get_device_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> DeviceService:
+    return DeviceService(settings, devices, employees, audit)
+
+
+def get_monitoring_service(
+    activity: Annotated[ActivityRepository, Depends(get_activity_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+) -> MonitoringService:
+    return MonitoringService(activity, employees)
+
+
 def get_activity_service(
     settings: SettingsDep,
     devices: Annotated[DeviceRepository, Depends(get_device_repo)],
@@ -165,6 +183,8 @@ def get_holiday_service(
 EmployeeServiceDep = Annotated[EmployeeService, Depends(get_employee_service)]
 HRServiceDep = Annotated[HRService, Depends(get_hr_service)]
 ActivityServiceDep = Annotated[ActivityService, Depends(get_activity_service)]
+DeviceServiceDep = Annotated[DeviceService, Depends(get_device_service)]
+MonitoringServiceDep = Annotated[MonitoringService, Depends(get_monitoring_service)]
 InvitationServiceDep = Annotated[InvitationService, Depends(get_invitation_service)]
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
 LeaveServiceDep = Annotated[LeaveService, Depends(get_leave_service)]
