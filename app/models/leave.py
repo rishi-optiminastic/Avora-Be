@@ -1,0 +1,55 @@
+"""Leave — time-off requests and their approval workflow.
+
+A leave is requested BY an employee and decided BY their reviewer (manager / HR /
+admin). Reads are scoped to the caller like employees/tasks: own requests, your
+reports'/department's, or everything (admin/HR), plus anything you review.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+from enum import StrEnum
+
+from sqlalchemy import DateTime, ForeignKey, Index, String
+from sqlalchemy.orm import Mapped, mapped_column
+
+from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+
+
+class LeaveType(StrEnum):
+    PLANNED = "planned"
+    SICK = "sick"
+    UNPAID = "unpaid"
+    HALF_DAY = "half_day"
+
+
+class LeaveStatus(StrEnum):
+    DRAFT = "draft"
+    SUBMITTED = "submitted"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    CANCELLED = "cancelled"
+    WITHDRAWN = "withdrawn"
+
+
+class Leave(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "leaves"
+    __table_args__ = (Index("ix_leaves_employee_status", "employee_id", "status"),)
+
+    employee_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("employees.id", ondelete="CASCADE"), index=True
+    )
+    leave_type: Mapped[LeaveType] = mapped_column(default=LeaveType.PLANNED, index=True)
+    start_date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    end_date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    reason: Mapped[str | None] = mapped_column(String(1000), default=None)
+
+    status: Mapped[LeaveStatus] = mapped_column(default=LeaveStatus.SUBMITTED, index=True)
+
+    # Who decided (manager/HR/admin) — nullable until decided, SET NULL on offboard.
+    reviewer_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("employees.id", ondelete="SET NULL"), default=None
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    decision_note: Mapped[str | None] = mapped_column(String(1000), default=None)
