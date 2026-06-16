@@ -59,6 +59,12 @@ class ActivitySample(UUIDPrimaryKeyMixin, Base):
     active_window: Mapped[str | None] = mapped_column(String(512), default=None)
     idle_seconds: Mapped[int] = mapped_column(default=0)
 
+    # Browsing (Phase 2): the agent reports the active browser tab URL; we
+    # re-derive `domain` server-side (never trust a client-sent domain) and use
+    # it to categorise productive / neutral / distracting time.
+    url: Mapped[str | None] = mapped_column(String(2048), default=None)
+    domain: Mapped[str | None] = mapped_column(String(255), default=None, index=True)
+
     # Anomaly flags (skew, missing heartbeat, suspiciously regular input, gaps).
     # Recorded, never used to silently drop a sample (Security rule 5.4).
     flags: Mapped[list[str]] = mapped_column(JSON, default=list)

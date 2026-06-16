@@ -19,6 +19,7 @@ from datetime import UTC, datetime, time, timedelta
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.categories import extract_domain
 from app.core.config import get_settings
 from app.core.security import generate_device_token, hash_device_token
 from app.db.session import SessionFactory, engine
@@ -26,16 +27,23 @@ from app.models.activity import ActivitySample
 from app.models.device import Device
 from app.models.employee import Employee, EmployeeStatus
 
-WINDOWS = [
-    "VS Code",
-    "Chrome — GitHub",
-    "Slack",
-    "Figma",
-    "Terminal",
-    "Gmail",
-    "Notion",
-    "Zoom — Standup",
-    "Linear",
+# (active_window, url|None, weight) — browser rows carry a URL so the browsing
+# view derives a real productive/neutral/distracting split (productive weighted
+# heaviest, distracting rare).
+ACTIVITIES: list[tuple[str, str | None, int]] = [
+    ("Code", None, 22),
+    ("Terminal", None, 10),
+    ("Slack", None, 8),
+    ("Figma", None, 6),
+    ("Zoom", None, 4),
+    ("Google Chrome", "https://github.com/optiminastic/avora", 16),
+    ("Google Chrome", "https://stackoverflow.com/questions/4321", 8),
+    ("Google Chrome", "https://docs.google.com/document/d/abc", 7),
+    ("Google Chrome", "https://linear.app/optiminastic/board", 6),
+    ("Google Chrome", "https://chatgpt.com/c/xyz", 5),
+    ("Google Chrome", "https://mail.google.com/mail/u/0", 5),
+    ("Google Chrome", "https://www.youtube.com/watch?v=demo", 4),
+    ("Safari", "https://www.reddit.com/r/programming", 3),
 ]
 SAMPLE_EVERY = timedelta(minutes=10)
 
@@ -77,6 +85,7 @@ def _samples(
         idle = random.choices([random.randint(0, 90), random.randint(300, 1200)], weights=[85, 15])[
             0
         ]
+        window, url, _ = random.choices(ACTIVITIES, weights=[a[2] for a in ACTIVITIES])[0]
         out.append(
             ActivitySample(
                 device_id=device.id,
@@ -84,8 +93,10 @@ def _samples(
                 sequence=seq,
                 client_timestamp=stamp,
                 received_at=stamp,
-                active_window=random.choice(WINDOWS),
+                active_window=window,
                 idle_seconds=idle,
+                url=url,
+                domain=extract_domain(url),
                 flags=[],
             )
         )

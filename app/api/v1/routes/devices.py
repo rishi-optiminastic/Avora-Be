@@ -7,7 +7,7 @@ import uuid
 from fastapi import APIRouter, status
 
 from app.core.deps import CurrentUserDep, DeviceServiceDep
-from app.schemas.device import DeviceCreate, DeviceCreated, DeviceRead
+from app.schemas.device import DeviceCreate, DeviceCreated, DeviceRead, DeviceSelfEnroll
 
 router = APIRouter(prefix="/devices", tags=["devices"])
 
@@ -26,6 +26,23 @@ async def enroll_device(
 ) -> DeviceCreated:
     """Admin/IT enrolls a device; the raw token is returned exactly once."""
     device, raw_token = await service.enroll(caller, payload)
+    return DeviceCreated(
+        id=device.id,
+        employee_id=device.employee_id,
+        label=device.label,
+        token=raw_token,
+        created_at=device.created_at,
+    )
+
+
+@router.post("/self-enroll", response_model=DeviceCreated, status_code=status.HTTP_201_CREATED)
+async def self_enroll_device(
+    payload: DeviceSelfEnroll,
+    caller: CurrentUserDep,
+    service: DeviceServiceDep,
+) -> DeviceCreated:
+    """The agent enrolls the *caller's own* machine; raw token returned once."""
+    device, raw_token = await service.self_enroll(caller, payload)
     return DeviceCreated(
         id=device.id,
         employee_id=device.employee_id,

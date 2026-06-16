@@ -13,6 +13,8 @@ from app.models.holiday import Holiday, HolidayType
 from app.models.invitation import Invitation, InvitationStatus
 from app.models.leave import Leave, LeaveStatus, LeaveType
 from app.models.leave_comment import LeaveComment
+from app.models.ping import Ping
+from app.models.screenshot import Screenshot
 from app.models.task import Task, TaskCadence, TaskPriority, TaskStatus
 
 __all__ = [
@@ -30,7 +32,9 @@ __all__ = [
     "LeaveComment",
     "LeaveStatus",
     "LeaveType",
+    "Ping",
     "Role",
+    "Screenshot",
     "Task",
     "TaskCadence",
     "TaskPriority",

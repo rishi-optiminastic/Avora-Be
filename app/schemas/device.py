@@ -17,6 +17,18 @@ class DeviceCreate(BaseModel):
     label: str = Field(min_length=1, max_length=256)
 
 
+class DeviceSelfEnroll(BaseModel):
+    """The agent self-enrolls the calling user's own machine on first launch.
+
+    No employee_id — the device is always bound to the authenticated caller
+    (Golden rule #2). hostname/os are optional hints used to build the label.
+    """
+
+    label: str | None = Field(default=None, max_length=256)
+    hostname: str | None = Field(default=None, max_length=256)
+    os: str | None = Field(default=None, max_length=128)
+
+
 class DeviceCreated(BaseModel):
     """Returned on enrollment — carries the raw token, shown exactly once."""
 

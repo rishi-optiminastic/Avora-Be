@@ -23,6 +23,9 @@ class ActivityIngest(BaseModel):
     client_timestamp: datetime = Field(description="Agent-claimed time (untrusted).")
     active_window: str | None = Field(default=None, max_length=512)
     idle_seconds: int = Field(default=0, ge=0, le=86_400)
+    # Active browser tab URL (optional). The server re-derives the domain from
+    # this; a client-sent domain is never trusted (Golden rule #1).
+    url: str | None = Field(default=None, max_length=2048)
 
 
 class ActivityIngestResult(BaseModel):
@@ -40,4 +43,6 @@ class ActivitySampleRead(ORMModel):
     received_at: datetime
     active_window: str | None
     idle_seconds: int
+    url: str | None
+    domain: str | None
     flags: list[str]

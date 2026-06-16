@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,6 +36,8 @@ class ActivityRepository:
         client_timestamp: datetime,
         active_window: str | None,
         idle_seconds: int,
+        url: str | None,
+        domain: str | None,
         flags: list[str],
     ) -> ActivitySample:
         sample = ActivitySample(
@@ -45,6 +47,8 @@ class ActivityRepository:
             client_timestamp=client_timestamp,
             active_window=active_window,
             idle_seconds=idle_seconds,
+            url=url,
+            domain=domain,
             flags=flags,
         )
         self._session.add(sample)
@@ -99,6 +103,62 @@ class ActivityRepository:
         for sample in rows.scalars():
             latest.setdefault(sample.employee_id, sample)
         return latest
+
+    async def browsing_by_day(
+        self, employee_ids: Sequence[uuid.UUID], start: datetime, end: datetime
+    ) -> dict[uuid.UUID, dict[date, list[tuple[str, int]]]]:
+        """Per-employee, per-UTC-day (domain, count) over a range — for the
+        productivity trend. The UTC cast keeps day buckets stable regardless of
+        the DB session timezone."""
+        if not employee_ids:
+            return {}
+        day = func.date(ActivitySample.received_at)
+        stmt = (
+            select(
+                ActivitySample.employee_id, day.label("day"), ActivitySample.domain, func.count()
+            )
+            .where(
+                ActivitySample.employee_id.in_(employee_ids),
+                ActivitySample.received_at >= start,
+                ActivitySample.received_at < end,
+                ActivitySample.domain.is_not(None),
+            )
+            .group_by(ActivitySample.employee_id, day, ActivitySample.domain)
+        )
+        rows = await self._session.execute(stmt)
+        result: dict[uuid.UUID, dict[date, list[tuple[str, int]]]] = {}
+        for emp_id, d, domain, count in rows.all():
+            # Postgres returns a date; SQLite returns a 'YYYY-MM-DD' string.
+            day_key = d if isinstance(d, date) else date.fromisoformat(str(d)[:10])
+            result.setdefault(emp_id, {}).setdefault(day_key, []).append((domain, int(count)))
+        return result
+
+    async def browsing_by_domain(
+        self, employee_ids: Sequence[uuid.UUID], start: datetime, end: datetime
+    ) -> dict[uuid.UUID, list[tuple[str, int]]]:
+        """Per-employee (domain, sample_count) over a day, for non-null domains.
+        At one sample/minute the count approximates minutes on that domain."""
+        if not employee_ids:
+            return {}
+        stmt = (
+            select(
+                ActivitySample.employee_id,
+                ActivitySample.domain,
+                func.count(),
+            )
+            .where(
+                ActivitySample.employee_id.in_(employee_ids),
+                ActivitySample.received_at >= start,
+                ActivitySample.received_at < end,
+                ActivitySample.domain.is_not(None),
+            )
+            .group_by(ActivitySample.employee_id, ActivitySample.domain)
+        )
+        rows = await self._session.execute(stmt)
+        result: dict[uuid.UUID, list[tuple[str, int]]] = {}
+        for emp_id, domain, count in rows.all():
+            result.setdefault(emp_id, []).append((domain, int(count)))
+        return result
 
     async def samples_for_employee(
         self, employee_id: uuid.UUID, start: datetime, end: datetime

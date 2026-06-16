@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from app.core.categories import extract_domain
 from app.core.config import Settings
 from app.core.exceptions import ReplayError
 from app.models.activity import ActivitySample
@@ -66,6 +67,8 @@ class ActivityService:
             client_timestamp=payload.client_timestamp,
             active_window=payload.active_window,
             idle_seconds=payload.idle_seconds,
+            url=payload.url,
+            domain=extract_domain(payload.url),
             flags=flags,
         )
 

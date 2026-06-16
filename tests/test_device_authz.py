@@ -47,6 +47,28 @@ async def test_list_is_scoped(client: AsyncClient, settings: Settings, seed: _Se
     assert outsider.json() == []
 
 
+async def test_self_enroll_binds_to_caller_not_client_id(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    # Any authenticated employee may self-enroll — and even if they smuggle in a
+    # foreign employee_id, the device binds to the caller (Golden rule #2).
+    resp = await client.post(
+        "/api/v1/devices/self-enroll",
+        json={"hostname": "olive-mbp", "os": "macOS 15", "employee_id": str(seed.admin.id)},
+        headers=auth_headers(settings, seed.outsider),
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["employee_id"] == str(seed.outsider.id)
+    assert body["token"]  # raw token shown once
+    assert body["label"] == "olive-mbp · macOS 15"
+
+
+async def test_self_enroll_requires_auth(client: AsyncClient, seed: _Seed) -> None:
+    resp = await client.post("/api/v1/devices/self-enroll", json={"hostname": "x"})
+    assert resp.status_code == 401
+
+
 async def test_admin_can_revoke_non_admin_cannot(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:

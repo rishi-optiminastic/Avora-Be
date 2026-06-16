@@ -7,13 +7,17 @@ from fastapi import APIRouter
 from app.api.v1.routes import (
     activity,
     attendance,
+    browsing,
     devices,
     employees,
     health,
     holidays,
     hr,
+    insights,
     invitations,
     leaves,
+    pings,
+    screenshots,
     tasks,
 )
 
@@ -28,3 +32,7 @@ api_router.include_router(leaves.router)
 api_router.include_router(holidays.router)
 api_router.include_router(devices.router)
 api_router.include_router(attendance.router)
+api_router.include_router(browsing.router)
+api_router.include_router(screenshots.router)
+api_router.include_router(pings.router)
+api_router.include_router(insights.router)

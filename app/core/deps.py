@@ -34,6 +34,8 @@ from app.repositories.holiday import HolidayRepository
 from app.repositories.invitation import InvitationRepository
 from app.repositories.leave import LeaveRepository
 from app.repositories.leave_comment import LeaveCommentRepository
+from app.repositories.ping import PingRepository
+from app.repositories.screenshot import ScreenshotRepository
 from app.repositories.task import TaskRepository
 from app.schemas.auth import AuthIdentity, CurrentDevice, CurrentUser
 from app.services.activity_service import ActivityService
@@ -45,6 +47,8 @@ from app.services.hr_service import HRService
 from app.services.invitation_service import InvitationService
 from app.services.leave_service import LeaveService
 from app.services.monitoring_service import MonitoringService
+from app.services.ping_service import PingService
+from app.services.screenshot_service import ScreenshotService
 from app.services.task_service import TaskService
 
 # --------------------------------------------------------------------------- #
@@ -74,6 +78,14 @@ def get_device_repo(db: DbDep) -> DeviceRepository:
 
 def get_activity_repo(db: DbDep) -> ActivityRepository:
     return ActivityRepository(db)
+
+
+def get_screenshot_repo(db: DbDep) -> ScreenshotRepository:
+    return ScreenshotRepository(db)
+
+
+def get_ping_repo(db: DbDep) -> PingRepository:
+    return PingRepository(db)
 
 
 def get_audit_repo(db: DbDep) -> AuditRepository:
@@ -137,6 +149,21 @@ def get_monitoring_service(
     return MonitoringService(activity, employees)
 
 
+def get_screenshot_service(
+    screenshots: Annotated[ScreenshotRepository, Depends(get_screenshot_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+) -> ScreenshotService:
+    return ScreenshotService(screenshots, employees)
+
+
+def get_ping_service(
+    pings: Annotated[PingRepository, Depends(get_ping_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> PingService:
+    return PingService(pings, employees, audit)
+
+
 def get_activity_service(
     settings: SettingsDep,
     devices: Annotated[DeviceRepository, Depends(get_device_repo)],
@@ -185,6 +212,8 @@ HRServiceDep = Annotated[HRService, Depends(get_hr_service)]
 ActivityServiceDep = Annotated[ActivityService, Depends(get_activity_service)]
 DeviceServiceDep = Annotated[DeviceService, Depends(get_device_service)]
 MonitoringServiceDep = Annotated[MonitoringService, Depends(get_monitoring_service)]
+ScreenshotServiceDep = Annotated[ScreenshotService, Depends(get_screenshot_service)]
+PingServiceDep = Annotated[PingService, Depends(get_ping_service)]
 InvitationServiceDep = Annotated[InvitationService, Depends(get_invitation_service)]
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
 LeaveServiceDep = Annotated[LeaveService, Depends(get_leave_service)]

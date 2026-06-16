@@ -35,6 +35,12 @@ class NotFoundError(AppError):
     message = "Resource not found."
 
 
+class ValidationError(AppError):
+    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    code = "validation_error"
+    message = "Invalid request."
+
+
 class AuthenticationError(AppError):
     status_code = status.HTTP_401_UNAUTHORIZED
     code = "unauthorized"

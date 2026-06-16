@@ -19,11 +19,19 @@ from app.repositories.audit import AuditRepository
 from app.repositories.device import DeviceRepository
 from app.repositories.employee import EmployeeRepository
 from app.schemas.auth import CurrentUser
-from app.schemas.device import DeviceCreate
+from app.schemas.device import DeviceCreate, DeviceSelfEnroll
 
 
 def _can_manage(caller: CurrentUser) -> bool:
     return caller.role in (Role.ADMIN, Role.IT_ADMIN)
+
+
+def _derive_label(payload: DeviceSelfEnroll) -> str:
+    """Build a human label from the agent's hints; fall back to a generic one."""
+    if payload.label and payload.label.strip():
+        return payload.label.strip()[:256]
+    parts = [p.strip() for p in (payload.hostname, payload.os) if p and p.strip()]
+    return " · ".join(parts)[:256] if parts else "New device"
 
 
 class DeviceService:
@@ -60,6 +68,25 @@ class DeviceService:
             actor=str(caller.employee_id),
             action="device.enroll",
             target=f"device:{device.id}:employee:{payload.employee_id}",
+        )
+        return device, raw_token
+
+    async def self_enroll(
+        self, caller: CurrentUser, payload: DeviceSelfEnroll
+    ) -> tuple[Device, str]:
+        """The agent enrolls the caller's own machine. No role gate — any
+        authenticated employee may enroll a device for themselves only; it's
+        bound to caller.employee_id, never a client-supplied id (rule #2)."""
+        raw_token = generate_device_token()
+        device = await self._devices.create(
+            employee_id=caller.employee_id,
+            label=_derive_label(payload),
+            token_hash=hash_device_token(self._settings, raw_token),
+        )
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="device.self_enroll",
+            target=f"device:{device.id}:employee:{caller.employee_id}",
         )
         return device, raw_token
 
