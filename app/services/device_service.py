@@ -78,14 +78,13 @@ class DeviceService:
         authenticated employee may enroll a device for themselves only; it's
         bound to caller.employee_id, never a client-supplied id (rule #2)."""
         raw_token = generate_device_token()
-        
         device = await self._devices.create(
             employee_id=caller.employee_id,
             label=_derive_label(payload),
             token_hash=hash_device_token(self._settings, raw_token),
         )
         await self._audit.append(
-            actor=str(caller.employee_idd),
+            actor=str(caller.employee_id),
             action="device.self_enroll",
             target=f"device:{device.id}:employee:{caller.employee_id}",
         )
