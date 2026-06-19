@@ -62,6 +62,7 @@ class TaskRepository:
             assignee_id=payload.assignee_id,
             assigned_by_id=assigned_by_id,
             project=payload.project,
+            project_id=payload.project_id,
             priority=payload.priority,
             cadence=payload.cadence,
             start_date=payload.start_date,

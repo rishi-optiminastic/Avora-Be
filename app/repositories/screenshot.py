@@ -14,7 +14,7 @@ from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
-from app.models.screenshot import Screenshot
+from app.models.screenshot import OcrStatus, Screenshot
 
 
 class ScreenshotRepository:
@@ -30,7 +30,9 @@ class ScreenshotRepository:
         content_type: str,
         width: int,
         height: int,
-        image: bytes,
+        byte_size: int,
+        object_key: str | None,
+        image: bytes | None,
         flags: list[str],
     ) -> Screenshot:
         shot = Screenshot(
@@ -40,7 +42,8 @@ class ScreenshotRepository:
             content_type=content_type,
             width=width,
             height=height,
-            byte_size=len(image),
+            byte_size=byte_size,
+            object_key=object_key,
             image=image,
             flags=flags,
         )
@@ -64,6 +67,39 @@ class ScreenshotRepository:
 
     async def get(self, screenshot_id: uuid.UUID) -> Screenshot | None:
         return await self._session.get(Screenshot, screenshot_id)
+
+    async def latest_ocr_text(
+        self, employee_ids: Sequence[uuid.UUID], since: datetime
+    ) -> dict[uuid.UUID, str]:
+        """Most-recent OCR'd text per employee since `since` (for attribution)."""
+        if not employee_ids:
+            return {}
+        rows = await self._session.execute(
+            select(Screenshot.employee_id, Screenshot.ocr_text)
+            .where(
+                Screenshot.employee_id.in_(employee_ids),
+                Screenshot.received_at >= since,
+                Screenshot.ocr_status == OcrStatus.DONE,
+                Screenshot.ocr_text.is_not(None),
+            )
+            .order_by(Screenshot.received_at.desc())
+        )
+        latest: dict[uuid.UUID, str] = {}
+        for emp_id, text in rows.all():
+            if text:
+                latest.setdefault(emp_id, text)
+        return latest
+
+    async def object_keys_before(self, cutoff: datetime) -> list[str]:
+        """S3 keys of rows older than `cutoff` (so retention can delete the
+        blobs before the rows go)."""
+        rows = await self._session.execute(
+            select(Screenshot.object_key).where(
+                Screenshot.received_at < cutoff,
+                Screenshot.object_key.is_not(None),
+            )
+        )
+        return [k for k in rows.scalars().all() if k]
 
     async def purge_before(self, cutoff: datetime) -> int:
         result = await self._session.execute(

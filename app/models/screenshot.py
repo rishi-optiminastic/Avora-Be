@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from enum import StrEnum
 
 from sqlalchemy import (
     JSON,
@@ -19,11 +20,18 @@ from sqlalchemy import (
     Index,
     LargeBinary,
     String,
+    Text,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, UUIDPrimaryKeyMixin, _utcnow
+
+
+class OcrStatus(StrEnum):
+    PENDING = "pending"  # awaiting the OCR worker
+    DONE = "done"
+    FAILED = "failed"
 
 
 class Screenshot(UUIDPrimaryKeyMixin, Base):
@@ -51,6 +59,14 @@ class Screenshot(UUIDPrimaryKeyMixin, Base):
     width: Mapped[int] = mapped_column(default=0)
     height: Mapped[int] = mapped_column(default=0)
     byte_size: Mapped[int] = mapped_column(default=0)
-    image: Mapped[bytes] = mapped_column(LargeBinary)
+
+    # Image bytes live in S3 under `object_key`; `image` is the legacy in-DB
+    # fallback (used only when S3 is not configured, and for pre-S3 rows).
+    object_key: Mapped[str | None] = mapped_column(String(512), default=None)
+    image: Mapped[bytes | None] = mapped_column(LargeBinary, default=None)
+
+    # OCR (filled by the standalone worker; used for work attribution).
+    ocr_status: Mapped[OcrStatus] = mapped_column(default=OcrStatus.PENDING, index=True)
+    ocr_text: Mapped[str | None] = mapped_column(Text, default=None)
 
     flags: Mapped[list[str]] = mapped_column(JSON, default=list)

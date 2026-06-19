@@ -12,7 +12,10 @@ import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
+from app.core import storage
+from app.core.config import Settings
 from app.core.exceptions import NotFoundError, ValidationError
+from app.models.employee import TrackingMode
 from app.models.screenshot import Screenshot
 from app.repositories.employee import EmployeeRepository
 from app.repositories.screenshot import ScreenshotRepository
@@ -26,10 +29,14 @@ RETENTION_DAYS = 14
 
 class ScreenshotService:
     def __init__(
-        self, screenshots: ScreenshotRepository, employees: EmployeeRepository
+        self,
+        screenshots: ScreenshotRepository,
+        employees: EmployeeRepository,
+        settings: Settings,
     ) -> None:
         self._screenshots = screenshots
         self._employees = employees
+        self._settings = settings
 
     async def ingest(
         self,
@@ -40,7 +47,11 @@ class ScreenshotService:
         width: int,
         height: int,
         image: bytes,
-    ) -> Screenshot:
+    ) -> Screenshot | None:
+        # Capture gate: drop screenshots while the employee is in PERSONAL mode
+        # (nothing uploaded to S3, nothing stored). None signals "paused".
+        if await self._employees.tracking_mode(device.employee_id) is TrackingMode.PERSONAL:
+            return None
         if content_type not in ALLOWED_TYPES:
             raise ValidationError("Unsupported image type.")
         if not image or len(image) > MAX_IMAGE_BYTES:
@@ -51,6 +62,15 @@ class ScreenshotService:
         if abs((received_at - captured_at).total_seconds()) > 3600:
             flags.append("clock_skew")
 
+        # Prefer S3: upload the bytes and store only the key, keeping the DB
+        # small. Without S3 configured, fall back to bytes in the `image` column.
+        object_key: str | None = None
+        stored_image: bytes | None = image
+        if self._settings.s3_enabled:
+            object_key = storage.object_key(str(device.employee_id), uuid.uuid4().hex, content_type)
+            await storage.put_object(object_key, image, content_type)
+            stored_image = None
+
         return await self._screenshots.add(
             device_id=device.device_id,
             employee_id=device.employee_id,
@@ -58,7 +78,9 @@ class ScreenshotService:
             content_type=content_type,
             width=max(0, width),
             height=max(0, height),
-            image=image,
+            byte_size=len(image),
+            object_key=object_key,
+            image=stored_image,
             flags=flags,
         )
 
@@ -75,4 +97,7 @@ class ScreenshotService:
 
     async def purge_old(self) -> int:
         cutoff = datetime.now(UTC) - timedelta(days=RETENTION_DAYS)
+        # Delete the S3 blobs first so purged rows never orphan their objects.
+        if self._settings.s3_enabled:
+            await storage.delete_objects(await self._screenshots.object_keys_before(cutoff))
         return await self._screenshots.purge_before(cutoff)

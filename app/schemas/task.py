@@ -21,6 +21,7 @@ class TaskCreate(BaseModel):
     assignee_id: uuid.UUID
     description: str | None = Field(default=None, max_length=2000)
     project: str | None = Field(default=None, max_length=128)
+    project_id: uuid.UUID | None = None
     priority: TaskPriority = TaskPriority.MEDIUM
     cadence: TaskCadence = TaskCadence.DAILY
     start_date: datetime | None = None
@@ -35,6 +36,7 @@ class TaskUpdate(BaseModel):
     assignee_id: uuid.UUID | None = None
     description: str | None = Field(default=None, max_length=2000)
     project: str | None = Field(default=None, max_length=128)
+    project_id: uuid.UUID | None = None
     priority: TaskPriority | None = None
     status: TaskStatus | None = None
     cadence: TaskCadence | None = None
@@ -50,6 +52,7 @@ class TaskRead(ORMModel):
     assignee_id: uuid.UUID
     assigned_by_id: uuid.UUID | None
     project: str | None
+    project_id: uuid.UUID | None
     priority: TaskPriority
     status: TaskStatus
     cadence: TaskCadence

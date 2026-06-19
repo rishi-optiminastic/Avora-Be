@@ -16,9 +16,11 @@ from app.core.categories import extract_domain
 from app.core.config import Settings
 from app.core.exceptions import ReplayError
 from app.models.activity import ActivitySample
+from app.models.employee import TrackingMode
 from app.repositories.activity import ActivityRepository
 from app.repositories.audit import AuditRepository
 from app.repositories.device import DeviceRepository
+from app.repositories.employee import EmployeeRepository
 from app.schemas.activity import ActivityIngest
 from app.schemas.auth import CurrentDevice
 
@@ -29,11 +31,13 @@ class ActivityService:
         settings: Settings,
         devices: DeviceRepository,
         activity: ActivityRepository,
+        employees: EmployeeRepository,
         audit: AuditRepository,
     ) -> None:
         self._settings = settings
         self._devices = devices
         self._activity = activity
+        self._employees = employees
         self._audit = audit
 
     def _flags(self, payload: ActivityIngest, received_at: datetime) -> list[str]:
@@ -45,7 +49,13 @@ class ActivityService:
             flags.append("future_timestamp")
         return flags
 
-    async def ingest(self, device: CurrentDevice, payload: ActivityIngest) -> ActivitySample:
+    async def ingest(self, device: CurrentDevice, payload: ActivityIngest) -> ActivitySample | None:
+        # Capture gate: if the employee is in PERSONAL mode we drop the sample —
+        # nothing is stored and the sequence is not advanced. Returning None
+        # signals "paused" (HTTP 202, not an error, so the agent doesn't retry).
+        if await self._employees.tracking_mode(device.employee_id) is TrackingMode.PERSONAL:
+            return None
+
         # Replay / ordering: a sequence we've already seen, or one that goes
         # backwards, is rejected. Dedup is also enforced by the DB unique
         # constraint on (device_id, sequence) as a backstop.

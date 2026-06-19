@@ -16,6 +16,7 @@ from app.core.exceptions import NotFoundError
 from app.models.activity import ActivitySample
 from app.repositories.activity import ActivityRepository, DailyAgg
 from app.repositories.employee import EmployeeRepository
+from app.repositories.work_session import WorkSessionRepository
 from app.schemas.auth import CurrentUser
 from app.schemas.monitoring import (
     ActivityNowRead,
@@ -37,9 +38,15 @@ DISTRACTING_AT_RISK_MIN = 60  # ≥ this many distracting minutes today ⇒ at r
 
 
 class MonitoringService:
-    def __init__(self, activity: ActivityRepository, employees: EmployeeRepository) -> None:
+    def __init__(
+        self,
+        activity: ActivityRepository,
+        employees: EmployeeRepository,
+        sessions: WorkSessionRepository,
+    ) -> None:
         self._activity = activity
         self._employees = employees
+        self._sessions = sessions
 
     @staticmethod
     def _day_bounds(day: datetime) -> tuple[datetime, datetime]:
@@ -78,12 +85,57 @@ class MonitoringService:
             productivity_pct=round((active / worked) * 100) if worked else 0,
         )
 
+    @staticmethod
+    def _row_from_session(
+        employee_id: uuid.UUID,
+        span: tuple[datetime, datetime | None],
+        agg: DailyAgg | None,
+        now: datetime,
+    ) -> AttendanceRead:
+        """Attendance anchored on an explicit clock-in/out, with active/idle
+        minutes still drawn from activity samples when we have them."""
+
+        def _aware(dt: datetime) -> datetime:
+            return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
+
+        login_at = _aware(span[0])
+        clock_out = _aware(span[1]) if span[1] is not None else None
+        logout_at = clock_out or now  # open session ⇒ still working
+        worked = max(0, int((logout_at - login_at).total_seconds() // 60))
+        idle = min(worked, agg.idle_seconds // 60) if agg else 0
+        active = max(0, worked - idle)
+        status = (
+            AttendanceStatus.LATE
+            if login_at.astimezone(UTC).hour >= LATE_AFTER_HOUR
+            else AttendanceStatus.PRESENT
+        )
+        return AttendanceRead(
+            employee_id=employee_id,
+            status=status,
+            login_at=login_at,
+            logout_at=logout_at,
+            worked_minutes=worked,
+            idle_minutes=idle,
+            active_minutes=active,
+            productivity_pct=round((active / worked) * 100) if worked else 0,
+        )
+
     async def attendance(self, caller: CurrentUser, day: datetime) -> list[AttendanceRead]:
         employees = await self._employees.all_in_scope(caller)
         ids = [e.id for e in employees]
         start, end = self._day_bounds(day)
         aggs = await self._activity.daily_aggregates(ids, start, end)
-        return [self._row(e.id, aggs.get(e.id)) for e in employees]
+        # Explicit clock-in/out wins over activity-inferred times when present.
+        spans = await self._sessions.day_spans(ids, start, end)
+        now = datetime.now(UTC)
+        rows: list[AttendanceRead] = []
+        for e in employees:
+            span = spans.get(e.id)
+            if span is not None:
+                rows.append(self._row_from_session(e.id, span, aggs.get(e.id), now))
+            else:
+                rows.append(self._row(e.id, aggs.get(e.id)))
+        return rows
 
     async def live_now(self, caller: CurrentUser, now: datetime) -> list[ActivityNowRead]:
         employees = await self._employees.all_in_scope(caller)

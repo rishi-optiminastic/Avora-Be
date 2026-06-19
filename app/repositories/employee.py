@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.employee import Employee, EmployeeStatus, Role
+from app.models.employee import Employee, EmployeeStatus, Role, TrackingMode
 from app.schemas.auth import CurrentUser
 
 
@@ -35,6 +35,17 @@ class EmployeeRepository:
             select(Employee).where(Employee.work_email == work_email)
         )
         return result.scalar_one_or_none()
+
+    async def tracking_mode(self, employee_id: uuid.UUID) -> TrackingMode:
+        """The ingest gate reads this on every sample — a single indexed lookup."""
+        mode = await self._session.scalar(
+            select(Employee.tracking_mode).where(Employee.id == employee_id)
+        )
+        return mode or TrackingMode.WORK
+
+    async def set_tracking_mode(self, employee: Employee, mode: TrackingMode) -> None:
+        employee.tracking_mode = mode
+        await self._session.flush()
 
     async def create_from_invite(
         self, *, work_email: str, full_name: str, role: Role, department: str | None = None

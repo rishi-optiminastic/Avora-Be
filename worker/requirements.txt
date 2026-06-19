@@ -1,0 +1,4 @@
+psycopg2-binary>=2.9
+pytesseract>=0.3.10
+pillow>=10
+boto3>=1.34

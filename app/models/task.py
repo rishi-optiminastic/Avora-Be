@@ -52,7 +52,12 @@ class Task(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ForeignKey("employees.id", ondelete="SET NULL"), default=None
     )
 
+    # Free-text label (legacy) + an optional link to an admin-curated Project
+    # (work_entities). SET NULL so deleting a project never deletes its tasks.
     project: Mapped[str | None] = mapped_column(String(128), default=None)
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("work_entities.id", ondelete="SET NULL"), default=None, index=True
+    )
     priority: Mapped[TaskPriority] = mapped_column(default=TaskPriority.MEDIUM, index=True)
     status: Mapped[TaskStatus] = mapped_column(default=TaskStatus.TODO, index=True)
     cadence: Mapped[TaskCadence] = mapped_column(default=TaskCadence.DAILY, index=True)

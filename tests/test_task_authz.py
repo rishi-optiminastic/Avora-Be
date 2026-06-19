@@ -38,23 +38,29 @@ async def test_manager_can_assign_to_report(
     assert task["assigned_by_id"] == str(seed.manager.id)
 
 
+async def test_employee_cannot_create_tasks(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    # Individual contributors receive tasks; they don't author them — even
+    # self-assignment is forbidden now (managers/HR/admin create).
+    resp = await client.post(
+        "/api/v1/tasks",
+        json=_new_task(str(seed.report.id)),
+        headers=auth_headers(settings, seed.report),
+    )
+    assert resp.status_code == 403
+
+
 async def test_employee_cannot_assign_to_peer(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:
-    # report assigning to outsider (not in their scope) -> 403.
+    # report assigning to outsider -> 403 (not a manager).
     resp = await client.post(
         "/api/v1/tasks",
         json=_new_task(str(seed.outsider.id)),
         headers=auth_headers(settings, seed.report),
     )
     assert resp.status_code == 403
-
-
-async def test_employee_can_self_assign(
-    client: AsyncClient, settings: Settings, seed: _Seed
-) -> None:
-    task = await _create_as(client, settings, seed.report, str(seed.report.id))
-    assert task["assignee_id"] == str(seed.report.id)
 
 
 async def test_list_is_scoped(client: AsyncClient, settings: Settings, seed: _Seed) -> None:
@@ -94,6 +100,71 @@ async def test_status_update_sets_completed_at(
     body = resp.json()
     assert body["status"] == "done"
     assert body["completed_at"] is not None
+
+
+async def test_assignee_cannot_edit_nonstatus_fields(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    # The assignee may move their task on the board, not retitle/reassign it.
+    task = await _create_as(client, settings, seed.manager, str(seed.report.id))
+    resp = await client.patch(
+        f"/api/v1/tasks/{task['id']}",
+        json={"title": "Renamed by employee"},
+        headers=auth_headers(settings, seed.report),
+    )
+    assert resp.status_code == 403
+
+
+# --- projects (work_entities) on tasks ------------------------------------- #
+async def _make_project(client: AsyncClient, settings: Settings, seed: _Seed) -> str:
+    resp = await client.post(
+        "/api/v1/work-entities",
+        json={"name": "Vara Ads", "keywords": ["vara"], "domains": []},
+        headers=auth_headers(settings, seed.admin),
+    )
+    assert resp.status_code == 201, resp.text
+    return str(resp.json()["id"])
+
+
+async def test_manager_can_attach_project(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    project_id = await _make_project(client, settings, seed)
+    resp = await client.post(
+        "/api/v1/tasks",
+        json={**_new_task(str(seed.report.id)), "project_id": project_id},
+        headers=auth_headers(settings, seed.manager),
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["project_id"] == project_id
+
+
+async def test_unknown_project_is_rejected(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    resp = await client.post(
+        "/api/v1/tasks",
+        json={**_new_task(str(seed.report.id)), "project_id": str(seed.outsider.id)},
+        headers=auth_headers(settings, seed.manager),
+    )
+    assert resp.status_code == 422
+
+
+async def test_active_projects_is_manager_only(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    await _make_project(client, settings, seed)
+    # Manager can read the picker list…
+    ok = await client.get(
+        "/api/v1/work-entities/active", headers=auth_headers(settings, seed.manager)
+    )
+    assert ok.status_code == 200
+    assert any(p["name"] == "Vara Ads" for p in ok.json())
+    # …an individual contributor cannot.
+    no = await client.get(
+        "/api/v1/work-entities/active", headers=auth_headers(settings, seed.report)
+    )
+    assert no.status_code == 403
 
 
 async def test_admin_sees_all_and_can_delete(

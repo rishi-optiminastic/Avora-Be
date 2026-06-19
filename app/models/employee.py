@@ -32,6 +32,18 @@ class EmployeeStatus(StrEnum):
     INACTIVE = "inactive"  # soft-deleted on offboard; never hard-deleted
 
 
+class TrackingMode(StrEnum):
+    """Whether the laptop agent should be capturing this person right now.
+
+    WORK → activity + screenshots are collected. PERSONAL → nothing is collected
+    or stored (the employee is on a break / off the clock). This is the server's
+    source of truth and the ingest gate, independent of clock-in/out.
+    """
+
+    WORK = "work"
+    PERSONAL = "personal"
+
+
 class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "employees"
     __table_args__ = (UniqueConstraint("work_email", name="uq_employees_work_email"),)
@@ -55,6 +67,10 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     status: Mapped[EmployeeStatus] = mapped_column(default=EmployeeStatus.ACTIVE, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+    # Employee-controlled: pauses all capture when set to PERSONAL (rule: track
+    # only in work mode). The ingest path drops samples/screenshots when PERSONAL.
+    tracking_mode: Mapped[TrackingMode] = mapped_column(default=TrackingMode.WORK)
 
     manager: Mapped[Employee | None] = relationship(
         remote_side="Employee.id",

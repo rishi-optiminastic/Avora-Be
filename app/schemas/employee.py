@@ -12,7 +12,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, EmailStr, Field
 
-from app.models.employee import EmployeeStatus, Role
+from app.models.employee import EmployeeStatus, Role, TrackingMode
 from app.schemas.common import ORMModel
 
 
@@ -26,6 +26,7 @@ class EmployeeRead(ORMModel):
     role: Role
     status: EmployeeStatus
     is_active: bool
+    tracking_mode: TrackingMode
     created_at: datetime
     updated_at: datetime
 
@@ -34,6 +35,12 @@ class EmployeeRoleUpdate(BaseModel):
     """Admin-only privilege change — the ONLY way a role is ever set."""
 
     role: Role
+
+
+class TrackingModeUpdate(BaseModel):
+    """An employee toggling their own work/personal capture mode."""
+
+    mode: TrackingMode
 
 
 class HREmployeeUpsert(BaseModel):

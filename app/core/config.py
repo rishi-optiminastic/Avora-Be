@@ -83,6 +83,20 @@ class Settings(BaseSettings):
     invite_token_pepper: str = Field(default="change-me", min_length=8)
     invite_ttl_hours: int = 168  # 7 days
 
+    # Object storage (S3) — screenshot images live here, not in Postgres, so the
+    # DB stays small and image reads come straight from S3. When unset the app
+    # falls back to storing image bytes in the `screenshots.image` column.
+    aws_region: str = ""
+    aws_bucket_name: str = ""
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
+    s3_url_ttl_seconds: int = 300  # presigned GET lifetime
+    s3_key_prefix: str = "screenshots"
+
+    @property
+    def s3_enabled(self) -> bool:
+        return bool(self.aws_bucket_name and self.aws_region)
+
     # CORS -------------------------------------------------------------------
     cors_origins: str = "http://localhost:3000"
 

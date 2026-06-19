@@ -8,11 +8,12 @@ replayed on the next poll.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from app.core.exceptions import AuthorizationError, NotFoundError
-from app.models.ping import Ping
+from app.models.ping import Ping, PingKind
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.ping import PingRepository
@@ -43,6 +44,25 @@ class PingService:
             actor=str(caller.employee_id),
             action="ping.issue",
             target=f"employee:{payload.employee_id}",
+        )
+        return ping
+
+    async def request_capture(self, caller: CurrentUser, employee_id: uuid.UUID) -> Ping:
+        """Manager/admin asks an employee's agent to take a screenshot now."""
+        if not caller.is_manager:
+            raise AuthorizationError()
+        if not await self._employees.can_read(caller, employee_id):
+            raise NotFoundError()
+        ping = await self._pings.create(
+            target_employee_id=employee_id,
+            issued_by_id=caller.employee_id,
+            message=None,
+            kind=PingKind.CAPTURE,
+        )
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="capture.request",
+            target=f"employee:{employee_id}",
         )
         return ping
 

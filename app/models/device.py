@@ -37,6 +37,4 @@ class Device(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     is_revoked: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
     # Last time we received a sample from this device (health / online status).
-    last_seen_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), default=None
-    )
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)

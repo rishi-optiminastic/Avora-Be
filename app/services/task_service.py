@@ -12,13 +12,18 @@ import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
-from app.core.exceptions import AuthorizationError, NotFoundError
+from app.core.exceptions import AuthorizationError, NotFoundError, ValidationError
 from app.models.task import Task, TaskCadence, TaskStatus
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.task import TaskRepository
+from app.repositories.work_entity import WorkEntityRepository
 from app.schemas.auth import CurrentUser
 from app.schemas.task import TaskCreate, TaskUpdate
+
+# An assignee updating their OWN task may only touch these fields (move it on the
+# board, leave a note) — not retitle, reassign, or re-scope it.
+_ASSIGNEE_EDITABLE = frozenset({"status", "remarks"})
 
 
 class TaskService:
@@ -26,11 +31,20 @@ class TaskService:
         self,
         tasks: TaskRepository,
         employees: EmployeeRepository,
+        entities: WorkEntityRepository,
         audit: AuditRepository,
     ) -> None:
         self._tasks = tasks
         self._employees = employees
+        self._entities = entities
         self._audit = audit
+
+    async def _validate_project(self, project_id: uuid.UUID | None) -> None:
+        if project_id is None:
+            return
+        entity = await self._entities.get(project_id)
+        if entity is None or not entity.is_active:
+            raise ValidationError("Unknown or inactive project.")
 
     async def list_for_caller(
         self,
@@ -58,10 +72,15 @@ class TaskService:
         return task
 
     async def create(self, caller: CurrentUser, payload: TaskCreate) -> Task:
-        # You may only assign a task to someone you can see (self, reports,
-        # department, or anyone for admin/HR) — reuses the employee scope.
+        # Only managers/senior managers/HR/admin create & assign tasks; an
+        # individual contributor receives tasks, they don't author them.
+        if not caller.is_manager:
+            raise AuthorizationError()
+        # You may only assign a task to someone you can see (reports, department,
+        # or anyone for admin/HR) — reuses the employee scope.
         if not await self._employees.can_read(caller, payload.assignee_id):
             raise AuthorizationError()
+        await self._validate_project(payload.project_id)
         task = await self._tasks.create(payload, assigned_by_id=caller.employee_id)
         await self._audit.append(
             actor=str(caller.employee_id),
@@ -74,13 +93,24 @@ class TaskService:
         task = await self._tasks.get_in_scope(caller, task_id)
         if task is None:
             raise NotFoundError()
-        # Reassignment must stay within the caller's scope.
-        if payload.assignee_id is not None and not await self._employees.can_read(
-            caller, payload.assignee_id
-        ):
-            raise AuthorizationError()
 
         fields = payload.model_dump(exclude_unset=True)
+        # A non-manager can only update tasks assigned TO them, and only their
+        # status/remarks — never retitle, reassign, or change the project.
+        if not caller.is_manager:
+            if task.assignee_id != caller.employee_id or not set(fields).issubset(
+                _ASSIGNEE_EDITABLE
+            ):
+                raise AuthorizationError()
+        else:
+            # Reassignment / re-project must stay valid and within scope.
+            if payload.assignee_id is not None and not await self._employees.can_read(
+                caller, payload.assignee_id
+            ):
+                raise AuthorizationError()
+            if "project_id" in fields:
+                await self._validate_project(payload.project_id)
+
         for key, value in fields.items():
             setattr(task, key, value)
         if "status" in fields:

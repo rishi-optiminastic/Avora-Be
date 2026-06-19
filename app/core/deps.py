@@ -37,8 +37,11 @@ from app.repositories.leave_comment import LeaveCommentRepository
 from app.repositories.ping import PingRepository
 from app.repositories.screenshot import ScreenshotRepository
 from app.repositories.task import TaskRepository
+from app.repositories.work_entity import WorkEntityRepository
+from app.repositories.work_session import WorkSessionRepository
 from app.schemas.auth import AuthIdentity, CurrentDevice, CurrentUser
 from app.services.activity_service import ActivityService
+from app.services.attribution_service import AttributionService
 from app.services.device_service import DeviceService
 from app.services.email_service import EmailService
 from app.services.employee_service import EmployeeService
@@ -50,6 +53,8 @@ from app.services.monitoring_service import MonitoringService
 from app.services.ping_service import PingService
 from app.services.screenshot_service import ScreenshotService
 from app.services.task_service import TaskService
+from app.services.work_entity_service import WorkEntityService
+from app.services.work_session_service import WorkSessionService
 
 # --------------------------------------------------------------------------- #
 # Primitives
@@ -88,6 +93,10 @@ def get_ping_repo(db: DbDep) -> PingRepository:
     return PingRepository(db)
 
 
+def get_work_entity_repo(db: DbDep) -> WorkEntityRepository:
+    return WorkEntityRepository(db)
+
+
 def get_audit_repo(db: DbDep) -> AuditRepository:
     return AuditRepository(db)
 
@@ -112,6 +121,10 @@ def get_holiday_repo(db: DbDep) -> HolidayRepository:
     return HolidayRepository(db)
 
 
+def get_work_session_repo(db: DbDep) -> WorkSessionRepository:
+    return WorkSessionRepository(db)
+
+
 # --------------------------------------------------------------------------- #
 # Service providers
 # --------------------------------------------------------------------------- #
@@ -121,9 +134,10 @@ def get_email_service(settings: SettingsDep) -> EmailService:
 
 def get_employee_service(
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    pings: Annotated[PingRepository, Depends(get_ping_repo)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
 ) -> EmployeeService:
-    return EmployeeService(employees, audit)
+    return EmployeeService(employees, pings, audit)
 
 
 def get_hr_service(
@@ -145,15 +159,24 @@ def get_device_service(
 def get_monitoring_service(
     activity: Annotated[ActivityRepository, Depends(get_activity_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    sessions: Annotated[WorkSessionRepository, Depends(get_work_session_repo)],
 ) -> MonitoringService:
-    return MonitoringService(activity, employees)
+    return MonitoringService(activity, employees, sessions)
+
+
+def get_work_session_service(
+    sessions: Annotated[WorkSessionRepository, Depends(get_work_session_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> WorkSessionService:
+    return WorkSessionService(sessions, audit)
 
 
 def get_screenshot_service(
     screenshots: Annotated[ScreenshotRepository, Depends(get_screenshot_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    settings: SettingsDep,
 ) -> ScreenshotService:
-    return ScreenshotService(screenshots, employees)
+    return ScreenshotService(screenshots, employees, settings)
 
 
 def get_ping_service(
@@ -164,13 +187,30 @@ def get_ping_service(
     return PingService(pings, employees, audit)
 
 
+def get_work_entity_service(
+    entities: Annotated[WorkEntityRepository, Depends(get_work_entity_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> WorkEntityService:
+    return WorkEntityService(entities, audit)
+
+
+def get_attribution_service(
+    activity: Annotated[ActivityRepository, Depends(get_activity_repo)],
+    screenshots: Annotated[ScreenshotRepository, Depends(get_screenshot_repo)],
+    entities: Annotated[WorkEntityRepository, Depends(get_work_entity_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+) -> AttributionService:
+    return AttributionService(activity, screenshots, entities, employees)
+
+
 def get_activity_service(
     settings: SettingsDep,
     devices: Annotated[DeviceRepository, Depends(get_device_repo)],
     activity: Annotated[ActivityRepository, Depends(get_activity_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
 ) -> ActivityService:
-    return ActivityService(settings, devices, activity, audit)
+    return ActivityService(settings, devices, activity, employees, audit)
 
 
 def get_invitation_service(
@@ -186,9 +226,10 @@ def get_invitation_service(
 def get_task_service(
     tasks: Annotated[TaskRepository, Depends(get_task_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    entities: Annotated[WorkEntityRepository, Depends(get_work_entity_repo)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
 ) -> TaskService:
-    return TaskService(tasks, employees, audit)
+    return TaskService(tasks, employees, entities, audit)
 
 
 def get_leave_service(
@@ -214,10 +255,13 @@ DeviceServiceDep = Annotated[DeviceService, Depends(get_device_service)]
 MonitoringServiceDep = Annotated[MonitoringService, Depends(get_monitoring_service)]
 ScreenshotServiceDep = Annotated[ScreenshotService, Depends(get_screenshot_service)]
 PingServiceDep = Annotated[PingService, Depends(get_ping_service)]
+WorkEntityServiceDep = Annotated[WorkEntityService, Depends(get_work_entity_service)]
+AttributionServiceDep = Annotated[AttributionService, Depends(get_attribution_service)]
 InvitationServiceDep = Annotated[InvitationService, Depends(get_invitation_service)]
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
 LeaveServiceDep = Annotated[LeaveService, Depends(get_leave_service)]
 HolidayServiceDep = Annotated[HolidayService, Depends(get_holiday_service)]
+WorkSessionServiceDep = Annotated[WorkSessionService, Depends(get_work_session_service)]
 
 
 # --------------------------------------------------------------------------- #

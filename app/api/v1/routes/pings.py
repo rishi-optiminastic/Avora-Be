@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, status
 
 from app.core.deps import CurrentDeviceDep, CurrentUserDep, PingServiceDep
-from app.schemas.ping import PingCreate, PingRead
+from app.schemas.ping import CaptureRequest, PingCreate, PingRead
 
 router = APIRouter(prefix="/pings", tags=["pings"])
 
@@ -18,6 +18,16 @@ async def issue_ping(
 ) -> PingRead:
     """A manager/admin pings an employee in their scope (optional message)."""
     return PingRead.model_validate(await service.issue(caller, payload))
+
+
+@router.post("/capture", response_model=PingRead, status_code=status.HTTP_201_CREATED)
+async def request_capture(
+    payload: CaptureRequest,
+    caller: CurrentUserDep,
+    service: PingServiceDep,
+) -> PingRead:
+    """Ask an employee's agent to take a screenshot now (manager/admin, scoped)."""
+    return PingRead.model_validate(await service.request_capture(caller, payload.employee_id))
 
 
 @router.get("/pending", response_model=list[PingRead])

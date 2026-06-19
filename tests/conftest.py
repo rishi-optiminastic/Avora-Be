@@ -91,6 +91,11 @@ def settings() -> Settings:
         agent_token_pepper="test-agent-pepper-value",
         hr_webhook_secret="test-hr-secret-value",
         cookie_secure=False,
+        # Force the in-DB image path; never touch real S3 in tests.
+        aws_region="",
+        aws_bucket_name="",
+        aws_access_key_id="",
+        aws_secret_access_key="",
     )
 
 

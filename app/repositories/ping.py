@@ -9,7 +9,7 @@ from datetime import datetime
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.ping import Ping
+from app.models.ping import Ping, PingKind
 
 
 class PingRepository:
@@ -17,12 +17,18 @@ class PingRepository:
         self._session = session
 
     async def create(
-        self, *, target_employee_id: uuid.UUID, issued_by_id: uuid.UUID, message: str | None
+        self,
+        *,
+        target_employee_id: uuid.UUID,
+        issued_by_id: uuid.UUID,
+        message: str | None,
+        kind: PingKind = PingKind.PING,
     ) -> Ping:
         ping = Ping(
             target_employee_id=target_employee_id,
             issued_by_id=issued_by_id,
             message=message,
+            kind=kind,
         )
         self._session.add(ping)
         await self._session.flush()

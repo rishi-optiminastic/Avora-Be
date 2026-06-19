@@ -14,6 +14,7 @@ dependencies = [
     "alembic>=1.14",
     "pyjwt[crypto]>=2.10",
     "httpx>=0.28",
+    "boto3>=1.34",
 ]
 
 [dependency-groups]
@@ -80,6 +81,10 @@ exclude = ["migrations/"]
 [[tool.mypy.overrides]]
 module = ["tests.*"]
 disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = ["boto3.*", "botocore.*"]
+ignore_missing_imports = true
 
 # --------------------------------------------------------------------------- #
 # Pytest

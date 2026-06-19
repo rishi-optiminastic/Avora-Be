@@ -7,6 +7,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
+from app.models.ping import PingKind
 from app.schemas.common import ORMModel
 
 
@@ -17,9 +18,16 @@ class PingCreate(BaseModel):
     message: str | None = Field(default=None, max_length=280)
 
 
+class CaptureRequest(BaseModel):
+    """A manager/admin asks an employee's agent to take a screenshot now."""
+
+    employee_id: uuid.UUID
+
+
 class PingRead(ORMModel):
     """What the agent receives from its inbox."""
 
     id: uuid.UUID
+    kind: PingKind
     message: str | None
     created_at: datetime

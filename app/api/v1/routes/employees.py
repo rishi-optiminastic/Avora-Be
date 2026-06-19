@@ -14,7 +14,7 @@ from fastapi import APIRouter, Query
 
 from app.core.deps import AdminDep, CurrentUserDep, EmployeeServiceDep
 from app.schemas.common import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Page
-from app.schemas.employee import EmployeeRead, EmployeeRoleUpdate
+from app.schemas.employee import EmployeeRead, EmployeeRoleUpdate, TrackingModeUpdate
 
 router = APIRouter(prefix="/employees", tags=["employees"])
 
@@ -40,6 +40,16 @@ async def list_employees(
 async def get_me(caller: CurrentUserDep, service: EmployeeServiceDep) -> EmployeeRead:
     """The caller's own record — lets the client tailor UI to their role/scope."""
     return EmployeeRead.model_validate(await service.get_self(caller))
+
+
+@router.patch("/me/tracking-mode", response_model=EmployeeRead)
+async def set_my_tracking_mode(
+    payload: TrackingModeUpdate,
+    caller: CurrentUserDep,
+    service: EmployeeServiceDep,
+) -> EmployeeRead:
+    """The employee pauses/resumes their own capture (work ↔ personal mode)."""
+    return EmployeeRead.model_validate(await service.set_tracking_mode(caller, payload.mode))
 
 
 @router.get("/{employee_id}", response_model=EmployeeRead)
