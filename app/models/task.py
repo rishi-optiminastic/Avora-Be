@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import DateTime, ForeignKey, Index, String
+from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -68,3 +68,20 @@ class Task(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     remarks: Mapped[str | None] = mapped_column(String(2000), default=None)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+    # Richer task fields (PMS spec): expected output, progress, review, blockers,
+    # attachments ([{name,url}]), and links for weekly→daily breakdown + deps.
+    expected_output: Mapped[str | None] = mapped_column(String(2000), default=None)
+    completion_pct: Mapped[int] = mapped_column(default=0)
+    review_notes: Mapped[str | None] = mapped_column(String(2000), default=None)
+    final_outcome: Mapped[str | None] = mapped_column(String(2000), default=None)
+    blocked_reason: Mapped[str | None] = mapped_column(String(500), default=None)
+    attachments: Mapped[list[dict[str, str]]] = mapped_column(JSON, default=list)
+    escalated: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # A daily task can roll up to a weekly/monthly parent; deps gate sequencing.
+    parent_task_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tasks.id", ondelete="SET NULL"), default=None, index=True
+    )
+    depends_on_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tasks.id", ondelete="SET NULL"), default=None
+    )

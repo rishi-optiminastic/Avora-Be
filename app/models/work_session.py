@@ -33,3 +33,6 @@ class WorkSession(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     # How it was started/ended (dashboard, agent tray, …) — for audit/visibility.
     source: Mapped[str] = mapped_column(String(32), default="dashboard")
+    # Server-observed at clock-in (spec: login IP + location for HR/attendance).
+    ip_address: Mapped[str | None] = mapped_column(String(64), default=None)
+    location: Mapped[str | None] = mapped_column(String(128), default=None)

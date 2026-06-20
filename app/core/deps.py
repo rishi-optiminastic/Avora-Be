@@ -27,7 +27,10 @@ from app.core.security import (
 )
 from app.db.session import get_session
 from app.repositories.activity import ActivityRepository
+from app.repositories.attendance_policy import AttendancePolicyRepository
+from app.repositories.attribution_correction import AttributionCorrectionRepository
 from app.repositories.audit import AuditRepository
+from app.repositories.category_rule import CategoryRuleRepository
 from app.repositories.device import DeviceRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.holiday import HolidayRepository
@@ -35,13 +38,20 @@ from app.repositories.invitation import InvitationRepository
 from app.repositories.leave import LeaveRepository
 from app.repositories.leave_comment import LeaveCommentRepository
 from app.repositories.ping import PingRepository
+from app.repositories.regularization import RegularizationRepository
 from app.repositories.screenshot import ScreenshotRepository
+from app.repositories.target import TargetRepository
 from app.repositories.task import TaskRepository
 from app.repositories.work_entity import WorkEntityRepository
 from app.repositories.work_session import WorkSessionRepository
 from app.schemas.auth import AuthIdentity, CurrentDevice, CurrentUser
 from app.services.activity_service import ActivityService
+from app.services.attendance_policy_service import AttendancePolicyService
+from app.services.attendance_service import AttendanceService
+from app.services.attribution_correction_service import AttributionCorrectionService
 from app.services.attribution_service import AttributionService
+from app.services.category_rule_service import CategoryRuleService
+from app.services.dashboard_service import DashboardService
 from app.services.device_service import DeviceService
 from app.services.email_service import EmailService
 from app.services.employee_service import EmployeeService
@@ -51,7 +61,9 @@ from app.services.invitation_service import InvitationService
 from app.services.leave_service import LeaveService
 from app.services.monitoring_service import MonitoringService
 from app.services.ping_service import PingService
+from app.services.regularization_service import RegularizationService
 from app.services.screenshot_service import ScreenshotService
+from app.services.target_service import TargetService
 from app.services.task_service import TaskService
 from app.services.work_entity_service import WorkEntityService
 from app.services.work_session_service import WorkSessionService
@@ -109,6 +121,10 @@ def get_task_repo(db: DbDep) -> TaskRepository:
     return TaskRepository(db)
 
 
+def get_target_repo(db: DbDep) -> TargetRepository:
+    return TargetRepository(db)
+
+
 def get_leave_repo(db: DbDep) -> LeaveRepository:
     return LeaveRepository(db)
 
@@ -123,6 +139,22 @@ def get_holiday_repo(db: DbDep) -> HolidayRepository:
 
 def get_work_session_repo(db: DbDep) -> WorkSessionRepository:
     return WorkSessionRepository(db)
+
+
+def get_category_rule_repo(db: DbDep) -> CategoryRuleRepository:
+    return CategoryRuleRepository(db)
+
+
+def get_attribution_correction_repo(db: DbDep) -> AttributionCorrectionRepository:
+    return AttributionCorrectionRepository(db)
+
+
+def get_attendance_policy_repo(db: DbDep) -> AttendancePolicyRepository:
+    return AttendancePolicyRepository(db)
+
+
+def get_regularization_repo(db: DbDep) -> RegularizationRepository:
+    return RegularizationRepository(db)
 
 
 # --------------------------------------------------------------------------- #
@@ -159,9 +191,63 @@ def get_device_service(
 def get_monitoring_service(
     activity: Annotated[ActivityRepository, Depends(get_activity_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
-    sessions: Annotated[WorkSessionRepository, Depends(get_work_session_repo)],
+    rules: Annotated[CategoryRuleRepository, Depends(get_category_rule_repo)],
 ) -> MonitoringService:
-    return MonitoringService(activity, employees, sessions)
+    return MonitoringService(activity, employees, rules)
+
+
+def get_attendance_policy_service(
+    policies: Annotated[AttendancePolicyRepository, Depends(get_attendance_policy_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> AttendancePolicyService:
+    return AttendancePolicyService(policies, audit)
+
+
+def get_attendance_service(
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    activity: Annotated[ActivityRepository, Depends(get_activity_repo)],
+    sessions: Annotated[WorkSessionRepository, Depends(get_work_session_repo)],
+    policy: Annotated[AttendancePolicyService, Depends(get_attendance_policy_service)],
+    regularizations: Annotated[RegularizationRepository, Depends(get_regularization_repo)],
+) -> AttendanceService:
+    return AttendanceService(employees, activity, sessions, policy, regularizations)
+
+
+def get_regularization_service(
+    regularizations: Annotated[RegularizationRepository, Depends(get_regularization_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    policy: Annotated[AttendancePolicyService, Depends(get_attendance_policy_service)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> RegularizationService:
+    return RegularizationService(regularizations, employees, policy, audit)
+
+
+def get_category_rule_service(
+    rules: Annotated[CategoryRuleRepository, Depends(get_category_rule_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> CategoryRuleService:
+    return CategoryRuleService(rules, employees, audit)
+
+
+def get_dashboard_service(
+    tasks: Annotated[TaskRepository, Depends(get_task_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    activity: Annotated[ActivityRepository, Depends(get_activity_repo)],
+    entities: Annotated[WorkEntityRepository, Depends(get_work_entity_repo)],
+) -> DashboardService:
+    return DashboardService(tasks, employees, activity, entities)
+
+
+def get_attribution_correction_service(
+    corrections: Annotated[
+        AttributionCorrectionRepository, Depends(get_attribution_correction_repo)
+    ],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    entities: Annotated[WorkEntityRepository, Depends(get_work_entity_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> AttributionCorrectionService:
+    return AttributionCorrectionService(corrections, employees, entities, audit)
 
 
 def get_work_session_service(
@@ -232,6 +318,14 @@ def get_task_service(
     return TaskService(tasks, employees, entities, audit)
 
 
+def get_target_service(
+    targets: Annotated[TargetRepository, Depends(get_target_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> TargetService:
+    return TargetService(targets, employees, audit)
+
+
 def get_leave_service(
     leaves: Annotated[LeaveRepository, Depends(get_leave_repo)],
     comments: Annotated[LeaveCommentRepository, Depends(get_leave_comment_repo)],
@@ -253,15 +347,26 @@ HRServiceDep = Annotated[HRService, Depends(get_hr_service)]
 ActivityServiceDep = Annotated[ActivityService, Depends(get_activity_service)]
 DeviceServiceDep = Annotated[DeviceService, Depends(get_device_service)]
 MonitoringServiceDep = Annotated[MonitoringService, Depends(get_monitoring_service)]
+AttendancePolicyServiceDep = Annotated[
+    AttendancePolicyService, Depends(get_attendance_policy_service)
+]
+AttendanceServiceDep = Annotated[AttendanceService, Depends(get_attendance_service)]
+RegularizationServiceDep = Annotated[RegularizationService, Depends(get_regularization_service)]
 ScreenshotServiceDep = Annotated[ScreenshotService, Depends(get_screenshot_service)]
 PingServiceDep = Annotated[PingService, Depends(get_ping_service)]
 WorkEntityServiceDep = Annotated[WorkEntityService, Depends(get_work_entity_service)]
 AttributionServiceDep = Annotated[AttributionService, Depends(get_attribution_service)]
 InvitationServiceDep = Annotated[InvitationService, Depends(get_invitation_service)]
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
+TargetServiceDep = Annotated[TargetService, Depends(get_target_service)]
 LeaveServiceDep = Annotated[LeaveService, Depends(get_leave_service)]
 HolidayServiceDep = Annotated[HolidayService, Depends(get_holiday_service)]
 WorkSessionServiceDep = Annotated[WorkSessionService, Depends(get_work_session_service)]
+CategoryRuleServiceDep = Annotated[CategoryRuleService, Depends(get_category_rule_service)]
+DashboardServiceDep = Annotated[DashboardService, Depends(get_dashboard_service)]
+AttributionCorrectionServiceDep = Annotated[
+    AttributionCorrectionService, Depends(get_attribution_correction_service)
+]
 
 
 # --------------------------------------------------------------------------- #

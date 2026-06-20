@@ -33,7 +33,7 @@ async def test_insights_unauthenticated(client: AsyncClient, seed: _Seed) -> Non
 async def test_insights_flags_distraction_and_is_scoped(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:
-    # 1 productive + 3 distracting samples today ⇒ focus 25% ⇒ at risk.
+    # 1 productive + 3 unproductive samples today ⇒ focus 25% ⇒ at risk.
     await _ingest(client, seed, 1, "https://github.com/optiminastic/avora")
     await _ingest(client, seed, 2, "https://www.youtube.com/watch?v=a")
     await _ingest(client, seed, 3, "https://www.instagram.com/x")
@@ -47,7 +47,7 @@ async def test_insights_flags_distraction_and_is_scoped(
 
     report = rows[str(seed.report.id)]
     assert report["focus_pct"] == 25
-    assert report["distracting_minutes"] == 3
+    assert report["unproductive_minutes"] == 3
     assert report["at_risk"] is True
     assert len(report["trend"]) == 7
     assert report["trend"][-1] == 25  # today is the last trend point

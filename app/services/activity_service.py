@@ -79,6 +79,8 @@ class ActivityService:
             idle_seconds=payload.idle_seconds,
             url=payload.url,
             domain=extract_domain(payload.url),
+            page_title=payload.page_title,
+            browser=payload.browser,
             flags=flags,
         )
 

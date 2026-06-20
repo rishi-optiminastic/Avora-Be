@@ -64,6 +64,9 @@ class ActivitySample(UUIDPrimaryKeyMixin, Base):
     # it to categorise productive / neutral / distracting time.
     url: Mapped[str | None] = mapped_column(String(2048), default=None)
     domain: Mapped[str | None] = mapped_column(String(255), default=None, index=True)
+    # The browser tab title + which browser app reported it (spec: browsing log).
+    page_title: Mapped[str | None] = mapped_column(String(512), default=None)
+    browser: Mapped[str | None] = mapped_column(String(64), default=None)
 
     # Anomaly flags (skew, missing heartbeat, suspiciously regular input, gaps).
     # Recorded, never used to silently drop a sample (Security rule 5.4).

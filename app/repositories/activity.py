@@ -38,6 +38,8 @@ class ActivityRepository:
         idle_seconds: int,
         url: str | None,
         domain: str | None,
+        page_title: str | None = None,
+        browser: str | None = None,
         flags: list[str],
     ) -> ActivitySample:
         sample = ActivitySample(
@@ -49,6 +51,8 @@ class ActivityRepository:
             idle_seconds=idle_seconds,
             url=url,
             domain=domain,
+            page_title=page_title,
+            browser=browser,
             flags=flags,
         )
         self._session.add(sample)

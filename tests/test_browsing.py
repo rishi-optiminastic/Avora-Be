@@ -17,7 +17,7 @@ def test_extract_domain_and_classify() -> None:
     assert extract_domain(None) is None
     assert classify("github.com") is ProductivityCategory.PRODUCTIVE
     assert classify("gist.github.com") is ProductivityCategory.PRODUCTIVE  # subdomain suffix
-    assert classify("youtube.com") is ProductivityCategory.DISTRACTING
+    assert classify("youtube.com") is ProductivityCategory.UNPRODUCTIVE
     assert classify("example.com") is ProductivityCategory.NEUTRAL
     assert classify(None) is ProductivityCategory.NEUTRAL
 
@@ -60,10 +60,10 @@ async def test_browsing_categorises_and_is_scoped(
     report = rows[str(seed.report.id)]
     assert report["total_minutes"] == 3
     assert report["productive_minutes"] == 1
-    assert report["distracting_minutes"] == 1
+    assert report["unproductive_minutes"] == 1
     assert report["neutral_minutes"] == 1
     assert report["focus_pct"] == 33
     domains = {d["domain"]: d["category"] for d in report["top_domains"]}
     assert domains["github.com"] == "productive"
-    assert domains["youtube.com"] == "distracting"
+    assert domains["youtube.com"] == "unproductive"
     assert domains["example.com"] == "neutral"

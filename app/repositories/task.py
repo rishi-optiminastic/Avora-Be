@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import datetime
 
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +20,14 @@ from app.models.employee import Employee, Role
 from app.models.task import Task, TaskCadence, TaskStatus
 from app.schemas.auth import CurrentUser
 from app.schemas.task import TaskCreate
+
+
+@dataclass(frozen=True)
+class ProjectManpowerRow:
+    project_id: uuid.UUID
+    people: int
+    open_tasks: int
+    total_tasks: int
 
 
 class TaskRepository:
@@ -68,6 +78,10 @@ class TaskRepository:
             start_date=payload.start_date,
             due_date=payload.due_date,
             remarks=payload.remarks,
+            expected_output=payload.expected_output,
+            attachments=[a.model_dump() for a in payload.attachments],
+            parent_task_id=payload.parent_task_id,
+            depends_on_id=payload.depends_on_id,
         )
         self._session.add(task)
         await self._session.flush()
@@ -111,6 +125,39 @@ class TaskRepository:
             .limit(limit)
         )
         return rows.scalars().all(), int(total or 0)
+
+    async def list_overdue(self, caller: CurrentUser, now: datetime) -> Sequence[Task]:
+        """In-scope tasks past their due date and not yet done (delayed rollup)."""
+        stmt = select(Task).where(
+            Task.due_date.is_not(None),
+            Task.due_date < now,
+            Task.status != TaskStatus.DONE,
+        )
+        clause = self._scope_clause(caller)
+        if clause is not None:
+            stmt = stmt.where(clause)
+        rows = await self._session.execute(stmt.order_by(Task.due_date.asc()))
+        return rows.scalars().all()
+
+    async def manpower_by_project(self, caller: CurrentUser) -> list[ProjectManpowerRow]:
+        """Per-project headcount + open-task count, scoped to the caller."""
+        stmt = select(
+            Task.project_id,
+            func.count(func.distinct(Task.assignee_id)),
+            func.count().filter(Task.status != TaskStatus.DONE),
+            func.count(),
+        ).where(Task.project_id.is_not(None))
+        clause = self._scope_clause(caller)
+        if clause is not None:
+            stmt = stmt.where(clause)
+        rows = await self._session.execute(stmt.group_by(Task.project_id))
+        return [
+            ProjectManpowerRow(
+                project_id=pid, people=people, open_tasks=open_tasks, total_tasks=total
+            )
+            for pid, people, open_tasks, total in rows.all()
+            if pid is not None
+        ]
 
     async def flush(self) -> None:
         """Persist in-place mutations the service made on a fetched Task."""

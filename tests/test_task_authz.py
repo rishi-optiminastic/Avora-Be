@@ -167,6 +167,43 @@ async def test_active_projects_is_manager_only(
     assert no.status_code == 403
 
 
+async def test_assignee_can_report_progress(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    # The assignee may update progress fields (%, blocker) on their own task…
+    task = await _create_as(client, settings, seed.manager, str(seed.report.id))
+    ok = await client.patch(
+        f"/api/v1/tasks/{task['id']}",
+        json={"completion_pct": 60, "blocked_reason": "waiting on design"},
+        headers=auth_headers(settings, seed.report),
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["completion_pct"] == 60
+    # …but not the manager-only review notes.
+    blocked = await client.patch(
+        f"/api/v1/tasks/{task['id']}",
+        json={"review_notes": "great"},
+        headers=auth_headers(settings, seed.report),
+    )
+    assert blocked.status_code == 403
+
+
+async def test_escalate_is_manager_only(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    task = await _create_as(client, settings, seed.manager, str(seed.report.id))
+    assert (
+        await client.post(
+            f"/api/v1/tasks/{task['id']}/escalate", headers=auth_headers(settings, seed.report)
+        )
+    ).status_code == 403
+    ok = await client.post(
+        f"/api/v1/tasks/{task['id']}/escalate", headers=auth_headers(settings, seed.manager)
+    )
+    assert ok.status_code == 200
+    assert ok.json()["escalated"] is True
+
+
 async def test_admin_sees_all_and_can_delete(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:

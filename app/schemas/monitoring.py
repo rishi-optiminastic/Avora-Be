@@ -12,9 +12,11 @@ from app.core.categories import ProductivityCategory
 
 
 class AttendanceStatus(StrEnum):
-    PRESENT = "present"
-    LATE = "late"
+    FULL_DAY = "full_day"  # on time (or regularized) + enough hours
+    HALF_DAY = "half_day"  # too late (past the reg window) or too few hours
+    LATE = "late"  # arrived in the regularization window, not yet regularized
     ABSENT = "absent"
+    PRESENT = "present"  # legacy alias (pre-policy rows / fallbacks)
 
 
 class AttendanceRead(BaseModel):
@@ -28,6 +30,13 @@ class AttendanceRead(BaseModel):
     idle_minutes: int
     active_minutes: int
     productivity_pct: int
+    # Payroll-relevant flags (spec: late login / early logout / missed logout).
+    late_login: bool = False
+    early_logout: bool = False
+    missed_logout: bool = False
+    regularizable: bool = False  # late within the window → can request regularization
+    regularized: bool = False  # an approved regularization upgraded this day
+    ip_address: str | None = None
 
 
 class ActivityNowRead(BaseModel):
@@ -47,6 +56,7 @@ class DomainStat(BaseModel):
     domain: str
     category: ProductivityCategory
     minutes: int
+    flagged: bool = False  # unproductive / requires-review ⇒ surfaced for managers
 
 
 class BrowsingRead(BaseModel):
@@ -56,7 +66,7 @@ class BrowsingRead(BaseModel):
     total_minutes: int
     productive_minutes: int
     neutral_minutes: int
-    distracting_minutes: int
+    unproductive_minutes: int
     focus_pct: int
     top_domains: list[DomainStat]
 
@@ -68,7 +78,7 @@ class InsightRead(BaseModel):
     focus_pct: int
     productive_minutes: int
     neutral_minutes: int
-    distracting_minutes: int
+    unproductive_minutes: int
     total_minutes: int
     at_risk: bool
     trend: list[int]  # daily focus % oldest→newest

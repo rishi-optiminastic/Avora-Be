@@ -21,9 +21,11 @@ from app.repositories.work_entity import WorkEntityRepository
 from app.schemas.auth import CurrentUser
 from app.schemas.task import TaskCreate, TaskUpdate
 
-# An assignee updating their OWN task may only touch these fields (move it on the
-# board, leave a note) — not retitle, reassign, or re-scope it.
-_ASSIGNEE_EDITABLE = frozenset({"status", "remarks"})
+# An assignee updating their OWN task may report progress (move it on the board,
+# update %, note blockers) — but not retitle, reassign, or write the review.
+_ASSIGNEE_EDITABLE = frozenset(
+    {"status", "remarks", "completion_pct", "blocked_reason", "attachments"}
+)
 
 
 class TaskService:
@@ -120,6 +122,22 @@ class TaskService:
         await self._audit.append(
             actor=str(caller.employee_id),
             action="task.update",
+            target=f"task:{task.id}",
+        )
+        return task
+
+    async def escalate(self, caller: CurrentUser, task_id: uuid.UUID) -> Task:
+        """Flag a task for attention (overdue/blocked). Manager-only, scoped."""
+        if not caller.is_manager:
+            raise AuthorizationError()
+        task = await self._tasks.get_in_scope(caller, task_id)
+        if task is None:
+            raise NotFoundError()
+        task.escalated = True
+        await self._tasks.flush()
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="task.escalate",
             target=f"task:{task.id}",
         )
         return task

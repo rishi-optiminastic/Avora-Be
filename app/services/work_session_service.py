@@ -21,7 +21,7 @@ class WorkSessionService:
         self._sessions = sessions
         self._audit = audit
 
-    async def clock_in(self, caller: CurrentUser) -> WorkSession:
+    async def clock_in(self, caller: CurrentUser, *, ip_address: str | None = None) -> WorkSession:
         open_session = await self._sessions.get_open(caller.employee_id)
         if open_session is not None:
             return open_session  # already clocked in — idempotent
@@ -29,6 +29,7 @@ class WorkSessionService:
             employee_id=caller.employee_id,
             clock_in_at=datetime.now(UTC),
             source="dashboard",
+            ip_address=ip_address,
         )
         await self._audit.append(
             actor=str(caller.employee_id),

@@ -39,7 +39,7 @@ async def test_attendance_marks_present_and_is_scoped(
     # Manager sees themselves + their report only.
     assert set(rows) == {str(seed.manager.id), str(seed.report.id)}
     report = rows[str(seed.report.id)]
-    assert report["status"] in ("present", "late")
+    assert report["status"] in ("full_day", "half_day", "late")
     assert report["login_at"] is not None
     assert rows[str(seed.manager.id)]["status"] == "absent"  # no samples
 

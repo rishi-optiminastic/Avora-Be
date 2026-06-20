@@ -9,6 +9,8 @@ from app.api.v1.routes import (
     attendance,
     attribution,
     browsing,
+    category_rules,
+    dashboard,
     devices,
     employees,
     health,
@@ -19,6 +21,7 @@ from app.api.v1.routes import (
     leaves,
     pings,
     screenshots,
+    targets,
     tasks,
     work_entities,
 )
@@ -30,6 +33,7 @@ api_router.include_router(activity.router)
 api_router.include_router(hr.router)
 api_router.include_router(invitations.router)
 api_router.include_router(tasks.router)
+api_router.include_router(targets.router)
 api_router.include_router(leaves.router)
 api_router.include_router(holidays.router)
 api_router.include_router(devices.router)
@@ -40,3 +44,5 @@ api_router.include_router(pings.router)
 api_router.include_router(insights.router)
 api_router.include_router(work_entities.router)
 api_router.include_router(attribution.router)
+api_router.include_router(category_rules.router)
+api_router.include_router(dashboard.router)

@@ -78,6 +78,16 @@ async def update_task(
     return TaskRead.model_validate(task)
 
 
+@router.post("/{task_id}/escalate", response_model=TaskRead)
+async def escalate_task(
+    task_id: uuid.UUID,
+    caller: CurrentUserDep,
+    service: TaskServiceDep,
+) -> TaskRead:
+    """Flag a task for attention (manager/admin, scoped)."""
+    return TaskRead.model_validate(await service.escalate(caller, task_id))
+
+
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_task(
     task_id: uuid.UUID,

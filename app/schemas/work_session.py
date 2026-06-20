@@ -14,6 +14,7 @@ class WorkSessionRead(ORMModel):
     id: uuid.UUID
     clock_in_at: datetime
     clock_out_at: datetime | None
+    ip_address: str | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property

@@ -61,5 +61,18 @@ async def test_attendance_board_reflects_clock_in(
     board = await client.get("/api/v1/attendance", headers=auth_headers(settings, seed.manager))
     assert board.status_code == 200
     row = next(r for r in board.json() if r["employee_id"] == str(seed.report.id))
-    assert row["status"] in ("present", "late")
+    assert row["status"] in ("full_day", "half_day", "late")
     assert row["login_at"] is not None
+
+
+async def test_early_logout_is_flagged(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    # Clock in then immediately out ⇒ a near-zero session ⇒ early-logout flag.
+    hdr = auth_headers(settings, seed.report)
+    await client.post("/api/v1/attendance/clock-in", headers=hdr)
+    await client.post("/api/v1/attendance/clock-out", headers=hdr)
+    board = await client.get("/api/v1/attendance", headers=auth_headers(settings, seed.manager))
+    row = next(r for r in board.json() if r["employee_id"] == str(seed.report.id))
+    assert row["early_logout"] is True
+    assert row["missed_logout"] is False

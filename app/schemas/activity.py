@@ -26,6 +26,8 @@ class ActivityIngest(BaseModel):
     # Active browser tab URL (optional). The server re-derives the domain from
     # this; a client-sent domain is never trusted (Golden rule #1).
     url: str | None = Field(default=None, max_length=2048)
+    page_title: str | None = Field(default=None, max_length=512)
+    browser: str | None = Field(default=None, max_length=64)
 
 
 class ActivityIngestResult(BaseModel):
@@ -45,4 +47,6 @@ class ActivitySampleRead(ORMModel):
     idle_seconds: int
     url: str | None
     domain: str | None
+    page_title: str | None
+    browser: str | None
     flags: list[str]

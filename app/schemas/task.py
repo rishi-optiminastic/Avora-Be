@@ -16,6 +16,11 @@ from app.models.task import TaskCadence, TaskPriority, TaskStatus
 from app.schemas.common import ORMModel
 
 
+class Attachment(BaseModel):
+    name: str = Field(min_length=1, max_length=256)
+    url: str = Field(min_length=1, max_length=2048)
+
+
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=256)
     assignee_id: uuid.UUID
@@ -27,6 +32,10 @@ class TaskCreate(BaseModel):
     start_date: datetime | None = None
     due_date: datetime | None = None
     remarks: str | None = Field(default=None, max_length=2000)
+    expected_output: str | None = Field(default=None, max_length=2000)
+    attachments: list[Attachment] = Field(default_factory=list)
+    parent_task_id: uuid.UUID | None = None
+    depends_on_id: uuid.UUID | None = None
 
 
 class TaskUpdate(BaseModel):
@@ -43,6 +52,12 @@ class TaskUpdate(BaseModel):
     start_date: datetime | None = None
     due_date: datetime | None = None
     remarks: str | None = Field(default=None, max_length=2000)
+    expected_output: str | None = Field(default=None, max_length=2000)
+    completion_pct: int | None = Field(default=None, ge=0, le=100)
+    review_notes: str | None = Field(default=None, max_length=2000)
+    final_outcome: str | None = Field(default=None, max_length=2000)
+    blocked_reason: str | None = Field(default=None, max_length=500)
+    attachments: list[Attachment] | None = None
 
 
 class TaskRead(ORMModel):
@@ -60,5 +75,14 @@ class TaskRead(ORMModel):
     due_date: datetime | None
     remarks: str | None
     completed_at: datetime | None
+    expected_output: str | None
+    completion_pct: int
+    review_notes: str | None
+    final_outcome: str | None
+    blocked_reason: str | None
+    attachments: list[Attachment]
+    escalated: bool
+    parent_task_id: uuid.UUID | None
+    depends_on_id: uuid.UUID | None
     created_at: datetime
     updated_at: datetime
