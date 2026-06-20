@@ -25,7 +25,11 @@ engine: AsyncEngine = create_async_engine(
     echo=_settings.db_echo,
     pool_size=_settings.db_pool_size,
     max_overflow=_settings.db_max_overflow,
-    pool_pre_ping=True,
+    # pre_ping costs one extra round-trip per checkout — worth it against a DB
+    # that drops idle connections (Neon), but switch it off (DB_POOL_PRE_PING=false)
+    # once the compute is kept warm. pool_recycle proactively retires old conns.
+    pool_pre_ping=_settings.db_pool_pre_ping,
+    pool_recycle=_settings.db_pool_recycle_seconds,
     future=True,
 )
 

@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     db_pool_size: int = 10
     db_max_overflow: int = 5
     db_echo: bool = False
+    # Pre-ping verifies a pooled connection before use (one extra round-trip).
+    # Keep True with a DB that suspends/drops idle conns; set False once the
+    # compute is kept warm to shave a round-trip per request.
+    db_pool_pre_ping: bool = True
+    db_pool_recycle_seconds: int = 280  # retire conns before Neon's idle cutoff
 
     # Human auth — Better Auth (Next.js) issues short-lived asymmetric JWTs.
     # We verify them against its JWKS endpoint; we never share a symmetric secret
