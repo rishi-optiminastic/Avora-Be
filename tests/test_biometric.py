@@ -1,0 +1,142 @@
+"""Biometric attendance — HMAC ingest, employee mapping, idempotency, and the
+reconciliation read. Mirrors the HR-webhook trust model (CLAUDE §5.1/§9)."""
+
+from __future__ import annotations
+
+import json
+
+from httpx import AsyncClient
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import Settings
+from app.core.security import compute_hmac_sha256
+from app.models.work_session import WorkSession
+from tests.conftest import _Seed, auth_headers
+
+
+def _signed(settings: Settings, body: dict[str, object]) -> tuple[bytes, dict[str, str]]:
+    raw = json.dumps(body).encode()
+    sig = compute_hmac_sha256(settings.biometric_webhook_secret, raw)
+    return raw, {"X-Biometric-Signature": sig, "Content-Type": "application/json"}
+
+
+def _batch(external_id: str) -> dict[str, object]:
+    return {
+        "punches": [
+            {"external_id": external_id, "punched_at": "2026-06-15T09:05:00+05:30"},
+            {"external_id": external_id, "punched_at": "2026-06-15T18:10:00+05:30"},
+        ]
+    }
+
+
+# ---- HMAC trust ------------------------------------------------------------ #
+
+
+async def test_unsigned_is_rejected(client: AsyncClient, seed: _Seed) -> None:
+    resp = await client.post("/api/v1/attendance/biometric", json=_batch("1042"))
+    assert resp.status_code == 401
+
+
+async def test_bad_signature_is_rejected(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    raw, _ = _signed(settings, _batch("1042"))
+    resp = await client.post(
+        "/api/v1/attendance/biometric",
+        content=raw,
+        headers={"X-Biometric-Signature": "deadbeef", "Content-Type": "application/json"},
+    )
+    assert resp.status_code == 401
+
+
+# ---- ingest + mapping ------------------------------------------------------ #
+
+
+async def test_ingest_by_biometric_id_creates_session(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    seed.report.biometric_id = "1042"
+    await db.commit()
+
+    raw, headers = _signed(settings, _batch("1042"))
+    resp = await client.post("/api/v1/attendance/biometric", content=raw, headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["matched"] == 2
+    assert body["sessions_upserted"] == 1
+    assert body["unmatched_external_ids"] == []
+
+    # The biometric punch became the day's attendance (worked ~9h).
+    day = await client.get(
+        "/api/v1/attendance?date=2026-06-15", headers=auth_headers(settings, seed.admin)
+    )
+    row = next(r for r in day.json() if r["employee_id"] == str(seed.report.id))
+    assert row["login_at"] is not None
+    assert row["worked_minutes"] > 480
+
+
+async def test_ingest_maps_by_email_then_flags_unmatched(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    # report has no biometric_id set → match on work_email, plus one bogus id.
+    body = {
+        "punches": [
+            {"external_id": seed.report.work_email, "punched_at": "2026-06-15T09:00:00+05:30"},
+            {"external_id": "9999", "punched_at": "2026-06-15T09:00:00+05:30"},
+        ]
+    }
+    raw, headers = _signed(settings, body)
+    resp = await client.post("/api/v1/attendance/biometric", content=raw, headers=headers)
+    assert resp.status_code == 200
+    out = resp.json()
+    assert out["matched"] == 1
+    assert out["unmatched_external_ids"] == ["9999"]
+
+
+async def test_ingest_is_idempotent(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    seed.report.biometric_id = "1042"
+    await db.commit()
+
+    raw, headers = _signed(settings, _batch("1042"))
+    await client.post("/api/v1/attendance/biometric", content=raw, headers=headers)
+    raw2, headers2 = _signed(settings, _batch("1042"))
+    await client.post("/api/v1/attendance/biometric", content=raw2, headers=headers2)
+
+    count = await db.scalar(
+        select(func.count())
+        .select_from(WorkSession)
+        .where(WorkSession.employee_id == seed.report.id, WorkSession.source == "biometric")
+    )
+    assert count == 1  # merged into one day session, not duplicated
+
+
+# ---- reconciliation -------------------------------------------------------- #
+
+
+async def test_reconciliation_flags_punch_without_activity(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    seed.report.biometric_id = "1042"
+    await db.commit()
+    raw, headers = _signed(settings, _batch("1042"))
+    await client.post("/api/v1/attendance/biometric", content=raw, headers=headers)
+
+    resp = await client.get(
+        "/api/v1/attendance/reconciliation?date=2026-06-15",
+        headers=auth_headers(settings, seed.admin),
+    )
+    assert resp.status_code == 200
+    report = resp.json()
+    row = next(r for r in report["rows"] if r["employee_id"] == str(seed.report.id))
+    # Punched in, but no laptop activity seeded → flagged, not silently merged.
+    assert row["status"] == "no_activity"
+    assert row["biometric_login"] is not None
+    assert row["agent_login"] is None
+
+
+async def test_reconciliation_requires_auth(client: AsyncClient, seed: _Seed) -> None:
+    resp = await client.get("/api/v1/attendance/reconciliation?date=2026-06-15")
+    assert resp.status_code == 401

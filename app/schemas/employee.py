@@ -27,6 +27,7 @@ class EmployeeRead(ORMModel):
     status: EmployeeStatus
     is_active: bool
     tracking_mode: TrackingMode
+    biometric_id: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -57,3 +58,6 @@ class HREmployeeUpsert(BaseModel):
     manager_external_id: str | None = Field(default=None, max_length=128)
     status: EmployeeStatus
     start_date: datetime | None = None
+    # Optional biometric-device enrollment id, so HR can map a person to their
+    # attendance-device id in the same sync. Never a privilege field (rule 5.5).
+    biometric_id: str | None = Field(default=None, max_length=64)

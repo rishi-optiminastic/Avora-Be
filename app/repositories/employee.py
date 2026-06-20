@@ -37,6 +37,13 @@ class EmployeeRepository:
         )
         return result.scalar_one_or_none()
 
+    async def get_by_biometric_id(self, biometric_id: str) -> Employee | None:
+        """Resolve an employee by their attendance-device enrollment id."""
+        result = await self._session.execute(
+            select(Employee).where(Employee.biometric_id == biometric_id)
+        )
+        return result.scalar_one_or_none()
+
     async def tracking_mode(self, employee_id: uuid.UUID) -> TrackingMode:
         """The ingest gate reads this on every sample — a single indexed lookup."""
         mode = await self._session.scalar(
@@ -156,6 +163,7 @@ class EmployeeRepository:
         department: str | None,
         manager_id: uuid.UUID | None,
         status: EmployeeStatus,
+        biometric_id: str | None = None,
     ) -> Employee:
         """Create or update from HR. Never touches `role` (rule 5.5)."""
         employee = await self.get_by_external_id(hr_external_id)
@@ -172,6 +180,10 @@ class EmployeeRepository:
         employee.manager_id = manager_id
         employee.status = status
         employee.is_active = status is EmployeeStatus.ACTIVE
+        # Only overwrite the biometric id when HR actually sends one (keep any
+        # value an admin set manually otherwise).
+        if biometric_id is not None:
+            employee.biometric_id = biometric_id
         await self._session.flush()
         return employee
 

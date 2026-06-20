@@ -55,6 +55,11 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     full_name: Mapped[str] = mapped_column(String(256))
     department: Mapped[str | None] = mapped_column(String(128), default=None)
 
+    # Enrollment id on the office biometric device. The on-prem connector tags
+    # each punch with this so we can match it to an employee; set by HR sync or an
+    # admin. Nullable (not everyone is enrolled); indexed for the lookup.
+    biometric_id: Mapped[str | None] = mapped_column(String(64), default=None, index=True)
+
     # Org tree: self-referential reporting line, set from HR.
     manager_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("employees.id", ondelete="SET NULL"),

@@ -1,0 +1,3 @@
+# The connector is stdlib-only for the CSV source.
+# For SOURCE=zk (pull straight from a ZKTeco/eSSL-family device), also install:
+pyzk>=0.9
