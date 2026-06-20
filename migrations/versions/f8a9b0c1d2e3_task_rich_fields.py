@@ -26,9 +26,7 @@ def upgrade() -> None:
     op.add_column("tasks", sa.Column("review_notes", sa.String(length=2000), nullable=True))
     op.add_column("tasks", sa.Column("final_outcome", sa.String(length=2000), nullable=True))
     op.add_column("tasks", sa.Column("blocked_reason", sa.String(length=500), nullable=True))
-    op.add_column(
-        "tasks", sa.Column("attachments", sa.JSON(), nullable=False, server_default="[]")
-    )
+    op.add_column("tasks", sa.Column("attachments", sa.JSON(), nullable=False, server_default="[]"))
     op.add_column(
         "tasks",
         sa.Column("escalated", sa.Boolean(), nullable=False, server_default=sa.false()),

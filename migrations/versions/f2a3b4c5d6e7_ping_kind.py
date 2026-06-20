@@ -21,9 +21,7 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     kind = sa.Enum("PING", "CAPTURE", name="pingkind")
     kind.create(op.get_bind(), checkfirst=True)
-    op.add_column(
-        "pings", sa.Column("kind", kind, nullable=False, server_default="PING")
-    )
+    op.add_column("pings", sa.Column("kind", kind, nullable=False, server_default="PING"))
 
 
 def downgrade() -> None:

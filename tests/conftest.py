@@ -229,22 +229,21 @@ class _Seed:
 
 
 def bearer_for_email(
-    settings: Settings, email: str, *, subject: str | None = None
+    settings: Settings, email: str, *, subject: str | None = None, name: str | None = None
 ) -> dict[str, str]:
     """Mint a Better Auth-shaped EdDSA JWT for any email (need not be an employee)."""
     now = datetime.now(UTC)
-    token = jwt.encode(
-        {
-            "sub": subject or f"ba-{email}",
-            "email": email,
-            "iss": settings.better_auth_issuer,
-            "aud": settings.better_auth_audience,
-            "iat": int(now.timestamp()),
-            "exp": int((now + timedelta(minutes=15)).timestamp()),
-        },
-        _TEST_PRIVATE_PEM,
-        algorithm="EdDSA",
-    )
+    claims = {
+        "sub": subject or f"ba-{email}",
+        "email": email,
+        "iss": settings.better_auth_issuer,
+        "aud": settings.better_auth_audience,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(minutes=15)).timestamp()),
+    }
+    if name is not None:
+        claims["name"] = name
+    token = jwt.encode(claims, _TEST_PRIVATE_PEM, algorithm="EdDSA")
     return {"Authorization": f"Bearer {token}"}
 
 

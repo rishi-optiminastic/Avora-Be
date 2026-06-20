@@ -56,9 +56,7 @@ def upgrade() -> None:
         "attribution_corrections",
         ["employee_id", "status"],
     )
-    op.create_index(
-        "ix_attribution_corrections_status", "attribution_corrections", ["status"]
-    )
+    op.create_index("ix_attribution_corrections_status", "attribution_corrections", ["status"])
 
 
 def downgrade() -> None:

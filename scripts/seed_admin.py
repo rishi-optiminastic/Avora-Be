@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import sys
 
+from app.core.names import placeholder_name_from_email
 from app.db.session import SessionFactory, engine
 from app.models.employee import Role
 from app.repositories.employee import EmployeeRepository
@@ -32,7 +33,7 @@ async def seed_admin(raw_email: str) -> str:
         else:
             await repo.create_from_invite(
                 work_email=email,
-                full_name=email.split("@", 1)[0].replace(".", " ").title(),
+                full_name=placeholder_name_from_email(email),
                 role=Role.ADMIN,
             )
             action = "created"

@@ -32,9 +32,7 @@ def upgrade() -> None:
         sa.Column("full_day_min_minutes", sa.Integer(), nullable=False, server_default="480"),
         sa.Column("half_day_min_minutes", sa.Integer(), nullable=False, server_default="240"),
         sa.Column("monthly_regularizations", sa.Integer(), nullable=False, server_default="2"),
-        sa.Column(
-            "timezone", sa.String(length=64), nullable=False, server_default="Asia/Kolkata"
-        ),
+        sa.Column("timezone", sa.String(length=64), nullable=False, server_default="Asia/Kolkata"),
         sa.Column("updated_by", sa.Uuid(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
@@ -63,9 +61,7 @@ def upgrade() -> None:
     )
     op.create_index("ix_regularizations_employee_id", "regularizations", ["employee_id"])
     op.create_index("ix_regularizations_status", "regularizations", ["status"])
-    op.create_index(
-        "ix_regularizations_employee_day", "regularizations", ["employee_id", "day"]
-    )
+    op.create_index("ix_regularizations_employee_day", "regularizations", ["employee_id", "day"])
 
 
 def downgrade() -> None:

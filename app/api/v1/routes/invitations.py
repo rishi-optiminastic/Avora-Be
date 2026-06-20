@@ -93,5 +93,7 @@ async def accept_invitation(
     service: InvitationServiceDep,
 ) -> EmployeeRead:
     """The signed-in invitee accepts; we provision their employee record."""
-    employee = await service.accept(identity_email=identity.email, raw_token=payload.token)
+    employee = await service.accept(
+        identity_email=identity.email, identity_name=identity.name, raw_token=payload.token
+    )
     return EmployeeRead.model_validate(employee)

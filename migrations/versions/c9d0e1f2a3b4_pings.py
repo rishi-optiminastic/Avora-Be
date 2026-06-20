@@ -30,12 +30,16 @@ def upgrade() -> None:
         ),
         sa.Column("delivered_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(
-            ["target_employee_id"], ["employees.id"],
-            name=op.f("fk_pings_target_employee_id_employees"), ondelete="CASCADE",
+            ["target_employee_id"],
+            ["employees.id"],
+            name=op.f("fk_pings_target_employee_id_employees"),
+            ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(
-            ["issued_by_id"], ["employees.id"],
-            name=op.f("fk_pings_issued_by_id_employees"), ondelete="CASCADE",
+            ["issued_by_id"],
+            ["employees.id"],
+            name=op.f("fk_pings_issued_by_id_employees"),
+            ondelete="CASCADE",
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_pings")),
     )

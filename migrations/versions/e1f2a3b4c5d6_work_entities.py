@@ -37,12 +37,16 @@ def upgrade() -> None:
             "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
         ),
         sa.ForeignKeyConstraint(
-            ["created_by"], ["employees.id"],
-            name=op.f("fk_work_entities_created_by_employees"), ondelete="SET NULL",
+            ["created_by"],
+            ["employees.id"],
+            name=op.f("fk_work_entities_created_by_employees"),
+            ondelete="SET NULL",
         ),
         sa.ForeignKeyConstraint(
-            ["updated_by"], ["employees.id"],
-            name=op.f("fk_work_entities_updated_by_employees"), ondelete="SET NULL",
+            ["updated_by"],
+            ["employees.id"],
+            name=op.f("fk_work_entities_updated_by_employees"),
+            ondelete="SET NULL",
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_work_entities")),
     )

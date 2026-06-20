@@ -31,7 +31,9 @@ from app.repositories.attendance_policy import AttendancePolicyRepository
 from app.repositories.attribution_correction import AttributionCorrectionRepository
 from app.repositories.audit import AuditRepository
 from app.repositories.category_rule import CategoryRuleRepository
+from app.repositories.compensation import CompensationRepository
 from app.repositories.device import DeviceRepository
+from app.repositories.document import DocumentRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.holiday import HolidayRepository
 from app.repositories.invitation import InvitationRepository
@@ -51,8 +53,10 @@ from app.services.attendance_service import AttendanceService
 from app.services.attribution_correction_service import AttributionCorrectionService
 from app.services.attribution_service import AttributionService
 from app.services.category_rule_service import CategoryRuleService
+from app.services.compensation_service import CompensationService
 from app.services.dashboard_service import DashboardService
 from app.services.device_service import DeviceService
+from app.services.document_service import DocumentService
 from app.services.email_service import EmailService
 from app.services.employee_service import EmployeeService
 from app.services.holiday_service import HolidayService
@@ -155,6 +159,14 @@ def get_attendance_policy_repo(db: DbDep) -> AttendancePolicyRepository:
 
 def get_regularization_repo(db: DbDep) -> RegularizationRepository:
     return RegularizationRepository(db)
+
+
+def get_compensation_repo(db: DbDep) -> CompensationRepository:
+    return CompensationRepository(db)
+
+
+def get_document_repo(db: DbDep) -> DocumentRepository:
+    return DocumentRepository(db)
 
 
 # --------------------------------------------------------------------------- #
@@ -342,6 +354,22 @@ def get_holiday_service(
     return HolidayService(holidays, audit)
 
 
+def get_compensation_service(
+    compensation: Annotated[CompensationRepository, Depends(get_compensation_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> CompensationService:
+    return CompensationService(compensation, employees, audit)
+
+
+def get_document_service(
+    documents: Annotated[DocumentRepository, Depends(get_document_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> DocumentService:
+    return DocumentService(documents, employees, audit)
+
+
 EmployeeServiceDep = Annotated[EmployeeService, Depends(get_employee_service)]
 HRServiceDep = Annotated[HRService, Depends(get_hr_service)]
 ActivityServiceDep = Annotated[ActivityService, Depends(get_activity_service)]
@@ -361,6 +389,8 @@ TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
 TargetServiceDep = Annotated[TargetService, Depends(get_target_service)]
 LeaveServiceDep = Annotated[LeaveService, Depends(get_leave_service)]
 HolidayServiceDep = Annotated[HolidayService, Depends(get_holiday_service)]
+CompensationServiceDep = Annotated[CompensationService, Depends(get_compensation_service)]
+DocumentServiceDep = Annotated[DocumentService, Depends(get_document_service)]
 WorkSessionServiceDep = Annotated[WorkSessionService, Depends(get_work_session_service)]
 CategoryRuleServiceDep = Annotated[CategoryRuleService, Depends(get_category_rule_service)]
 DashboardServiceDep = Annotated[DashboardService, Depends(get_dashboard_service)]
@@ -419,7 +449,8 @@ def _verify_identity(
     email = claims.get("email")
     if not isinstance(subject, str) or not isinstance(email, str) or not email:
         raise AuthenticationError()
-    return AuthIdentity(subject=subject, email=email)
+    name = claims.get("name")
+    return AuthIdentity(subject=subject, email=email, name=name if isinstance(name, str) else None)
 
 
 async def get_auth_identity(
@@ -449,6 +480,11 @@ async def get_current_user(
     employee = await employees.get_by_work_email(identity.email)
     if employee is None or not employee.is_active:
         raise AuthenticationError()
+
+    # Backfill a real display name from the provider on login. Guarded inside the
+    # repo to only replace an email-derived placeholder, so it runs at most once
+    # and never clobbers a curated or HR-synced name.
+    await employees.refresh_display_name(employee, identity.name)
 
     return CurrentUser(
         employee_id=employee.id,

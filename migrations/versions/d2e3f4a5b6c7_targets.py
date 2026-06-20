@@ -21,9 +21,9 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     sa.Enum("MONTHLY", "QUARTERLY", name="targetperiod").create(op.get_bind(), checkfirst=True)
-    sa.Enum(
-        "PLANNED", "ON_TRACK", "AT_RISK", "ACHIEVED", "MISSED", name="targetstatus"
-    ).create(op.get_bind(), checkfirst=True)
+    sa.Enum("PLANNED", "ON_TRACK", "AT_RISK", "ACHIEVED", "MISSED", name="targetstatus").create(
+        op.get_bind(), checkfirst=True
+    )
     period = postgresql.ENUM("MONTHLY", "QUARTERLY", name="targetperiod", create_type=False)
     status = postgresql.ENUM(name="targetstatus", create_type=False)
     op.create_table(

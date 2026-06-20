@@ -60,6 +60,57 @@ async def test_accept_invite_provisions_employee(
     assert reused.status_code == 409
 
 
+async def test_accept_uses_real_name_from_identity(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """The provisioned employee takes its name from the signed-in Google/identity
+    profile, not an email-derived placeholder."""
+    created = await client.post(
+        "/api/v1/invitations",
+        json={"email": "tech5@acme.com", "role": "employee"},
+        headers=auth_headers(settings, seed.admin),
+    )
+    token = created.json()["accept_url"].rsplit("/", 1)[1]
+
+    resp = await client.post(
+        "/api/v1/invitations/accept",
+        json={"token": token},
+        headers=bearer_for_email(settings, "tech5@acme.com", name="Akshat Sharma"),
+    )
+    assert resp.status_code == 200
+    # Real name, not the "Tech5" placeholder the email would have produced.
+    assert resp.json()["full_name"] == "Akshat Sharma"
+
+
+async def test_login_backfills_placeholder_name(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """An employee accepted without a name (placeholder) gets their real name on a
+    later sign-in that carries one — but a real name is never overwritten."""
+    created = await client.post(
+        "/api/v1/invitations",
+        json={"email": "tech7@acme.com", "role": "employee"},
+        headers=auth_headers(settings, seed.admin),
+    )
+    token = created.json()["accept_url"].rsplit("/", 1)[1]
+
+    # Accept with no name claim → placeholder "Tech7".
+    accepted = await client.post(
+        "/api/v1/invitations/accept",
+        json={"token": token},
+        headers=bearer_for_email(settings, "tech7@acme.com"),
+    )
+    assert accepted.json()["full_name"] == "Tech7"
+
+    # Any authenticated request carrying the real name backfills it.
+    me = await client.get(
+        "/api/v1/employees/me",
+        headers=bearer_for_email(settings, "tech7@acme.com", name="Priya Nair"),
+    )
+    assert me.status_code == 200
+    assert me.json()["full_name"] == "Priya Nair"
+
+
 async def test_admin_can_list_and_resend_pending(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:

@@ -10,7 +10,9 @@ from app.models.attribution_correction import AttributionCorrection, CorrectionS
 from app.models.audit import AuditLog
 from app.models.base import Base
 from app.models.category_rule import CategoryRule
+from app.models.compensation import Compensation, PayPeriod
 from app.models.device import Device
+from app.models.document import DocumentCategory, EmployeeDocument
 from app.models.employee import Employee, EmployeeStatus, Role, TrackingMode
 from app.models.holiday import Holiday, HolidayType
 from app.models.invitation import Invitation, InvitationStatus
@@ -31,9 +33,12 @@ __all__ = [
     "AuditLog",
     "Base",
     "CategoryRule",
+    "Compensation",
     "CorrectionStatus",
     "Device",
+    "DocumentCategory",
     "Employee",
+    "EmployeeDocument",
     "EmployeeStatus",
     "Holiday",
     "HolidayType",
@@ -44,6 +49,7 @@ __all__ = [
     "LeaveStatus",
     "LeaveType",
     "OcrStatus",
+    "PayPeriod",
     "Ping",
     "Regularization",
     "RegularizationStatus",

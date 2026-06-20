@@ -34,6 +34,10 @@ class AuthIdentity(BaseModel):
 
     subject: str
     email: str
+    # The display name the provider asserts (Google profile / sign-up name). Used
+    # to provision and keep an employee's `full_name` real instead of an
+    # email-derived placeholder. None when the token carries no name.
+    name: str | None = None
 
 
 class CurrentDevice(BaseModel):

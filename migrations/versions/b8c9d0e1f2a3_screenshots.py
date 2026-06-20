@@ -38,11 +38,15 @@ def upgrade() -> None:
         sa.Column("image", sa.LargeBinary(), nullable=False),
         sa.Column("flags", sa.JSON(), nullable=False),
         sa.ForeignKeyConstraint(
-            ["device_id"], ["devices.id"], name=op.f("fk_screenshots_device_id_devices"),
+            ["device_id"],
+            ["devices.id"],
+            name=op.f("fk_screenshots_device_id_devices"),
             ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(
-            ["employee_id"], ["employees.id"], name=op.f("fk_screenshots_employee_id_employees"),
+            ["employee_id"],
+            ["employees.id"],
+            name=op.f("fk_screenshots_employee_id_employees"),
             ondelete="CASCADE",
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_screenshots")),

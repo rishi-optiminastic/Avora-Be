@@ -22,9 +22,7 @@ async def purge() -> str:
     async with SessionFactory() as session:
         samples = await session.execute(delete(ActivitySample))
         seeded = await session.execute(delete(Device).where(Device.label.like("%'s laptop")))
-        await session.execute(
-            update(Device).values(last_seen_at=None, last_sequence=0)
-        )
+        await session.execute(update(Device).values(last_seen_at=None, last_sequence=0))
         await session.commit()
         return (
             f"deleted {samples.rowcount} activity samples, "

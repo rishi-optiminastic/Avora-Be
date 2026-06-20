@@ -26,10 +26,16 @@ def upgrade() -> None:
         sa.Column("body", sa.String(length=2000), nullable=False),
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column(
-            "created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
         ),
         sa.Column(
-            "updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False
+            "updated_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
         ),
         sa.ForeignKeyConstraint(
             ["leave_id"],
@@ -45,7 +51,9 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_leave_comments")),
     )
-    op.create_index(op.f("ix_leave_comments_leave_id"), "leave_comments", ["leave_id"], unique=False)
+    op.create_index(
+        op.f("ix_leave_comments_leave_id"), "leave_comments", ["leave_id"], unique=False
+    )
 
 
 def downgrade() -> None:

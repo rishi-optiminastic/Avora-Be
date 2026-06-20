@@ -10,8 +10,10 @@ from app.api.v1.routes import (
     attribution,
     browsing,
     category_rules,
+    compensation,
     dashboard,
     devices,
+    documents,
     employees,
     health,
     holidays,
@@ -45,4 +47,6 @@ api_router.include_router(insights.router)
 api_router.include_router(work_entities.router)
 api_router.include_router(attribution.router)
 api_router.include_router(category_rules.router)
+api_router.include_router(compensation.router)
+api_router.include_router(documents.router)
 api_router.include_router(dashboard.router)

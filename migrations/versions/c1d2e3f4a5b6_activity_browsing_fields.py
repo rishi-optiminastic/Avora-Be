@@ -19,9 +19,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "activity_samples", sa.Column("page_title", sa.String(length=512), nullable=True)
-    )
+    op.add_column("activity_samples", sa.Column("page_title", sa.String(length=512), nullable=True))
     op.add_column("activity_samples", sa.Column("browser", sa.String(length=64), nullable=True))
 
 

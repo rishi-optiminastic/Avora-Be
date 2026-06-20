@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 
 from app.core.config import Settings
 from app.core.exceptions import AuthorizationError, ConflictError, NotFoundError
+from app.core.names import clean_display_name, placeholder_name_from_email
 from app.core.security import generate_invite_token, hash_invite_token
 from app.models.employee import Employee, Role
 from app.models.invitation import Invitation, InvitationStatus
@@ -27,11 +28,6 @@ ORG_NAME = "the team"
 
 def _role_label(role: Role) -> str:
     return role.value.replace("_", " ").title()
-
-
-def _name_from_email(email: str) -> str:
-    local = email.split("@", 1)[0].replace(".", " ").replace("_", " ").strip()
-    return local.title() if local else "New member"
 
 
 class InvitationService:
@@ -149,21 +145,29 @@ class InvitationService:
             raise ConflictError("This invitation has expired.")
         return invitation
 
-    async def accept(self, *, identity_email: str, raw_token: str) -> Employee:
+    async def accept(
+        self, *, identity_email: str, identity_name: str | None, raw_token: str
+    ) -> Employee:
         invitation = await self.get_valid(raw_token)
 
         # The signed-in account must be the person who was invited.
         if invitation.email != identity_email.strip().lower():
             raise AuthorizationError()
 
+        # Prefer the real name from the signed-in identity (Google profile /
+        # sign-up); only fall back to an email-derived placeholder when absent.
+        provider_name = clean_display_name(identity_name)
+
         employee = await self._employees.get_by_work_email(invitation.email)
         if employee is None:
             employee = await self._employees.create_from_invite(
                 work_email=invitation.email,
-                full_name=_name_from_email(invitation.email),
+                full_name=provider_name or placeholder_name_from_email(invitation.email),
                 role=invitation.role,
                 department=invitation.department,
             )
+        else:
+            await self._employees.refresh_display_name(employee, identity_name)
 
         await self._invitations.mark_accepted(
             invitation, employee_id=employee.id, accepted_at=datetime.now(UTC)

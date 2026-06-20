@@ -13,6 +13,7 @@ from collections.abc import Sequence
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.names import clean_display_name, is_placeholder_name
 from app.models.employee import Employee, EmployeeStatus, Role, TrackingMode
 from app.schemas.auth import CurrentUser
 
@@ -69,6 +70,21 @@ class EmployeeRepository:
         self._session.add(employee)
         await self._session.flush()
         return employee
+
+    async def refresh_display_name(self, employee: Employee, provider_name: str | None) -> None:
+        """Replace an email-derived placeholder with the provider's real name.
+
+        Idempotent and conservative: does nothing unless the provider gave a
+        usable name AND the stored name is still the auto-generated placeholder,
+        so a curated or HR-synced name is never overwritten.
+        """
+        cleaned = clean_display_name(provider_name)
+        if cleaned is None or cleaned == employee.full_name:
+            return
+        if not is_placeholder_name(employee.full_name, employee.work_email):
+            return
+        employee.full_name = cleaned
+        await self._session.flush()
 
     def _scope_clause(self, caller: CurrentUser) -> list[ColumnElement[bool]]:
         """Row-level scope: what may THIS caller read? (Security rule 5.3)
