@@ -2,8 +2,9 @@
 
 The Google/Slack happy path needs real credentials, so it's validated manually;
 here we cover the security-relevant logic: only authed users can start a meeting,
-a missing config fails cleanly, and the SA assertion carries the right claims
-(impersonation subject + Meet scope) so domain-wide delegation works.
+a missing config fails cleanly, the SA assertion carries the right claims
+(impersonation subject + Calendar scope) so domain-wide delegation works, and a
+caller's default invitees are strictly self-scoped.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
+from app.repositories.quick_meet import QuickMeetRepository
 from app.services.meeting_service import MeetingService
 from tests.conftest import _Seed, auth_headers
 
@@ -53,7 +55,9 @@ def test_sa_assertion_has_impersonation_and_scope(settings: Settings, db: AsyncS
             "google_sa_private_key": private_pem,
         }
     )
-    service = MeetingService(configured, EmployeeRepository(db), AuditRepository(db))
+    service = MeetingService(
+        configured, EmployeeRepository(db), AuditRepository(db), QuickMeetRepository(db)
+    )
 
     assertion = service._build_assertion("alice@corp.test")
     claims = jwt.decode(
@@ -64,4 +68,38 @@ def test_sa_assertion_has_impersonation_and_scope(settings: Settings, db: AsyncS
     )
     assert claims["iss"] == "avora-meet@proj.iam.gserviceaccount.com"
     assert claims["sub"] == "alice@corp.test"  # domain-wide delegation impersonation
-    assert claims["scope"] == "https://www.googleapis.com/auth/meetings.space.created"
+    assert claims["scope"] == "https://www.googleapis.com/auth/calendar.events"
+
+
+async def test_quick_defaults_requires_auth(client: AsyncClient, seed: _Seed) -> None:
+    assert (await client.get("/api/v1/meetings/quick/defaults")).status_code == 401
+    assert (
+        await client.put("/api/v1/meetings/quick/defaults", json={"invitee_emails": []})
+    ).status_code == 401
+
+
+async def test_quick_defaults_are_self_scoped(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    # Each caller reads/writes only their own list; nobody can target another user.
+    empty = await client.get(
+        "/api/v1/meetings/quick/defaults", headers=auth_headers(settings, seed.admin)
+    )
+    assert empty.status_code == 200
+    assert empty.json()["invitee_emails"] == []
+
+    saved = await client.put(
+        "/api/v1/meetings/quick/defaults",
+        headers=auth_headers(settings, seed.admin),
+        json={"invitee_emails": ["a@corp.com", "A@corp.com", "b@corp.com"]},
+    )
+    assert saved.status_code == 200
+    # Case-insensitive de-dupe is applied server-side.
+    assert saved.json()["invitee_emails"] == ["a@corp.com", "b@corp.com"]
+
+    # A different caller still sees their own (empty) list, not the admin's.
+    other = await client.get(
+        "/api/v1/meetings/quick/defaults", headers=auth_headers(settings, seed.report)
+    )
+    assert other.status_code == 200
+    assert other.json()["invitee_emails"] == []

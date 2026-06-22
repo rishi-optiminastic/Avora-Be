@@ -72,6 +72,22 @@ class RateLimitError(AppError):
     message = "Too many requests — please slow down."
 
 
+class StorageError(AppError):
+    # Object storage (S3) is misconfigured or unreachable — distinct from a bad
+    # request, so the client sees a clean 502 instead of a 500 stack trace.
+    status_code = status.HTTP_502_BAD_GATEWAY
+    code = "storage_error"
+    message = "File storage is unavailable right now. Please try again."
+
+
+class PayloadTooLargeError(AppError):
+    # The request body exceeds the endpoint's cap — reject before buffering it all
+    # into memory (avoids a memory-exhaustion DoS on uploads).
+    status_code = status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+    code = "payload_too_large"
+    message = "The upload is too large."
+
+
 def _error_body(code: str, message: str) -> dict[str, dict[str, str]]:
     return {"error": {"code": code, "message": message}}
 

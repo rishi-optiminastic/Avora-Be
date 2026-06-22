@@ -8,7 +8,7 @@ trust a client-supplied role, team, or id (Golden rules #1, #2).
 from __future__ import annotations
 
 import ipaddress
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from functools import lru_cache
 from typing import Annotated
 
@@ -39,19 +39,28 @@ from app.repositories.holiday import HolidayRepository
 from app.repositories.invitation import InvitationRepository
 from app.repositories.leave import LeaveRepository
 from app.repositories.leave_comment import LeaveCommentRepository
+from app.repositories.notification import NotificationRepository
+from app.repositories.onboarding_config import OnboardingConfigRepository
+from app.repositories.org_settings import OrgSettingsRepository
+from app.repositories.payroll_run import PayrollRunRepository
+from app.repositories.payroll_settings import PayrollSettingsRepository
 from app.repositories.ping import PingRepository
+from app.repositories.quick_meet import QuickMeetRepository
 from app.repositories.regularization import RegularizationRepository
 from app.repositories.screenshot import ScreenshotRepository
 from app.repositories.target import TargetRepository
 from app.repositories.task import TaskRepository
+from app.repositories.task_comment import TaskCommentRepository
 from app.repositories.work_entity import WorkEntityRepository
 from app.repositories.work_session import WorkSessionRepository
+from app.repositories.workspace_file import WorkspaceFileRepository
 from app.schemas.auth import AuthIdentity, CurrentDevice, CurrentUser
 from app.services.activity_service import ActivityService
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.attendance_service import AttendanceService
 from app.services.attribution_correction_service import AttributionCorrectionService
 from app.services.attribution_service import AttributionService
+from app.services.biometric_service import BiometricService
 from app.services.category_rule_service import CategoryRuleService
 from app.services.compensation_service import CompensationService
 from app.services.dashboard_service import DashboardService
@@ -63,14 +72,21 @@ from app.services.holiday_service import HolidayService
 from app.services.hr_service import HRService
 from app.services.invitation_service import InvitationService
 from app.services.leave_service import LeaveService
+from app.services.meeting_service import MeetingService
 from app.services.monitoring_service import MonitoringService
+from app.services.notification_service import NotificationService
+from app.services.onboarding_service import OnboardingService
+from app.services.org_settings_service import OrgSettingsService
+from app.services.payroll_service import PayrollService
 from app.services.ping_service import PingService
+from app.services.reconciliation_service import ReconciliationService
 from app.services.regularization_service import RegularizationService
 from app.services.screenshot_service import ScreenshotService
 from app.services.target_service import TargetService
 from app.services.task_service import TaskService
 from app.services.work_entity_service import WorkEntityService
 from app.services.work_session_service import WorkSessionService
+from app.services.workspace_file_service import WorkspaceFileService
 
 # --------------------------------------------------------------------------- #
 # Primitives
@@ -125,12 +141,20 @@ def get_task_repo(db: DbDep) -> TaskRepository:
     return TaskRepository(db)
 
 
+def get_task_comment_repo(db: DbDep) -> TaskCommentRepository:
+    return TaskCommentRepository(db)
+
+
 def get_target_repo(db: DbDep) -> TargetRepository:
     return TargetRepository(db)
 
 
 def get_leave_repo(db: DbDep) -> LeaveRepository:
     return LeaveRepository(db)
+
+
+def get_notification_repo(db: DbDep) -> NotificationRepository:
+    return NotificationRepository(db)
 
 
 def get_leave_comment_repo(db: DbDep) -> LeaveCommentRepository:
@@ -165,8 +189,28 @@ def get_compensation_repo(db: DbDep) -> CompensationRepository:
     return CompensationRepository(db)
 
 
+def get_onboarding_config_repo(db: DbDep) -> OnboardingConfigRepository:
+    return OnboardingConfigRepository(db)
+
+
+def get_payroll_settings_repo(db: DbDep) -> PayrollSettingsRepository:
+    return PayrollSettingsRepository(db)
+
+
+def get_org_settings_repo(db: DbDep) -> OrgSettingsRepository:
+    return OrgSettingsRepository(db)
+
+
+def get_payroll_run_repo(db: DbDep) -> PayrollRunRepository:
+    return PayrollRunRepository(db)
+
+
 def get_document_repo(db: DbDep) -> DocumentRepository:
     return DocumentRepository(db)
+
+
+def get_workspace_file_repo(db: DbDep) -> WorkspaceFileRepository:
+    return WorkspaceFileRepository(db)
 
 
 # --------------------------------------------------------------------------- #
@@ -176,12 +220,26 @@ def get_email_service(settings: SettingsDep) -> EmailService:
     return EmailService(settings)
 
 
+def get_quick_meet_repo(db: DbDep) -> QuickMeetRepository:
+    return QuickMeetRepository(db)
+
+
+def get_meeting_service(
+    settings: SettingsDep,
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    quick_meet: Annotated[QuickMeetRepository, Depends(get_quick_meet_repo)],
+) -> MeetingService:
+    return MeetingService(settings, employees, audit, quick_meet)
+
+
 def get_employee_service(
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     pings: Annotated[PingRepository, Depends(get_ping_repo)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    settings: SettingsDep,
 ) -> EmployeeService:
-    return EmployeeService(employees, pings, audit)
+    return EmployeeService(employees, pings, audit, settings)
 
 
 def get_hr_service(
@@ -208,11 +266,29 @@ def get_monitoring_service(
     return MonitoringService(activity, employees, rules)
 
 
+def get_org_settings_service(
+    orgs: Annotated[OrgSettingsRepository, Depends(get_org_settings_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    settings: SettingsDep,
+) -> OrgSettingsService:
+    return OrgSettingsService(orgs, audit, settings)
+
+
 def get_attendance_policy_service(
     policies: Annotated[AttendancePolicyRepository, Depends(get_attendance_policy_repo)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
 ) -> AttendancePolicyService:
     return AttendancePolicyService(policies, audit)
+
+
+def get_onboarding_service(
+    config_repo: Annotated[OnboardingConfigRepository, Depends(get_onboarding_config_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> OnboardingService:
+    return OnboardingService(config_repo, audit)
+
+
+OnboardingServiceDep = Annotated[OnboardingService, Depends(get_onboarding_service)]
 
 
 def get_attendance_service(
@@ -223,6 +299,24 @@ def get_attendance_service(
     regularizations: Annotated[RegularizationRepository, Depends(get_regularization_repo)],
 ) -> AttendanceService:
     return AttendanceService(employees, activity, sessions, policy, regularizations)
+
+
+def get_biometric_service(
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    sessions: Annotated[WorkSessionRepository, Depends(get_work_session_repo)],
+    policy: Annotated[AttendancePolicyService, Depends(get_attendance_policy_service)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> BiometricService:
+    return BiometricService(employees, sessions, policy, audit)
+
+
+def get_reconciliation_service(
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    sessions: Annotated[WorkSessionRepository, Depends(get_work_session_repo)],
+    activity: Annotated[ActivityRepository, Depends(get_activity_repo)],
+    policy: Annotated[AttendancePolicyService, Depends(get_attendance_policy_service)],
+) -> ReconciliationService:
+    return ReconciliationService(employees, sessions, activity, policy)
 
 
 def get_regularization_service(
@@ -247,8 +341,13 @@ def get_dashboard_service(
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     activity: Annotated[ActivityRepository, Depends(get_activity_repo)],
     entities: Annotated[WorkEntityRepository, Depends(get_work_entity_repo)],
+    leaves: Annotated[LeaveRepository, Depends(get_leave_repo)],
+    attendance: Annotated[AttendanceService, Depends(get_attendance_service)],
+    monitoring: Annotated[MonitoringService, Depends(get_monitoring_service)],
 ) -> DashboardService:
-    return DashboardService(tasks, employees, activity, entities)
+    return DashboardService(
+        tasks, employees, activity, entities, leaves, attendance, monitoring
+    )
 
 
 def get_attribution_correction_service(
@@ -321,13 +420,22 @@ def get_invitation_service(
     return InvitationService(settings, invitations, employees, audit, email)
 
 
+def get_notification_service(
+    notifications: Annotated[NotificationRepository, Depends(get_notification_repo)],
+) -> NotificationService:
+    return NotificationService(notifications)
+
+
 def get_task_service(
     tasks: Annotated[TaskRepository, Depends(get_task_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     entities: Annotated[WorkEntityRepository, Depends(get_work_entity_repo)],
+    comments: Annotated[TaskCommentRepository, Depends(get_task_comment_repo)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    notifications: Annotated[NotificationService, Depends(get_notification_service)],
+    email: Annotated[EmailService, Depends(get_email_service)],
 ) -> TaskService:
-    return TaskService(tasks, employees, entities, audit)
+    return TaskService(tasks, employees, entities, comments, audit, notifications, email)
 
 
 def get_target_service(
@@ -343,8 +451,10 @@ def get_leave_service(
     comments: Annotated[LeaveCommentRepository, Depends(get_leave_comment_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    notifications: Annotated[NotificationService, Depends(get_notification_service)],
+    email: Annotated[EmailService, Depends(get_email_service)],
 ) -> LeaveService:
-    return LeaveService(leaves, comments, employees, audit)
+    return LeaveService(leaves, comments, employees, audit, notifications, email)
 
 
 def get_holiday_service(
@@ -362,12 +472,47 @@ def get_compensation_service(
     return CompensationService(compensation, employees, audit)
 
 
+def get_payroll_service(
+    settings_repo: Annotated[PayrollSettingsRepository, Depends(get_payroll_settings_repo)],
+    runs: Annotated[PayrollRunRepository, Depends(get_payroll_run_repo)],
+    compensation: Annotated[CompensationRepository, Depends(get_compensation_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    attendance: Annotated[AttendanceService, Depends(get_attendance_service)],
+    policy: Annotated[AttendancePolicyService, Depends(get_attendance_policy_service)],
+    leaves: Annotated[LeaveRepository, Depends(get_leave_repo)],
+    holidays: Annotated[HolidayRepository, Depends(get_holiday_repo)],
+    email: Annotated[EmailService, Depends(get_email_service)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> PayrollService:
+    return PayrollService(
+        settings_repo,
+        runs,
+        compensation,
+        employees,
+        attendance,
+        policy,
+        leaves,
+        holidays,
+        email,
+        audit,
+    )
+
+
 def get_document_service(
     documents: Annotated[DocumentRepository, Depends(get_document_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
 ) -> DocumentService:
     return DocumentService(documents, employees, audit)
+
+
+def get_workspace_file_service(
+    files: Annotated[WorkspaceFileRepository, Depends(get_workspace_file_repo)],
+    entities: Annotated[WorkEntityRepository, Depends(get_work_entity_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    settings: SettingsDep,
+) -> WorkspaceFileService:
+    return WorkspaceFileService(files, entities, audit, settings)
 
 
 EmployeeServiceDep = Annotated[EmployeeService, Depends(get_employee_service)]
@@ -378,7 +523,10 @@ MonitoringServiceDep = Annotated[MonitoringService, Depends(get_monitoring_servi
 AttendancePolicyServiceDep = Annotated[
     AttendancePolicyService, Depends(get_attendance_policy_service)
 ]
+OrgSettingsServiceDep = Annotated[OrgSettingsService, Depends(get_org_settings_service)]
 AttendanceServiceDep = Annotated[AttendanceService, Depends(get_attendance_service)]
+BiometricServiceDep = Annotated[BiometricService, Depends(get_biometric_service)]
+ReconciliationServiceDep = Annotated[ReconciliationService, Depends(get_reconciliation_service)]
 RegularizationServiceDep = Annotated[RegularizationService, Depends(get_regularization_service)]
 ScreenshotServiceDep = Annotated[ScreenshotService, Depends(get_screenshot_service)]
 PingServiceDep = Annotated[PingService, Depends(get_ping_service)]
@@ -388,9 +536,13 @@ InvitationServiceDep = Annotated[InvitationService, Depends(get_invitation_servi
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
 TargetServiceDep = Annotated[TargetService, Depends(get_target_service)]
 LeaveServiceDep = Annotated[LeaveService, Depends(get_leave_service)]
+MeetingServiceDep = Annotated[MeetingService, Depends(get_meeting_service)]
+NotificationServiceDep = Annotated[NotificationService, Depends(get_notification_service)]
 HolidayServiceDep = Annotated[HolidayService, Depends(get_holiday_service)]
 CompensationServiceDep = Annotated[CompensationService, Depends(get_compensation_service)]
+PayrollServiceDep = Annotated[PayrollService, Depends(get_payroll_service)]
 DocumentServiceDep = Annotated[DocumentService, Depends(get_document_service)]
+WorkspaceFileServiceDep = Annotated[WorkspaceFileService, Depends(get_workspace_file_service)]
 WorkSessionServiceDep = Annotated[WorkSessionService, Depends(get_work_session_service)]
 CategoryRuleServiceDep = Annotated[CategoryRuleService, Depends(get_category_rule_service)]
 DashboardServiceDep = Annotated[DashboardService, Depends(get_dashboard_service)]
@@ -505,19 +657,39 @@ def require_admin(user: CurrentUserDep) -> CurrentUser:
 AdminDep = Annotated[CurrentUser, Depends(require_admin)]
 
 
-# Per-user write throttle for chatty endpoints (e.g. leave comments) so a copied
-# request can't be replayed in a tight loop to spam. In-process; back with Redis
-# for multi-instance (see ratelimit module).
-_comment_limiter = FixedWindowRateLimiter(max_requests=15, window_seconds=60)
+# Per-user write/expensive-call throttles so a copied request can't be replayed
+# in a tight loop to spam or to exhaust storage/bandwidth. In-process; back with
+# Redis for multi-instance (see ratelimit module).
+def _make_user_rate_limit(
+    prefix: str, *, max_requests: int, message: str
+) -> Callable[[CurrentUser], CurrentUser]:
+    """Build a per-user rate-limit dependency keyed `{prefix}:{employee_id}`."""
+    limiter = FixedWindowRateLimiter(max_requests=max_requests, window_seconds=60)
+
+    def verify(user: CurrentUserDep) -> CurrentUser:
+        if not limiter.allow(f"{prefix}:{user.employee_id}"):
+            raise RateLimitError(message)
+        return user
+
+    return verify
 
 
-def verify_comment_rate_limit(user: CurrentUserDep) -> CurrentUser:
-    if not _comment_limiter.allow(f"leave-comment:{user.employee_id}"):
-        raise RateLimitError("Too many messages — please slow down.")
-    return user
-
-
+verify_comment_rate_limit = _make_user_rate_limit(
+    "comment", max_requests=15, message="Too many messages — please slow down."
+)
 CommentRateLimitDep = Annotated[CurrentUser, Depends(verify_comment_rate_limit)]
+
+# Workspace files: cap uploads (S3 cost + DB bloat) and downloads (bandwidth +
+# audit-log write amplification) per user.
+verify_upload_rate_limit = _make_user_rate_limit(
+    "workspace-upload", max_requests=20, message="Too many uploads — please slow down."
+)
+UploadRateLimitDep = Annotated[CurrentUser, Depends(verify_upload_rate_limit)]
+
+verify_download_rate_limit = _make_user_rate_limit(
+    "workspace-download", max_requests=120, message="Too many downloads — please slow down."
+)
+DownloadRateLimitDep = Annotated[CurrentUser, Depends(verify_download_rate_limit)]
 
 
 # --------------------------------------------------------------------------- #
@@ -575,8 +747,7 @@ CurrentDeviceDep = Annotated[CurrentDevice, Depends(get_current_device)]
 # --------------------------------------------------------------------------- #
 # HR webhook authentication — HMAC shared secret + optional IP allowlist.
 # --------------------------------------------------------------------------- #
-def _ip_allowed(settings: Settings, client_ip: str | None) -> bool:
-    allowlist = settings.hr_ip_allowlist
+def _ip_allowed(allowlist: list[str], client_ip: str | None) -> bool:
     if not allowlist:  # empty = allow all (dev only; warn in prod config check)
         return True
     if client_ip is None:
@@ -604,12 +775,35 @@ async def verify_hr_webhook(
 ) -> bytes:
     """Verify the HR webhook HMAC + IP allowlist; return the raw body bytes."""
     client_ip = request.client.host if request.client else None
-    if not _ip_allowed(settings, client_ip):
+    if not _ip_allowed(settings.hr_ip_allowlist, client_ip):
         raise AuthorizationError("Source not allowed.")
 
     body = await request.body()
     if not x_hr_signature or not verify_hmac_sha256(
         settings.hr_webhook_secret, body, x_hr_signature
+    ):
+        raise AuthenticationError()
+    return body
+
+
+async def verify_biometric_webhook(
+    request: Request,
+    settings: SettingsDep,
+    x_biometric_signature: Annotated[str | None, Header()] = None,
+) -> bytes:
+    """Verify the biometric connector's HMAC + IP allowlist; return raw body.
+
+    Mirrors the HR webhook: the on-prem connector signs the exact body with the
+    shared `biometric_webhook_secret`. We never trust the punches' employee ids
+    as privilege — they only resolve to an employee for attendance (rule 5.1).
+    """
+    client_ip = request.client.host if request.client else None
+    if not _ip_allowed(settings.biometric_ip_list, client_ip):
+        raise AuthorizationError("Source not allowed.")
+
+    body = await request.body()
+    if not x_biometric_signature or not verify_hmac_sha256(
+        settings.biometric_webhook_secret, body, x_biometric_signature
     ):
         raise AuthenticationError()
     return body

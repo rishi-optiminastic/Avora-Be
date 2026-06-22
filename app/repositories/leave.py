@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from datetime import datetime
 
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.employee import Employee, Role
-from app.models.leave import Leave, LeaveStatus
+from app.models.leave import Leave, LeaveStatus, LeaveType
 from app.models.leave_comment import LeaveComment
 from app.schemas.auth import CurrentUser
 from app.schemas.leave import LeaveCreate
@@ -107,6 +108,51 @@ class LeaveRepository:
             stmt.order_by(Leave.start_date.desc()).offset(offset).limit(limit)
         )
         return [(row[0], int(row[1])) for row in rows.all()], int(total or 0)
+
+    async def approved_paid_in_range(
+        self, employee_ids: Sequence[uuid.UUID], start: datetime, end: datetime
+    ) -> dict[uuid.UUID, list[tuple[datetime, datetime, LeaveType]]]:
+        """Approved, *paid* leaves overlapping [start, end) per employee.
+
+        Unpaid (LWP) leave is excluded — it does not count toward payable days.
+        Payroll (HR/Admin) is the only caller, so this is org-wide and not
+        scope-clamped; the service authorizes before calling in.
+        """
+        if not employee_ids:
+            return {}
+        rows = await self._session.execute(
+            select(Leave.employee_id, Leave.start_date, Leave.end_date, Leave.leave_type).where(
+                Leave.employee_id.in_(employee_ids),
+                Leave.status == LeaveStatus.APPROVED,
+                Leave.leave_type != LeaveType.UNPAID,
+                Leave.start_date < end,
+                Leave.end_date >= start,
+            )
+        )
+        out: dict[uuid.UUID, list[tuple[datetime, datetime, LeaveType]]] = {}
+        for emp_id, s, e, kind in rows.all():
+            out.setdefault(emp_id, []).append((s, e, kind))
+        return out
+
+    async def count_on_leave(
+        self, employee_ids: Sequence[uuid.UUID], start: datetime, end: datetime
+    ) -> int:
+        """How many of these employees have an approved leave overlapping [start, end).
+
+        Counts any leave type (paid or unpaid) — they are all "out of office" for the
+        Overview headcount. Caller scopes `employee_ids` before passing them in.
+        """
+        if not employee_ids:
+            return 0
+        total = await self._session.scalar(
+            select(func.count(func.distinct(Leave.employee_id))).where(
+                Leave.employee_id.in_(employee_ids),
+                Leave.status == LeaveStatus.APPROVED,
+                Leave.start_date < end,
+                Leave.end_date >= start,
+            )
+        )
+        return int(total or 0)
 
     async def flush(self) -> None:
         await self._session.flush()

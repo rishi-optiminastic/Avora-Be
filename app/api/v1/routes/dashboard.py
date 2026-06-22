@@ -7,10 +7,20 @@ from datetime import UTC, datetime
 from fastapi import APIRouter
 
 from app.core.deps import CurrentUserDep, DashboardServiceDep
-from app.schemas.dashboard import DepartmentStat, ProjectManpowerStat
+from app.schemas.dashboard import DepartmentStat, OverviewRead, ProjectManpowerStat
 from app.schemas.task import TaskRead
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
+
+
+@router.get("/overview", response_model=OverviewRead)
+async def overview(
+    caller: CurrentUserDep,
+    service: DashboardServiceDep,
+) -> OverviewRead:
+    """Live hero rollup for the Overview page — pulse, seat map, live-now, and the
+    present / leave / task KPIs, all scoped to the caller."""
+    return await service.overview(caller, datetime.now(UTC))
 
 
 @router.get("/delayed-tasks", response_model=list[TaskRead])

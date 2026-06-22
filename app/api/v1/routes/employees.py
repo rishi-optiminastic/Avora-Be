@@ -10,11 +10,26 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Header, Query, Request, Response, status
+from fastapi.responses import RedirectResponse
 
-from app.core.deps import AdminDep, CurrentUserDep, EmployeeServiceDep
+from app.core import storage
+from app.core.deps import (
+    AdminDep,
+    CurrentUserDep,
+    EmployeeServiceDep,
+    UploadRateLimitDep,
+)
+from app.core.exceptions import NotFoundError
+from app.core.http import read_capped_body
 from app.schemas.common import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Page
-from app.schemas.employee import EmployeeRead, EmployeeRoleUpdate, TrackingModeUpdate
+from app.schemas.employee import (
+    EmployeeRead,
+    EmployeeRoleUpdate,
+    SelfProfileUpdate,
+    TrackingModeUpdate,
+)
+from app.services.employee_service import MAX_AVATAR_BYTES
 
 router = APIRouter(prefix="/employees", tags=["employees"])
 
@@ -50,6 +65,55 @@ async def set_my_tracking_mode(
 ) -> EmployeeRead:
     """The employee pauses/resumes their own capture (work ↔ personal mode)."""
     return EmployeeRead.model_validate(await service.set_tracking_mode(caller, payload.mode))
+
+
+@router.patch("/me/profile", response_model=EmployeeRead)
+async def update_my_profile(
+    payload: SelfProfileUpdate,
+    caller: CurrentUserDep,
+    service: EmployeeServiceDep,
+) -> EmployeeRead:
+    """The employee edits their own display fields (name, job title, timezone)."""
+    return EmployeeRead.model_validate(
+        await service.update_self_profile(
+            caller,
+            full_name=payload.full_name,
+            job_title=payload.job_title,
+            timezone=payload.timezone,
+        )
+    )
+
+
+@router.post("/me/avatar", response_model=EmployeeRead, status_code=status.HTTP_201_CREATED)
+async def upload_my_avatar(
+    request: Request,
+    caller: UploadRateLimitDep,
+    service: EmployeeServiceDep,
+    content_type: Annotated[str, Header()] = "application/octet-stream",
+) -> EmployeeRead:
+    """Upload the caller's own profile photo (image bytes in the body, ≤2 MB)."""
+    data = await read_capped_body(request, MAX_AVATAR_BYTES)
+    return EmployeeRead.model_validate(await service.set_my_avatar(caller, data, content_type))
+
+
+@router.get("/{employee_id}/avatar")
+async def get_employee_avatar(
+    employee_id: uuid.UUID,
+    caller: CurrentUserDep,
+    service: EmployeeServiceDep,
+) -> Response:
+    """An employee's profile photo, for any signed-in colleague (404 if none).
+
+    Served inline (it renders in an <img>): S3-backed photos redirect to a
+    short-lived presigned URL; DB-fallback photos stream their bytes.
+    """
+    employee = await service.get_avatar(caller, employee_id)
+    media = employee.avatar_content_type or "image/jpeg"
+    if employee.avatar_object_key:
+        return RedirectResponse(storage.presigned_get_url(employee.avatar_object_key), 307)
+    if employee.avatar_content is not None:
+        return Response(content=employee.avatar_content, media_type=media)
+    raise NotFoundError()
 
 
 @router.get("/{employee_id}", response_model=EmployeeRead)

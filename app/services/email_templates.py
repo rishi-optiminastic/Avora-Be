@@ -19,8 +19,26 @@ _LINE = "#e6e2f0"
 _SERIF = "'Reckless Neue', Georgia, 'Times New Roman', serif"
 _SANS = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
 
+_INVITE_FOOTER = (
+    "You're receiving this because someone invited you to an Avora workspace. "
+    "If you weren't expecting it, you can safely ignore this email."
+)
 
-def _layout(*, preheader: str, content_html: str) -> str:
+_ACTIVITY_FOOTER = (
+    "You're receiving this because of activity in your Avora workspace. "
+    "Manage what reaches your inbox from your dashboard settings."
+)
+
+_CURRENCY_SYMBOLS = {"INR": "₹", "USD": "$", "EUR": "€", "GBP": "£"}
+
+
+def _money(minor: int, currency: str) -> str:
+    """Render integer minor units as a grouped amount, e.g. 4_620_000 → ₹46,200."""
+    symbol = _CURRENCY_SYMBOLS.get(currency.upper(), f"{currency.upper()} ")
+    return f"{symbol}{minor // 100:,}"
+
+
+def _layout(*, preheader: str, content_html: str, footer: str = _INVITE_FOOTER) -> str:
     """Wrap an email body in the shared Avora shell — no card, on paper."""
     return f"""\
 <!doctype html>
@@ -35,8 +53,7 @@ def _layout(*, preheader: str, content_html: str) -> str:
           </td></tr>
           <tr><td style="padding:24px 0 0;">{content_html}</td></tr>
           <tr><td style="padding:26px 0 0;color:{_MUTED};font-size:11.5px;line-height:1.6;">
-            You're receiving this because someone invited you to an Avora workspace.
-            If you weren't expecting it, you can safely ignore this email.
+            {footer}
           </td></tr>
         </table>
       </td></tr>
@@ -91,4 +108,140 @@ def invite_email(
     return subject, _layout(
         preheader=f"{inviter_name} invited you to {org_name} on Avora as {role_label}",
         content_html=content,
+    )
+
+
+def _digest_row(
+    name: str, net_minor: int, payable_days: float, working_days: int, currency: str
+) -> str:
+    days = f"{payable_days:g}/{working_days}"
+    return (
+        f'<tr><td style="padding:9px 0;border-top:1px solid {_LINE};font-size:13px;color:{_INK};">{name}</td>'
+        f'<td style="padding:9px 0;border-top:1px solid {_LINE};font-size:12px;color:{_MUTED};text-align:center;">{days}</td>'
+        f'<td style="padding:9px 0;border-top:1px solid {_LINE};font-size:13px;color:{_INK};text-align:right;font-variant-numeric:tabular-nums;">'
+        f"{_money(net_minor, currency)}</td></tr>"
+    )
+
+
+def payroll_digest_email(
+    *,
+    month_label: str,
+    currency: str,
+    lines: list[tuple[str, int, float, int]],
+    total_net_minor: int,
+) -> tuple[str, str]:
+    """Render the (subject, html) for the monthly HR payroll digest.
+
+    Each line is (employee_name, net_minor, payable_days, working_days).
+    """
+    subject = f"Payroll estimate — {month_label}"
+    rows = "".join(
+        _digest_row(name, net, payable, working, currency) for name, net, payable, working in lines
+    )
+    content = f"""\
+<div style="font-size:11px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:{_MUTED};">
+  Payroll · {month_label}
+</div>
+<h1 style="margin:8px 0 4px;font-family:{_SERIF};font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
+  {_money(total_net_minor, currency)}
+</h1>
+<p style="margin:0 0 20px;font-size:13px;line-height:1.6;color:{_MUTED};">
+  Total net payroll across {len(lines)} {"employee" if len(lines) == 1 else "employees"},
+  prorated by attendance.
+</p>
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+  <tr>
+    <td style="font-size:10.5px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_MUTED};">Employee</td>
+    <td style="font-size:10.5px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_MUTED};text-align:center;">Days</td>
+    <td style="font-size:10.5px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:{_MUTED};text-align:right;">Net pay</td>
+  </tr>
+  {rows}
+  <tr>
+    <td style="padding:11px 0;border-top:2px solid {_INK};font-size:13px;font-weight:600;color:{_INK};">Total</td>
+    <td style="border-top:2px solid {_INK};"></td>
+    <td style="padding:11px 0;border-top:2px solid {_INK};font-size:14px;font-weight:600;color:{_INK};text-align:right;font-variant-numeric:tabular-nums;">{_money(total_net_minor, currency)}</td>
+  </tr>
+</table>"""
+    return subject, _layout(
+        preheader=f"Payroll for {month_label}: {_money(total_net_minor, currency)} across {len(lines)}",
+        content_html=content,
+        footer="You're receiving this because you're listed as a payroll recipient in Avora.",
+    )
+
+
+def _note_block(note: str) -> str:
+    return (
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        f'style="margin:0 0 24px;"><tr><td style="background:{_VIOLET_SOFT};'
+        f'border-radius:8px;padding:13px 16px;font-size:13.5px;line-height:1.6;color:{_INK};">'
+        f"{note}</td></tr></table>"
+    )
+
+
+def leave_decision_email(
+    *,
+    employee_name: str,
+    approved: bool,
+    leave_type_label: str,
+    date_range_label: str,
+    decided_by: str,
+    note: str | None,
+    leave_url: str,
+) -> tuple[str, str]:
+    """Render the (subject, html) telling an employee their leave was decided."""
+    verb = "approved" if approved else "declined"
+    subject = f"Your leave was {verb}"
+    note_html = _note_block(note) if note else ""
+    content = f"""\
+<div style="font-size:11px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:{_MUTED};">
+  Leave · {date_range_label}
+</div>
+<h1 style="margin:8px 0 16px;font-family:{_SERIF};font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
+  Leave {verb}
+</h1>
+<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:{_INK};">
+  Hi {employee_name}, <strong>{decided_by}</strong> {verb} your {leave_type_label} leave for
+  <strong>{date_range_label}</strong>.
+</p>
+{note_html}
+<p style="margin:0 0 4px;">{_button("View leave", leave_url)}</p>"""
+    return subject, _layout(
+        preheader=f"{decided_by} {verb} your {leave_type_label} leave for {date_range_label}",
+        content_html=content,
+        footer=_ACTIVITY_FOOTER,
+    )
+
+
+def task_assigned_email(
+    *,
+    employee_name: str,
+    task_title: str,
+    assigned_by: str,
+    due_label: str | None,
+    task_url: str,
+) -> tuple[str, str]:
+    """Render the (subject, html) telling an employee a task was assigned to them."""
+    subject = f"New task: {task_title}"
+    due_html = (
+        f'<p style="margin:0 0 24px;font-size:14px;line-height:1.6;color:{_MUTED};">'
+        f"Due {_chip(due_label)}</p>"
+        if due_label
+        else ""
+    )
+    content = f"""\
+<div style="font-size:11px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:{_MUTED};">
+  Task assigned
+</div>
+<h1 style="margin:8px 0 16px;font-family:{_SERIF};font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
+  {task_title}
+</h1>
+<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:{_INK};">
+  Hi {employee_name}, <strong>{assigned_by}</strong> assigned this task to you.
+</p>
+{due_html}
+<p style="margin:0 0 4px;">{_button("Open task", task_url)}</p>"""
+    return subject, _layout(
+        preheader=f"{assigned_by} assigned you a task: {task_title}",
+        content_html=content,
+        footer=_ACTIVITY_FOOTER,
     )

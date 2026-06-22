@@ -18,13 +18,21 @@ from app.models.holiday import Holiday, HolidayType
 from app.models.invitation import Invitation, InvitationStatus
 from app.models.leave import Leave, LeaveStatus, LeaveType
 from app.models.leave_comment import LeaveComment
+from app.models.notification import Notification, NotificationKind, NotificationLevel
+from app.models.onboarding_config import OnboardingConfig
+from app.models.org_settings import OrgSettings
+from app.models.payroll_run import PayrollRun, PayrollRunSource
+from app.models.payroll_settings import PayCycle, PayrollSettings
 from app.models.ping import Ping
+from app.models.quick_meet_default import QuickMeetDefault
 from app.models.regularization import Regularization, RegularizationStatus
 from app.models.screenshot import OcrStatus, Screenshot
 from app.models.target import Target, TargetPeriod, TargetStatus
 from app.models.task import Task, TaskCadence, TaskPriority, TaskStatus
+from app.models.task_comment import TaskComment
 from app.models.work_entity import WorkEntity
 from app.models.work_session import WorkSession
+from app.models.workspace_file import WorkspaceFile, WorkspaceFileCategory
 
 __all__ = [
     "ActivitySample",
@@ -48,9 +56,19 @@ __all__ = [
     "LeaveComment",
     "LeaveStatus",
     "LeaveType",
+    "Notification",
+    "NotificationKind",
+    "NotificationLevel",
     "OcrStatus",
+    "OnboardingConfig",
+    "OrgSettings",
+    "PayCycle",
     "PayPeriod",
+    "PayrollRun",
+    "PayrollRunSource",
+    "PayrollSettings",
     "Ping",
+    "QuickMeetDefault",
     "Regularization",
     "RegularizationStatus",
     "Role",
@@ -60,9 +78,12 @@ __all__ = [
     "TargetStatus",
     "Task",
     "TaskCadence",
+    "TaskComment",
     "TaskPriority",
     "TaskStatus",
     "TrackingMode",
     "WorkEntity",
     "WorkSession",
+    "WorkspaceFile",
+    "WorkspaceFileCategory",
 ]

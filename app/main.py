@@ -6,6 +6,7 @@ The factory is the only place global app concerns are assembled.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -18,6 +19,7 @@ from app.core.deps import configure_rate_limiter
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
+from app.core.migrate import upgrade_to_head
 
 logger = get_logger("app.main")
 
@@ -25,6 +27,15 @@ logger = get_logger("app.main")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings: Settings = app.state.settings
+    if settings.should_auto_migrate:
+        # Bring the DB to head BEFORE serving so a model edit + `--reload` never
+        # races ahead of its migration. Run off-thread (Alembic spins its own
+        # loop). Non-fatal: a transient DB hiccup at boot shouldn't crash dev.
+        try:
+            await asyncio.to_thread(upgrade_to_head)
+            logger.info("migrations_at_head")
+        except Exception:
+            logger.exception("auto_migrate_failed")
     logger.info("startup", extra={"environment": settings.environment})
     yield
     logger.info("shutdown")

@@ -55,6 +55,32 @@ class EmployeeRepository:
         employee.tracking_mode = mode
         await self._session.flush()
 
+    async def update_profile(
+        self,
+        employee: Employee,
+        *,
+        full_name: str,
+        job_title: str | None,
+        timezone: str | None,
+    ) -> None:
+        employee.full_name = full_name
+        employee.job_title = job_title
+        employee.timezone = timezone
+        await self._session.flush()
+
+    async def set_avatar(
+        self,
+        employee: Employee,
+        *,
+        object_key: str | None,
+        content: bytes | None,
+        content_type: str,
+    ) -> None:
+        employee.avatar_object_key = object_key
+        employee.avatar_content = content
+        employee.avatar_content_type = content_type
+        await self._session.flush()
+
     async def create_from_invite(
         self, *, work_email: str, full_name: str, role: Role, department: str | None = None
     ) -> Employee:

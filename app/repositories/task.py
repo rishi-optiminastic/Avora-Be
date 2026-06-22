@@ -139,6 +139,18 @@ class TaskRepository:
         rows = await self._session.execute(stmt.order_by(Task.due_date.asc()))
         return rows.scalars().all()
 
+    async def count_done_total(self, caller: CurrentUser) -> tuple[int, int]:
+        """(#done, #total) tasks in the caller's scope — the Overview KPI."""
+        stmt = select(
+            func.count().filter(Task.status == TaskStatus.DONE),
+            func.count(),
+        )
+        clause = self._scope_clause(caller)
+        if clause is not None:
+            stmt = stmt.where(clause)
+        row = (await self._session.execute(stmt)).one()
+        return int(row[0] or 0), int(row[1] or 0)
+
     async def manpower_by_project(self, caller: CurrentUser) -> list[ProjectManpowerRow]:
         """Per-project headcount + open-task count, scoped to the caller."""
         stmt = select(

@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     # compute is kept warm to shave a round-trip per request.
     db_pool_pre_ping: bool = True
     db_pool_recycle_seconds: int = 280  # retire conns before Neon's idle cutoff
+    # Apply Alembic migrations to head on startup. On by default in local dev so
+    # editing a model + reload never leaves the DB behind (the recurring "column
+    # does not exist" 500). Off elsewhere to avoid multi-instance migration
+    # races; opt in with AUTO_MIGRATE=true.
+    auto_migrate: bool = False
 
     # Human auth — Better Auth (Next.js) issues short-lived asymmetric JWTs.
     # We verify them against its JWKS endpoint; we never share a symmetric secret
@@ -79,6 +84,29 @@ class Settings(BaseSettings):
     hr_webhook_secret: str = Field(default="change-me", min_length=8)
     hr_webhook_ip_allowlist: str = ""
 
+    # Biometric attendance webhook -------------------------------------------
+    # The on-prem connector (office PC) signs each punch batch with this shared
+    # secret (HMAC), exactly like the HR webhook. Separate IP allowlist since the
+    # office PC is a distinct source from the HR system.
+    biometric_webhook_secret: str = Field(default="change-me", min_length=8)
+    biometric_ip_allowlist: str = ""
+
+    # Quick Meet — one-click Google Meet + Slack share -----------------------
+    # Uses a Google Workspace service account with domain-wide delegation, so the
+    # backend creates a Calendar event (with a Meet link) on behalf of whoever
+    # clicks (no per-user OAuth) and Google emails the invite to the attendees.
+    # The feature stays off until both SA fields are set.
+    # Delegation scope required: https://www.googleapis.com/auth/calendar.events
+    google_sa_client_email: str = ""
+    google_sa_private_key: str = ""  # PEM from the service-account JSON
+    google_sa_token_uri: str = "https://oauth2.googleapis.com/token"  # noqa: S105 (URL, not a secret)
+    # Optional: always create meetings as this Workspace user (else the caller).
+    google_meet_impersonate_subject: str = ""
+    # Default invitees are per-employee (stored in the DB), not a global env list.
+    quick_meet_duration_minutes: int = 30
+    slack_webhook_url: str = ""  # Slack Incoming Webhook for the team channel
+    quick_meet_message: str = "{starter} started a quick meeting. Join now: {url}"
+
     # Transactional email (SendGrid) + invitations ---------------------------
     sendgrid_api_key: str = Field(default="change-me", min_length=8)
     email_from: str = "no-reply@signalor.ai"
@@ -97,6 +125,9 @@ class Settings(BaseSettings):
     aws_secret_access_key: str = ""
     s3_url_ttl_seconds: int = 300  # presigned GET lifetime
     s3_key_prefix: str = "screenshots"
+    # Nested under the IAM-allowed `Avora/` prefix (the avora-app user's policy
+    # grants `Avora/*`, not a bare `workspace-files/*`).
+    s3_workspace_prefix: str = "Avora/workspace-files"  # shared-drive blobs
 
     @property
     def s3_enabled(self) -> bool:
@@ -105,7 +136,7 @@ class Settings(BaseSettings):
     # CORS -------------------------------------------------------------------
     cors_origins: str = "http://localhost:3000"
 
-    @field_validator("cors_origins", "hr_webhook_ip_allowlist")
+    @field_validator("cors_origins", "hr_webhook_ip_allowlist", "biometric_ip_allowlist")
     @classmethod
     def _strip(cls, value: str) -> str:
         return value.strip()
@@ -119,8 +150,21 @@ class Settings(BaseSettings):
         return [ip.strip() for ip in self.hr_webhook_ip_allowlist.split(",") if ip.strip()]
 
     @property
+    def biometric_ip_list(self) -> list[str]:
+        return [ip.strip() for ip in self.biometric_ip_allowlist.split(",") if ip.strip()]
+
+    @property
+    def quick_meet_configured(self) -> bool:
+        return bool(self.google_sa_client_email and self.google_sa_private_key)
+
+    @property
     def is_production(self) -> bool:
         return self.environment is Environment.PRODUCTION
+
+    @property
+    def should_auto_migrate(self) -> bool:
+        """Auto-migrate in local dev, or anywhere AUTO_MIGRATE is explicitly set."""
+        return self.auto_migrate or self.environment is Environment.LOCAL
 
     def assert_production_safe(self) -> None:
         """Fail fast on insecure production config (called from the app factory)."""
@@ -135,6 +179,7 @@ class Settings(BaseSettings):
             ("JWT_SECRET", self.jwt_secret),
             ("AGENT_TOKEN_PEPPER", self.agent_token_pepper),
             ("HR_WEBHOOK_SECRET", self.hr_webhook_secret),
+            ("BIOMETRIC_WEBHOOK_SECRET", self.biometric_webhook_secret),
             ("SENDGRID_API_KEY", self.sendgrid_api_key),
             ("INVITE_TOKEN_PEPPER", self.invite_token_pepper),
         ):
