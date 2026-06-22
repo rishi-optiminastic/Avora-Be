@@ -24,7 +24,18 @@ def upgrade() -> None:
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("employee_id", sa.Uuid(), nullable=False),
         sa.Column("report_date", sa.String(length=10), nullable=False),
-        sa.Column("status", sa.String(length=32), nullable=False),
+        sa.Column(
+            "status",
+            sa.Enum(
+                "DRAFT",
+                "APPROVED",
+                "SENT",
+                "SKIPPED_ABSENT",
+                "FAILED",
+                name="eodstatus",
+            ),
+            nullable=False,
+        ),
         sa.Column("summary", sa.Text(), nullable=False, server_default=""),
         sa.Column("edited_summary", sa.Text(), nullable=True),
         sa.Column("highlights", sa.JSON(), nullable=False, server_default="{}"),
@@ -51,3 +62,4 @@ def downgrade() -> None:
     op.drop_index("ix_eod_reports_report_date", table_name="eod_reports")
     op.drop_index("ix_eod_reports_employee_id", table_name="eod_reports")
     op.drop_table("eod_reports")
+    sa.Enum(name="eodstatus").drop(op.get_bind(), checkfirst=True)
