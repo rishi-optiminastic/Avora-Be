@@ -1,0 +1,40 @@
+# Free scheduler for the End-of-Day reports.
+#
+# Render's free tier can't run an always-on Background Worker, so instead this
+# (free) GitHub Actions cron calls the API's secret-protected tick endpoint. The
+# endpoint runs generation (idempotent — safe to call repeatedly) + auto-send.
+#
+# Setup (one-time):
+#   1. On the deployed API service set EOD_CRON_SECRET (a long random string),
+#      plus EOD_ENABLED=true, OPENROUTER_API_KEY, EOD_MODEL.
+#   2. In this GitHub repo → Settings → Secrets and variables → Actions, add:
+#        EOD_API_URL     e.g. https://your-api.onrender.com
+#        EOD_CRON_SECRET the same value you set on the API.
+#
+# Note: a free Render web service sleeps when idle; the first call each run wakes
+# it (cold start), so we allow a generous timeout.
+
+name: eod-cron
+
+on:
+  schedule:
+    - cron: "*/15 * * * *" # every 15 minutes (UTC); generation only fires past EOD_REPORT_HOUR
+  workflow_dispatch: {} # allow manual runs from the Actions tab
+
+concurrency:
+  group: eod-cron
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger EOD tick
+        env:
+          EOD_API_URL: ${{ secrets.EOD_API_URL }}
+          EOD_CRON_SECRET: ${{ secrets.EOD_CRON_SECRET }}
+        run: |
+          curl -fsS --max-time 300 -X POST \
+            "$EOD_API_URL/api/v1/eod/cron" \
+            -H "X-Cron-Secret: $EOD_CRON_SECRET" \
+            -w '\nHTTP %{http_code}\n'

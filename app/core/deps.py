@@ -35,6 +35,7 @@ from app.repositories.compensation import CompensationRepository
 from app.repositories.device import DeviceRepository
 from app.repositories.document import DocumentRepository
 from app.repositories.employee import EmployeeRepository
+from app.repositories.eod_report import EodReportRepository
 from app.repositories.holiday import HolidayRepository
 from app.repositories.invitation import InvitationRepository
 from app.repositories.leave import LeaveRepository
@@ -68,10 +69,12 @@ from app.services.device_service import DeviceService
 from app.services.document_service import DocumentService
 from app.services.email_service import EmailService
 from app.services.employee_service import EmployeeService
+from app.services.eod_service import EodService
 from app.services.holiday_service import HolidayService
 from app.services.hr_service import HRService
 from app.services.invitation_service import InvitationService
 from app.services.leave_service import LeaveService
+from app.services.llm_service import LlmService
 from app.services.meeting_service import MeetingService
 from app.services.monitoring_service import MonitoringService
 from app.services.notification_service import NotificationService
@@ -308,6 +311,47 @@ def get_biometric_service(
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
 ) -> BiometricService:
     return BiometricService(employees, sessions, policy, audit)
+
+
+def get_eod_report_repo(db: DbDep) -> EodReportRepository:
+    return EodReportRepository(db)
+
+
+def get_llm_service(settings: SettingsDep) -> LlmService:
+    return LlmService(settings)
+
+
+def get_eod_service(
+    reports: Annotated[EodReportRepository, Depends(get_eod_report_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    tasks: Annotated[TaskRepository, Depends(get_task_repo)],
+    activity: Annotated[ActivityRepository, Depends(get_activity_repo)],
+    screenshots: Annotated[ScreenshotRepository, Depends(get_screenshot_repo)],
+    attendance: Annotated[AttendanceService, Depends(get_attendance_service)],
+    policy: Annotated[AttendancePolicyService, Depends(get_attendance_policy_service)],
+    llm: Annotated[LlmService, Depends(get_llm_service)],
+    email: Annotated[EmailService, Depends(get_email_service)],
+    notifications: Annotated[NotificationService, Depends(get_notification_service)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    settings: SettingsDep,
+) -> EodService:
+    return EodService(
+        reports,
+        employees,
+        tasks,
+        activity,
+        screenshots,
+        attendance,
+        policy,
+        llm,
+        email,
+        notifications,
+        audit,
+        settings,
+    )
+
+
+EodServiceDep = Annotated[EodService, Depends(get_eod_service)]
 
 
 def get_reconciliation_service(

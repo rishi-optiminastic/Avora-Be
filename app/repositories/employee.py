@@ -180,6 +180,15 @@ class EmployeeRepository:
         )
         return rows.scalars().all()
 
+    async def list_by_role(self, role: Role) -> Sequence[Employee]:
+        """All active employees with a given role (e.g. admins, for EOD recipients)."""
+        rows = await self._session.execute(
+            select(Employee)
+            .where(Employee.role == role, Employee.is_active.is_(True))
+            .order_by(Employee.full_name)
+        )
+        return rows.scalars().all()
+
     async def upsert_from_hr(
         self,
         *,
