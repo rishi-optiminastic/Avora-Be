@@ -10,6 +10,11 @@ most email clients can't load a custom web font.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.schemas.eod import EodDraftContent
+
 _VIOLET = "#5a48e0"
 _VIOLET_SOFT = "#ece9f7"
 _INK = "#1a1530"
@@ -242,6 +247,53 @@ def task_assigned_email(
 <p style="margin:0 0 4px;">{_button("Open task", task_url)}</p>"""
     return subject, _layout(
         preheader=f"{assigned_by} assigned you a task: {task_title}",
+        content_html=content,
+        footer=_ACTIVITY_FOOTER,
+    )
+
+
+def _bullets(label: str, items: list[str]) -> str:
+    if not items:
+        return ""
+    lis = "".join(
+        f'<li style="margin:0 0 4px;font-size:14px;line-height:1.5;color:{_INK};">{i}</li>'
+        for i in items
+    )
+    return (
+        f'<div style="margin:0 0 14px;"><div style="font-size:11px;font-weight:600;'
+        f"letter-spacing:0.14em;text-transform:uppercase;color:{_MUTED};margin:0 0 6px;\">"
+        f"{label}</div>"
+        f'<ul style="margin:0;padding-left:18px;">{lis}</ul></div>'
+    )
+
+
+def eod_report_email(
+    *,
+    employee_name: str,
+    date_label: str,
+    summary: str,
+    highlights: EodDraftContent,
+) -> tuple[str, str]:
+    """Render the (subject, html) End-of-Day report sent to manager + admins."""
+    subject = f"End of day · {employee_name} · {date_label}"
+    summary_html = "".join(
+        f'<p style="margin:0 0 12px;font-size:15px;line-height:1.6;color:{_INK};">{para}</p>'
+        for para in summary.split("\n\n")
+        if para.strip()
+    )
+    content = f"""\
+<div style="font-size:11px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:{_MUTED};">
+  End of day · {date_label}
+</div>
+<h1 style="margin:8px 0 16px;font-family:{_SERIF};font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
+  {employee_name}
+</h1>
+{summary_html}
+{_bullets("Worked on", highlights.worked_on)}
+{_bullets("Completed", highlights.tasks_completed)}
+{_bullets("Blockers", highlights.blockers)}"""
+    return subject, _layout(
+        preheader=f"{employee_name}'s end-of-day summary for {date_label}",
         content_html=content,
         footer=_ACTIVITY_FOOTER,
     )

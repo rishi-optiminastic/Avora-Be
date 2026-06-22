@@ -90,6 +90,26 @@ class ScreenshotRepository:
                 latest.setdefault(emp_id, text)
         return latest
 
+    async def ocr_text_for_day(
+        self, employee_id: uuid.UUID, start: datetime, end: datetime
+    ) -> list[str]:
+        """OCR'd text from one employee's screenshots in [start, end), oldest-first.
+
+        Only the extracted *text* is selected — the `image` column is never loaded,
+        so screenshot bytes never leave the DB for the EOD summary."""
+        rows = await self._session.execute(
+            select(Screenshot.ocr_text)
+            .where(
+                Screenshot.employee_id == employee_id,
+                Screenshot.received_at >= start,
+                Screenshot.received_at < end,
+                Screenshot.ocr_status == OcrStatus.DONE,
+                Screenshot.ocr_text.is_not(None),
+            )
+            .order_by(Screenshot.received_at.asc())
+        )
+        return [t for t in rows.scalars().all() if t]
+
     async def object_keys_before(self, cutoff: datetime) -> list[str]:
         """S3 keys of rows older than `cutoff` (so retention can delete the
         blobs before the rows go)."""

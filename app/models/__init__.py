@@ -14,6 +14,7 @@ from app.models.compensation import Compensation, PayPeriod
 from app.models.device import Device
 from app.models.document import DocumentCategory, EmployeeDocument
 from app.models.employee import Employee, EmployeeStatus, Role, TrackingMode
+from app.models.eod_report import EodReport, EodStatus
 from app.models.holiday import Holiday, HolidayType
 from app.models.invitation import Invitation, InvitationStatus
 from app.models.leave import Leave, LeaveStatus, LeaveType
@@ -48,6 +49,8 @@ __all__ = [
     "Employee",
     "EmployeeDocument",
     "EmployeeStatus",
+    "EodReport",
+    "EodStatus",
     "Holiday",
     "HolidayType",
     "Invitation",

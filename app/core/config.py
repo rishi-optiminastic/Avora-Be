@@ -133,6 +133,23 @@ class Settings(BaseSettings):
     def s3_enabled(self) -> bool:
         return bool(self.aws_bucket_name and self.aws_region)
 
+    # End-of-Day reports (OpenRouter LLM) ------------------------------------
+    # Off by default — when on, each present employee's day (tasks + activity +
+    # screenshot OCR *text*, never images) is summarised by an LLM via OpenRouter
+    # into a draft the employee reviews/approves before it emails their manager +
+    # admins. Image bytes never leave; we never log the prompt or the key (5.6).
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    eod_model: str = ""  # OpenRouter model id, e.g. "anthropic/claude-sonnet-4.5"
+    eod_enabled: bool = False
+    eod_report_hour: int = 18  # local hour (attendance-policy tz) to generate drafts
+    eod_ocr_char_budget: int = 12000  # cap concatenated OCR text fed to the LLM
+    eod_auto_send_after_hours: int = 16  # unreviewed drafts auto-send after this
+
+    @property
+    def eod_configured(self) -> bool:
+        return bool(self.eod_enabled and self.openrouter_api_key and self.eod_model)
+
     # CORS -------------------------------------------------------------------
     cors_origins: str = "http://localhost:3000"
 

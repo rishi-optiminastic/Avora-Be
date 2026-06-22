@@ -1,0 +1,81 @@
+# Render Blueprint — Avora background workers (Infrastructure as Code).
+#
+# Defines the two scheduler processes as Render "worker" services (no HTTP port).
+# Both reuse the API's Docker image and just override the start command, so there
+# is nothing extra to build. Secrets are NOT committed — they live in the shared
+# `avora-workers` environment group (set them once in the Render dashboard).
+#
+# Apply with: Render Dashboard → Blueprints → New Blueprint Instance → pick this
+# repo. Render reads this file from the repo root.
+#
+# NOTE on migrations: workers assume the schema is current. Run
+#   alembic upgrade head
+# from your API deploy (or a one-off Render Job) before/at release — do NOT have
+# the workers migrate (multi-instance race; see CLAUDE.md Database conventions).
+#
+# The OCR worker (worker/ocr_worker.py) is intentionally NOT here — it needs
+# Tesseract + GPU-ish CPU and runs on its own VPS (see its module docstring).
+
+services:
+  # End-of-Day report scheduler — generates drafts at EOD_REPORT_HOUR and
+  # auto-sends drafts left unreviewed past the cutoff.
+  - type: worker
+    name: avora-eod-scheduler
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: python -m worker.eod_scheduler
+    region: singapore # match the Postgres region (ap-southeast-1) for low RTT
+    plan: starter
+    autoDeploy: true
+    envVars:
+      - fromGroup: avora-workers
+
+  # Monthly payroll digest scheduler (existing) — same image, same env group.
+  - type: worker
+    name: avora-payroll-scheduler
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: python -m worker.payroll_scheduler
+    region: singapore
+    plan: starter
+    autoDeploy: true
+    envVars:
+      - fromGroup: avora-workers
+
+# Shared secrets/config for both workers. `sync: false` means "prompt me in the
+# dashboard, never store in git". Plain `value`s are safe, non-secret defaults.
+envVarGroups:
+  - name: avora-workers
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: DATABASE_URL # asyncpg URL of the (Neon/Singapore) Postgres
+        sync: false
+      # Email delivery (SendGrid) — needed to actually send the reports/digests.
+      - key: SENDGRID_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false
+      - key: EMAIL_FROM_NAME
+        value: Avora
+      # End-of-Day (OpenRouter, text only).
+      - key: EOD_ENABLED
+        value: "true"
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_BASE_URL
+        value: https://openrouter.ai/api/v1
+      - key: EOD_MODEL # OpenRouter model id, e.g. anthropic/claude-sonnet-4.5
+        sync: false
+      - key: EOD_REPORT_HOUR
+        value: "18"
+      - key: EOD_OCR_CHAR_BUDGET
+        value: "12000"
+      - key: EOD_AUTO_SEND_AFTER_HOURS
+        value: "16"
+      - key: EOD_TICK_SECONDS
+        value: "900"
+      - key: PAYROLL_TICK_SECONDS
+        value: "3600"
