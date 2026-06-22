@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from datetime import date
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +39,13 @@ class HolidayRepository:
             base.order_by(Holiday.date.asc()).offset(offset).limit(limit)
         )
         return rows.scalars().all(), int(total or 0)
+
+    async def dates_in_range(self, start: date, end: date) -> set[date]:
+        """Holiday dates within [start, end] inclusive — for the working-day count."""
+        rows = await self._session.execute(
+            select(Holiday.date).where(Holiday.date >= start, Holiday.date <= end)
+        )
+        return set(rows.scalars().all())
 
     async def flush(self) -> None:
         await self._session.flush()

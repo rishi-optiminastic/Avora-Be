@@ -21,6 +21,18 @@ class Attachment(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
 
 
+class TaskCommentCreate(BaseModel):
+    body: str = Field(min_length=1, max_length=2000)
+
+
+class TaskCommentRead(ORMModel):
+    id: uuid.UUID
+    task_id: uuid.UUID
+    author_id: uuid.UUID | None
+    body: str
+    created_at: datetime
+
+
 class TaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=256)
     assignee_id: uuid.UUID

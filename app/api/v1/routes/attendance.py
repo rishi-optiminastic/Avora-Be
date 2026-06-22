@@ -13,6 +13,7 @@ from app.core.deps import (
     AttendancePolicyServiceDep,
     AttendanceServiceDep,
     CurrentUserDep,
+    ReconciliationServiceDep,
     RegularizationServiceDep,
     WorkSessionServiceDep,
 )
@@ -20,6 +21,7 @@ from app.models.regularization import RegularizationStatus
 from app.schemas.attendance_policy import AttendancePolicyRead, AttendancePolicyUpdate
 from app.schemas.attendance_report import AttendanceDayRow, AttendanceMonthSummary
 from app.schemas.monitoring import AttendanceRead
+from app.schemas.reconciliation import ReconciliationReport
 from app.schemas.regularization import (
     RegularizationCreate,
     RegularizationRead,
@@ -78,6 +80,16 @@ async def monthly_report(
 ) -> list[AttendanceMonthSummary]:
     """Per-employee monthly attendance summary (YYYY-MM)."""
     return await service.monthly_report(caller, month)
+
+
+@router.get("/reconciliation", response_model=ReconciliationReport)
+async def reconciliation(
+    caller: CurrentUserDep,
+    service: ReconciliationServiceDep,
+    day: Annotated[date | None, Query(alias="date")] = None,
+) -> ReconciliationReport:
+    """Biometric punches vs laptop-agent activity for a day (defaults to today)."""
+    return await service.for_day(caller, day.isoformat() if day else None)
 
 
 # --------------------------------------------------------------------------- #

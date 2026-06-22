@@ -10,12 +10,18 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, Header, Query, status
 
-from app.core.deps import CurrentUserDep, TaskServiceDep
+from app.core.deps import CommentRateLimitDep, CurrentUserDep, TaskServiceDep
 from app.models.task import TaskCadence, TaskStatus
 from app.schemas.common import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Page
-from app.schemas.task import TaskCreate, TaskRead, TaskUpdate
+from app.schemas.task import (
+    TaskCommentCreate,
+    TaskCommentRead,
+    TaskCreate,
+    TaskRead,
+    TaskUpdate,
+)
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
@@ -95,3 +101,31 @@ async def delete_task(
     service: TaskServiceDep,
 ) -> None:
     await service.delete(caller, task_id)
+
+
+@router.get("/{task_id}/comments", response_model=list[TaskCommentRead])
+async def list_task_comments(
+    task_id: uuid.UUID,
+    caller: CurrentUserDep,
+    service: TaskServiceDep,
+) -> list[TaskCommentRead]:
+    """The discussion thread on a task — visible to anyone who can see the task."""
+    comments = await service.list_comments(caller, task_id)
+    return [TaskCommentRead.model_validate(c) for c in comments]
+
+
+@router.post(
+    "/{task_id}/comments", response_model=TaskCommentRead, status_code=status.HTTP_201_CREATED
+)
+async def add_task_comment(
+    task_id: uuid.UUID,
+    payload: TaskCommentCreate,
+    caller: CommentRateLimitDep,
+    service: TaskServiceDep,
+    idempotency_key: Annotated[str | None, Header(max_length=64)] = None,
+) -> TaskCommentRead:
+    """Rate-limited per user, and idempotent on the `Idempotency-Key` header so a
+    copied/replayed request returns the original comment instead of a duplicate."""
+    return TaskCommentRead.model_validate(
+        await service.add_comment(caller, task_id, payload, idempotency_key=idempotency_key)
+    )

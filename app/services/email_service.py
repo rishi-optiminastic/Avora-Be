@@ -10,7 +10,11 @@ from __future__ import annotations
 import httpx
 
 from app.core.config import Settings
-from app.services.email_templates import invite_email
+from app.services.email_templates import (
+    invite_email,
+    leave_decision_email,
+    task_assigned_email,
+)
 
 _SENDGRID_URL = "https://api.sendgrid.com/v3/mail/send"
 
@@ -62,5 +66,51 @@ class EmailService:
             org_name=org_name,
             accept_url=accept_url,
             expires_label=expires_label,
+        )
+        await self.send(to=to, subject=subject, html=html)
+
+    def _absolute(self, link_path: str) -> str:
+        """Turn a relative dashboard link into an absolute URL for the email."""
+        return f"{self._settings.app_base_url.rstrip('/')}{link_path}"
+
+    async def send_leave_decision(
+        self,
+        *,
+        to: str,
+        employee_name: str,
+        approved: bool,
+        leave_type_label: str,
+        date_range_label: str,
+        decided_by: str,
+        note: str | None,
+        link_path: str,
+    ) -> None:
+        subject, html = leave_decision_email(
+            employee_name=employee_name,
+            approved=approved,
+            leave_type_label=leave_type_label,
+            date_range_label=date_range_label,
+            decided_by=decided_by,
+            note=note,
+            leave_url=self._absolute(link_path),
+        )
+        await self.send(to=to, subject=subject, html=html)
+
+    async def send_task_assigned(
+        self,
+        *,
+        to: str,
+        employee_name: str,
+        task_title: str,
+        assigned_by: str,
+        due_label: str | None,
+        link_path: str,
+    ) -> None:
+        subject, html = task_assigned_email(
+            employee_name=employee_name,
+            task_title=task_title,
+            assigned_by=assigned_by,
+            due_label=due_label,
+            task_url=self._absolute(link_path),
         )
         await self.send(to=to, subject=subject, html=html)

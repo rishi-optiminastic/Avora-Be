@@ -5,12 +5,18 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.work_session import WorkSession
+
+
+def _aware(dt: datetime) -> datetime:
+    """Coerce a possibly-naive stored timestamp to UTC for safe comparison
+    (SQLite drops tz; Postgres keeps it)."""
+    return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
 @dataclass(frozen=True)
@@ -57,6 +63,48 @@ class WorkSessionRepository:
         await self._session.flush()
         return ws
 
+    async def upsert_biometric_day(
+        self,
+        *,
+        employee_id: uuid.UUID,
+        day_start: datetime,
+        day_end: datetime,
+        clock_in_at: datetime,
+        clock_out_at: datetime | None,
+    ) -> tuple[WorkSession, bool]:
+        """Create or merge the ONE biometric session for an employee on a local
+        day (`source="biometric"`), keeping earliest-in / latest-out. Returns
+        (session, created). Idempotent: re-pushing the same punches is a no-op."""
+        existing = await self._session.scalar(
+            select(WorkSession)
+            .where(
+                WorkSession.employee_id == employee_id,
+                WorkSession.source == "biometric",
+                WorkSession.clock_in_at >= day_start,
+                WorkSession.clock_in_at < day_end,
+            )
+            .order_by(WorkSession.clock_in_at.asc())
+            .limit(1)
+        )
+        if existing is None:
+            ws = WorkSession(
+                employee_id=employee_id,
+                clock_in_at=clock_in_at,
+                clock_out_at=clock_out_at,
+                source="biometric",
+            )
+            self._session.add(ws)
+            await self._session.flush()
+            return ws, True
+
+        if clock_in_at < _aware(existing.clock_in_at):
+            existing.clock_in_at = clock_in_at
+        existing_out = _aware(existing.clock_out_at) if existing.clock_out_at else None
+        if clock_out_at is not None and (existing_out is None or clock_out_at > existing_out):
+            existing.clock_out_at = clock_out_at
+        await self._session.flush()
+        return existing, False
+
     async def flush(self) -> None:
         await self._session.flush()
 
@@ -83,9 +131,26 @@ class WorkSessionRepository:
     ) -> dict[uuid.UUID, DaySpan]:
         """Per-employee first clock-in / last clock-out within the day. The
         clock-out is None when any session that day is still open."""
+        return await self._spans(employee_ids, start, end, source=None)
+
+    async def biometric_day_spans(
+        self, employee_ids: Sequence[uuid.UUID], start: datetime, end: datetime
+    ) -> dict[uuid.UUID, DaySpan]:
+        """First-in / last-out from BIOMETRIC sessions only (for reconciliation
+        against the agent's activity)."""
+        return await self._spans(employee_ids, start, end, source="biometric")
+
+    async def _spans(
+        self,
+        employee_ids: Sequence[uuid.UUID],
+        start: datetime,
+        end: datetime,
+        *,
+        source: str | None,
+    ) -> dict[uuid.UUID, DaySpan]:
         if not employee_ids:
             return {}
-        rows = await self._session.execute(
+        stmt = (
             select(
                 WorkSession.employee_id,
                 func.min(WorkSession.clock_in_at),
@@ -100,6 +165,9 @@ class WorkSessionRepository:
             )
             .group_by(WorkSession.employee_id)
         )
+        if source is not None:
+            stmt = stmt.where(WorkSession.source == source)
+        rows = await self._session.execute(stmt)
         spans: dict[uuid.UUID, DaySpan] = {}
         for emp_id, first_in, last_out, open_count, ip in rows.all():
             spans[emp_id] = DaySpan(first_in, None if open_count else last_out, ip)

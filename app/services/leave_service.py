@@ -12,14 +12,22 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from app.core.exceptions import AuthorizationError, ConflictError, NotFoundError
+from app.core.logging import get_logger
 from app.models.leave import Leave, LeaveStatus
 from app.models.leave_comment import LeaveComment
+from app.models.notification import NotificationKind, NotificationLevel
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.leave import LeaveRepository
 from app.repositories.leave_comment import LeaveCommentRepository
 from app.schemas.auth import CurrentUser
 from app.schemas.leave import LeaveCommentCreate, LeaveCreate, LeaveDecision
+from app.services.email_service import EmailError, EmailService
+from app.services.notification_service import NotificationService
+
+_LEAVES_LINK = "/dashboard/time/leaves"
+
+logger = get_logger("app.leave")
 
 
 class LeaveService:
@@ -29,11 +37,15 @@ class LeaveService:
         comments: LeaveCommentRepository,
         employees: EmployeeRepository,
         audit: AuditRepository,
+        notifications: NotificationService,
+        email: EmailService,
     ) -> None:
         self._leaves = leaves
         self._comments = comments
         self._employees = employees
         self._audit = audit
+        self._notifications = notifications
+        self._email = email
 
     async def list_for_caller(
         self, caller: CurrentUser, *, offset: int, limit: int, status: LeaveStatus | None = None
@@ -57,6 +69,19 @@ class LeaveService:
             action="leave.apply",
             target=f"leave:{leave.id}:{payload.leave_type.value}",
         )
+        # Tell the reviewing manager there's a request waiting on them.
+        if caller.manager_id is not None:
+            await self._notifications.notify(
+                recipient_id=caller.manager_id,
+                kind=NotificationKind.LEAVE_REQUEST,
+                title="New leave request to review",
+                body=f"{payload.leave_type.value.replace('_', ' ').title()} · "
+                f"{payload.start_date:%d %b} - {payload.end_date:%d %b}",
+                link=_LEAVES_LINK,
+                entity_type="leave",
+                entity_id=leave.id,
+                actor_id=caller.employee_id,
+            )
         return leave
 
     async def decide(
@@ -81,7 +106,46 @@ class LeaveService:
             action="leave.decide",
             target=f"leave:{leave.id}:{leave.status.value}",
         )
+        approved = leave.status is LeaveStatus.APPROVED
+        await self._notifications.notify(
+            recipient_id=leave.employee_id,
+            kind=NotificationKind.LEAVE_DECISION,
+            title=f"Leave {'approved' if approved else 'rejected'}",
+            body=payload.note,
+            level=NotificationLevel.INFO if approved else NotificationLevel.WARNING,
+            link=_LEAVES_LINK,
+            entity_type="leave",
+            entity_id=leave.id,
+            actor_id=caller.employee_id,
+        )
+        await self._email_decision(leave, caller, approved=approved, note=payload.note)
         return leave
+
+    async def _email_decision(
+        self, leave: Leave, caller: CurrentUser, *, approved: bool, note: str | None
+    ) -> None:
+        """Email the requester their decision. Best-effort: a delivery failure
+        must never roll back the decision, so we swallow and log it."""
+        recipient = await self._employees.get(leave.employee_id)
+        decider = await self._employees.get(caller.employee_id)
+        if recipient is None:
+            return
+        decided_by = decider.full_name if decider is not None else "Your manager"
+        leave_type_label = leave.leave_type.value.replace("_", " ").title()
+        date_range = f"{leave.start_date:%d %b} - {leave.end_date:%d %b}"
+        try:
+            await self._email.send_leave_decision(
+                to=recipient.work_email,
+                employee_name=recipient.full_name,
+                approved=approved,
+                leave_type_label=leave_type_label,
+                date_range_label=date_range,
+                decided_by=decided_by,
+                note=note,
+                link_path=_LEAVES_LINK,
+            )
+        except EmailError:
+            logger.warning("leave_decision_email_failed", extra={"leave_id": str(leave.id)})
 
     async def cancel(self, caller: CurrentUser, leave_id: uuid.UUID) -> Leave:
         leave = await self._leaves.get(leave_id)

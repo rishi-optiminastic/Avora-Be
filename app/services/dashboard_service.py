@@ -11,10 +11,19 @@ from datetime import UTC, datetime, time, timedelta
 from app.models.task import Task
 from app.repositories.activity import ActivityRepository
 from app.repositories.employee import EmployeeRepository
+from app.repositories.leave import LeaveRepository
 from app.repositories.task import TaskRepository
 from app.repositories.work_entity import WorkEntityRepository
 from app.schemas.auth import CurrentUser
-from app.schemas.dashboard import DepartmentStat, ProjectManpowerStat
+from app.schemas.dashboard import (
+    DepartmentStat,
+    OverviewPerson,
+    OverviewRead,
+    ProjectManpowerStat,
+)
+from app.schemas.monitoring import AttendanceStatus
+from app.services.attendance_service import AttendanceService
+from app.services.monitoring_service import MonitoringService
 
 
 class DashboardService:
@@ -24,11 +33,80 @@ class DashboardService:
         employees: EmployeeRepository,
         activity: ActivityRepository,
         entities: WorkEntityRepository,
+        leaves: LeaveRepository,
+        attendance: AttendanceService,
+        monitoring: MonitoringService,
     ) -> None:
         self._tasks = tasks
         self._employees = employees
         self._activity = activity
         self._entities = entities
+        self._leaves = leaves
+        self._attendance = attendance
+        self._monitoring = monitoring
+
+    async def overview(self, caller: CurrentUser, now: datetime) -> OverviewRead:
+        """The Overview hero in one call: live status + today's productivity per
+        person, plus present / leave / task headline counts — all caller-scoped.
+
+        Reuses the monitoring (live status) and attendance (today's productivity +
+        present/absent classification) services so the thresholds and policy logic
+        live in exactly one place.
+        """
+        employees = await self._employees.all_in_scope(caller)
+        live = {r.employee_id: r for r in await self._monitoring.live_now(caller, now)}
+        att = {r.employee_id: r for r in await self._attendance.daily(caller, now)}
+
+        people: list[OverviewPerson] = []
+        active = idle = offline = present = prod_sum = prod_n = 0
+        for e in employees:
+            lv = live.get(e.id)
+            at = att.get(e.id)
+            if lv is not None and lv.online:
+                status = "idle" if lv.idle else "active"
+            else:
+                status = "offline"
+            prod = at.productivity_pct if at is not None else 0
+            if status == "active":
+                active += 1
+                if prod > 0:
+                    prod_sum += prod
+                    prod_n += 1
+            elif status == "idle":
+                idle += 1
+            else:
+                offline += 1
+            if at is not None and at.status is not AttendanceStatus.ABSENT:
+                present += 1
+            people.append(
+                OverviewPerson(
+                    employee_id=e.id,
+                    name=e.full_name,
+                    department=e.department,
+                    job_title=e.job_title,
+                    status=status,
+                    productivity_pct=prod,
+                    active_window=lv.active_window if lv is not None else None,
+                )
+            )
+
+        ids = [e.id for e in employees]
+        start = datetime.combine(now.date(), time.min, tzinfo=UTC)
+        on_leave = await self._leaves.count_on_leave(ids, start, start + timedelta(days=1))
+        tasks_done, tasks_total = await self._tasks.count_done_total(caller)
+
+        return OverviewRead(
+            people=people,
+            total=len(employees),
+            active=active,
+            idle=idle,
+            offline=offline,
+            avg_productivity_pct=round(prod_sum / prod_n) if prod_n else 0,
+            present_today=present,
+            on_leave=on_leave,
+            tasks_done=tasks_done,
+            tasks_total=tasks_total,
+        )
 
     async def delayed_tasks(self, caller: CurrentUser, now: datetime) -> Sequence[Task]:
         return await self._tasks.list_overdue(caller, now)

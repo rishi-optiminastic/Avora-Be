@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from enum import StrEnum
 
-from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, LargeBinary, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -55,6 +55,15 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     full_name: Mapped[str] = mapped_column(String(256))
     department: Mapped[str | None] = mapped_column(String(128), default=None)
 
+    # Self-service profile fields (display/preference only — never privilege).
+    job_title: Mapped[str | None] = mapped_column(String(128), default=None)
+    timezone: Mapped[str | None] = mapped_column(String(64), default=None)
+
+    # Enrollment id on the office biometric device. The on-prem connector tags
+    # each punch with this so we can match it to an employee; set by HR sync or an
+    # admin. Nullable (not everyone is enrolled); indexed for the lookup.
+    biometric_id: Mapped[str | None] = mapped_column(String(64), default=None, index=True)
+
     # Org tree: self-referential reporting line, set from HR.
     manager_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("employees.id", ondelete="SET NULL"),
@@ -72,7 +81,18 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # only in work mode). The ingest path drops samples/screenshots when PERSONAL.
     tracking_mode: Mapped[TrackingMode] = mapped_column(default=TrackingMode.WORK)
 
+    # Profile photo — the employee sets their own. Bytes live in S3 under
+    # `avatar_object_key`; `avatar_content` is the in-DB fallback (used only when
+    # S3 is unconfigured), mirroring Screenshot/WorkspaceFile.
+    avatar_object_key: Mapped[str | None] = mapped_column(String(512), default=None)
+    avatar_content: Mapped[bytes | None] = mapped_column(LargeBinary, default=None)
+    avatar_content_type: Mapped[str | None] = mapped_column(String(64), default=None)
+
     manager: Mapped[Employee | None] = relationship(
         remote_side="Employee.id",
         backref="reports",
     )
+
+    @property
+    def has_avatar(self) -> bool:
+        return bool(self.avatar_object_key or self.avatar_content)

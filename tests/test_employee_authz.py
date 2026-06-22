@@ -142,3 +142,50 @@ async def test_me_returns_own_record_with_role(
     body = resp.json()
     assert body["id"] == str(seed.manager.id)
     assert body["role"] == "manager"
+
+
+# --- profile photo (avatar) ------------------------------------------------ #
+async def test_employee_can_set_and_fetch_own_avatar(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    up = await client.post(
+        "/api/v1/employees/me/avatar",
+        content=b"\x89PNG fake-bytes",
+        headers={**auth_headers(settings, seed.report), "Content-Type": "image/png"},
+    )
+    assert up.status_code == 201, up.text
+    assert up.json()["has_avatar"] is True
+
+    # Any signed-in colleague can fetch it (directory photo).
+    got = await client.get(
+        f"/api/v1/employees/{seed.report.id}/avatar",
+        headers=auth_headers(settings, seed.manager),
+    )
+    assert got.status_code == 200
+    assert got.content == b"\x89PNG fake-bytes"
+    assert got.headers["content-type"] == "image/png"
+
+
+async def test_avatar_rejects_non_image(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    resp = await client.post(
+        "/api/v1/employees/me/avatar",
+        content=b"%PDF-1.4",
+        headers={**auth_headers(settings, seed.report), "Content-Type": "application/pdf"},
+    )
+    assert resp.status_code == 422
+
+
+async def test_avatar_missing_returns_404(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    resp = await client.get(
+        f"/api/v1/employees/{seed.outsider.id}/avatar",
+        headers=auth_headers(settings, seed.report),
+    )
+    assert resp.status_code == 404
+
+
+async def test_avatar_requires_auth(client: AsyncClient, seed: _Seed) -> None:
+    assert (await client.get(f"/api/v1/employees/{seed.report.id}/avatar")).status_code == 401

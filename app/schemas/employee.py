@@ -22,11 +22,15 @@ class EmployeeRead(ORMModel):
     work_email: str
     full_name: str
     department: str | None
+    job_title: str | None
+    timezone: str | None
     manager_id: uuid.UUID | None
     role: Role
     status: EmployeeStatus
     is_active: bool
     tracking_mode: TrackingMode
+    biometric_id: str | None
+    has_avatar: bool
     created_at: datetime
     updated_at: datetime
 
@@ -43,6 +47,19 @@ class TrackingModeUpdate(BaseModel):
     mode: TrackingMode
 
 
+class SelfProfileUpdate(BaseModel):
+    """Fields a person may edit on their OWN profile — display/preference only.
+
+    Deliberately excludes email, role, department, and manager: email is the
+    identity key, role is admin-only (rule 5.5), and department/manager are org
+    structure that drive scope, so HR/admin own them — not self-service.
+    """
+
+    full_name: str = Field(min_length=1, max_length=256)
+    job_title: str | None = Field(default=None, max_length=128)
+    timezone: str | None = Field(default=None, max_length=64)
+
+
 class HREmployeeUpsert(BaseModel):
     """Payload the HR webhook may send.
 
@@ -57,3 +74,6 @@ class HREmployeeUpsert(BaseModel):
     manager_external_id: str | None = Field(default=None, max_length=128)
     status: EmployeeStatus
     start_date: datetime | None = None
+    # Optional biometric-device enrollment id, so HR can map a person to their
+    # attendance-device id in the same sync. Never a privilege field (rule 5.5).
+    biometric_id: str | None = Field(default=None, max_length=64)
