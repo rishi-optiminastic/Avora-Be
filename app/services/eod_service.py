@@ -194,6 +194,16 @@ class EodService:
         )
         return True
 
+    async def run_due(self, now: datetime) -> tuple[int, int]:
+        """One scheduler tick: generate drafts once we're past the report hour,
+        and always sweep overdue drafts. Returns (drafts_created, drafts_sent).
+        Shared by the worker loop and the free-tier cron endpoint."""
+        generated = 0
+        if await self.local_hour(now) >= self._settings.eod_report_hour:
+            generated = await self.generate_for_day(SYSTEM_CALLER, now)
+        sent = await self.auto_send_overdue(now)
+        return generated, sent
+
     async def auto_send_overdue(self, now: datetime) -> int:
         """Send drafts left unreviewed past the cutoff, as-is. Returns count sent."""
         cutoff = now - timedelta(hours=self._settings.eod_auto_send_after_hours)

@@ -145,6 +145,11 @@ class Settings(BaseSettings):
     eod_report_hour: int = 18  # local hour (attendance-policy tz) to generate drafts
     eod_ocr_char_budget: int = 12000  # cap concatenated OCR text fed to the LLM
     eod_auto_send_after_hours: int = 16  # unreviewed drafts auto-send after this
+    # Shared secret for the external-cron trigger (POST /eod/cron) — lets a free
+    # scheduler (GitHub Actions, cron-job.org) run the tick without a user JWT,
+    # for hosts (e.g. Render free) that can't run an always-on worker. Endpoint
+    # is disabled while unset.
+    eod_cron_secret: str = ""
 
     @property
     def eod_configured(self) -> bool:

@@ -40,7 +40,7 @@ from app.repositories.work_session import WorkSessionRepository
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.attendance_service import AttendanceService
 from app.services.email_service import EmailService
-from app.services.eod_service import SYSTEM_CALLER, EodService
+from app.services.eod_service import EodService
 from app.services.llm_service import LlmService
 from app.services.notification_service import NotificationService
 
@@ -85,14 +85,9 @@ async def _tick() -> None:
     now = datetime.now(UTC)
     async with SessionFactory() as session:
         try:
-            service = _build_service(session)
-            if await service.local_hour(now) >= settings.eod_report_hour:
-                created = await service.generate_for_day(SYSTEM_CALLER, now)
-                if created:
-                    log.info("generated %d eod draft(s)", created)
-            sent = await service.auto_send_overdue(now)
-            if sent:
-                log.info("auto-sent %d overdue eod draft(s)", sent)
+            generated, sent = await _build_service(session).run_due(now)
+            if generated or sent:
+                log.info("generated %d draft(s), auto-sent %d", generated, sent)
             await session.commit()
         except Exception:
             await session.rollback()

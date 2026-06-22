@@ -228,3 +228,11 @@ async def test_generate_requires_admin(
 ) -> None:
     resp = await client.post("/api/v1/eod/generate", headers=auth_headers(settings, seed.report))
     assert resp.status_code == 403
+
+
+async def test_cron_requires_secret(client: AsyncClient, seed: _Seed) -> None:
+    # No secret configured in test settings → the endpoint 404s either way,
+    # so it never runs unauthenticated and never leaks its existence.
+    assert (await client.post("/api/v1/eod/cron")).status_code == 404
+    wrong = await client.post("/api/v1/eod/cron", headers={"X-Cron-Secret": "nope"})
+    assert wrong.status_code == 404
