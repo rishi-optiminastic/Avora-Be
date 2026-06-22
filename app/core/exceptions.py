@@ -36,7 +36,7 @@ class NotFoundError(AppError):
 
 
 class ValidationError(AppError):
-    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
     code = "validation_error"
     message = "Invalid request."
 
@@ -105,7 +105,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         # Echo *which* fields failed, but never the submitted values (may be PII).
         fields = [".".join(str(p) for p in e["loc"][1:]) for e in exc.errors()]
         return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content={
                 "error": {
                     "code": "validation_error",
