@@ -19,6 +19,7 @@ from app.models.holiday import Holiday, HolidayType
 from app.models.invitation import Invitation, InvitationStatus
 from app.models.leave import Leave, LeaveStatus, LeaveType
 from app.models.leave_comment import LeaveComment
+from app.models.leave_policy import LeavePolicy
 from app.models.notification import Notification, NotificationKind, NotificationLevel
 from app.models.onboarding_config import OnboardingConfig
 from app.models.org_settings import OrgSettings
@@ -57,6 +58,7 @@ __all__ = [
     "InvitationStatus",
     "Leave",
     "LeaveComment",
+    "LeavePolicy",
     "LeaveStatus",
     "LeaveType",
     "Notification",

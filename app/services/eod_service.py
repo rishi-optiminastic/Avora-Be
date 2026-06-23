@@ -8,10 +8,13 @@ No FastAPI objects here (Layering §4); the screenshot signal is OCR *text* only
 
 from __future__ import annotations
 
+import asyncio
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+from app.core import storage
 from app.core.config import Settings
 from app.core.exceptions import AuthorizationError, ConflictError, NotFoundError
 from app.core.logging import get_logger
@@ -109,7 +112,9 @@ class EodService:
         report.status = EodStatus.APPROVED
         report.approved_at = datetime.now(UTC)
         report.approved_by = caller.employee_id
-        await self._send(report)
+        employee = await self._employees.get(report.employee_id)
+        recipients = await self._recipients(employee) if employee is not None else []
+        await self._send(report, employee, recipients)
         await self._audit.append(
             actor=str(caller.employee_id),
             action="eod.approve",
@@ -128,7 +133,13 @@ class EodService:
     # ---- generation (system/admin) ---------------------------------------- #
     async def generate_for_day(self, caller: CurrentUser, now: datetime) -> int:
         """Generate a draft for every present, not-yet-generated employee in scope.
-        Returns the number of drafts created. Idempotent per (employee, date)."""
+        Returns the number of drafts created. Idempotent per (employee, date).
+
+        Done in three phases so the slow part (the LLM) runs concurrently while
+        all DB access stays sequential on the one shared session:
+          1. gather each person's signals (DB),
+          2. summarise them concurrently (network — bounded fan-out),
+          3. persist the drafts (DB)."""
         if caller.role is not Role.ADMIN:
             raise AuthorizationError()
         report_date = await self._local_date(now)
@@ -138,7 +149,8 @@ class EodService:
         already = {r.employee_id for r in await self._reports.list_for_employees(ids, report_date)}
         attendance = {a.employee_id: a.status for a in await self._attendance.daily(caller, now)}
 
-        created = 0
+        # Partition: absent/unknown → record a skip; present + ungenerated → queue.
+        present: list[Employee] = []
         for employee in employees:
             if employee.id in already:
                 continue
@@ -149,32 +161,48 @@ class EodService:
                     report_date=report_date,
                     status=EodStatus.SKIPPED_ABSENT,
                 )
-                continue
-            if await self._generate_one(caller, employee, report_date, start, end):
-                created += 1
+            else:
+                present.append(employee)
+        if not present:
+            return 0
+
+        # Phase 1 — build each person's context (DB; sequential on the shared session).
+        contexts = [await self._build_context(caller, e, start, end) for e in present]
+        # Phase 2 — summarise concurrently; the LLM is network-bound, so bound the fan-out.
+        drafts = await self._summarise_all(contexts)
+        # Phase 3 — persist (DB; sequential).
+        created = 0
+        for employee, draft in zip(present, drafts, strict=True):
+            created += await self._persist_draft(employee, report_date, draft)
         return created
 
-    async def _generate_one(
-        self,
-        caller: CurrentUser,
-        employee: Employee,
-        report_date: str,
-        start: datetime,
-        end: datetime,
-    ) -> bool:
-        context = await self._build_context(caller, employee, start, end)
-        try:
-            draft = await self._llm.generate_eod(context)
-        except LlmError as exc:
-            logger.warning("eod generation failed for %s: %s", employee.id, exc)
+    async def _summarise_all(self, contexts: list[str]) -> list[EodDraftContent | None]:
+        """Run the per-employee LLM calls concurrently, capped at `eod_concurrency`
+        so we don't hammer the provider. A failed call yields None (→ FAILED row)."""
+        limit = asyncio.Semaphore(self._settings.eod_concurrency)
+
+        async def summarise(context: str) -> EodDraftContent | None:
+            async with limit:
+                try:
+                    return await self._llm.generate_eod(context)
+                except LlmError as exc:
+                    logger.warning("eod generation failed: %s", exc)
+                    return None
+
+        return await asyncio.gather(*(summarise(c) for c in contexts))
+
+    async def _persist_draft(
+        self, employee: Employee, report_date: str, draft: EodDraftContent | None
+    ) -> int:
+        if draft is None:
             await self._reports.create(
                 employee_id=employee.id,
                 report_date=report_date,
                 status=EodStatus.FAILED,
-                error=str(exc)[:512],
+                error="llm generation failed",
                 model=self._settings.eod_model,
             )
-            return False
+            return 0
         report = await self._reports.create(
             employee_id=employee.id,
             report_date=report_date,
@@ -192,40 +220,74 @@ class EodService:
             entity_type="eod_report",
             entity_id=report.id,
         )
-        return True
+        return 1
 
-    async def run_due(self, now: datetime) -> tuple[int, int]:
+    async def run_due(self, now: datetime) -> tuple[int, int, int, int]:
         """One scheduler tick: generate drafts once we're past the report hour,
-        and always sweep overdue drafts. Returns (drafts_created, drafts_sent).
+        sweep overdue drafts, and once a day prune old monitoring data. Returns
+        (drafts_created, drafts_sent, activity_rows_purged, screenshots_purged).
         Shared by the worker loop and the free-tier cron endpoint."""
+        hour = await self.local_hour(now)
         generated = 0
-        if await self.local_hour(now) >= self._settings.eod_report_hour:
+        if hour >= self._settings.eod_report_hour:
             generated = await self.generate_for_day(SYSTEM_CALLER, now)
         sent = await self.auto_send_overdue(now)
-        return generated, sent
+        purged_activity = purged_shots = 0
+        if hour == self._settings.activity_purge_hour:
+            purged_activity = await self.purge_old_activity(now)
+            purged_shots = await self.purge_old_screenshots(now)
+        return generated, sent, purged_activity, purged_shots
+
+    async def purge_old_activity(self, now: datetime) -> int:
+        """Retention: drop activity samples older than the configured window.
+        Only monitoring activity is pruned — nothing else is deleted."""
+        cutoff = now - timedelta(days=self._settings.activity_retention_days)
+        return await self._activity.purge_before(cutoff)
+
+    async def purge_old_screenshots(self, now: datetime) -> int:
+        """Retention: drop screenshots (and their S3 blobs) older than the window.
+        Mirrors ScreenshotService.purge_old — blobs go before rows so nothing
+        orphans. Only screenshots are pruned; nothing else is deleted."""
+        cutoff = now - timedelta(days=self._settings.screenshot_retention_days)
+        if self._settings.s3_enabled:
+            await storage.delete_objects(await self._screenshots.object_keys_before(cutoff))
+        return await self._screenshots.purge_before(cutoff)
 
     async def auto_send_overdue(self, now: datetime) -> int:
-        """Send drafts left unreviewed past the cutoff, as-is. Returns count sent."""
+        """Send drafts left unreviewed past the cutoff, as-is. Returns count sent.
+
+        Recipients are resolved in bulk up front (admins once, all report owners +
+        their managers in two batched lookups) — no per-report DB calls."""
         cutoff = now - timedelta(hours=self._settings.eod_auto_send_after_hours)
         overdue = await self._reports.list_overdue_drafts(cutoff)
+        if not overdue:
+            return 0
+        admins = await self._employees.list_by_role(Role.ADMIN)
+        owners = await self._employees.get_many([r.employee_id for r in overdue])
+        managers = await self._employees.get_many(
+            [e.manager_id for e in owners.values() if e.manager_id is not None]
+        )
         sent = 0
         for report in overdue:
             report.status = EodStatus.APPROVED
             report.approved_at = now
-            await self._send(report)
+            employee = owners.get(report.employee_id)
+            recipients = (
+                self._recipients_for(employee, managers.get(employee.manager_id), admins)
+                if employee is not None and employee.manager_id is not None
+                else self._recipients_for(employee, None, admins)
+                if employee is not None
+                else []
+            )
+            await self._send(report, employee, recipients)
             sent += 1
         return sent
 
     # ---- send -------------------------------------------------------------- #
-    async def _send(self, report: EodReport) -> None:
-        employee = await self._employees.get(report.employee_id)
-        if employee is None:
-            report.status = EodStatus.SENT  # employee gone — close it out
-            report.sent_at = datetime.now(UTC)
-            await self._reports.flush()
-            return
-        recipients = await self._recipients(employee)
-        if recipients:
+    async def _send(
+        self, report: EodReport, employee: Employee | None, recipients: list[str]
+    ) -> None:
+        if employee is not None and recipients:
             subject, html = eod_report_email(
                 employee_name=employee.full_name,
                 date_label=report.report_date,
@@ -234,7 +296,7 @@ class EodService:
             )
             for recipient in recipients:
                 await self._email.send(to=recipient, subject=subject, html=html)
-        report.status = EodStatus.SENT
+        report.status = EodStatus.SENT  # employee gone or no recipients → close it out
         report.sent_at = datetime.now(UTC)
         await self._reports.flush()
         await self._audit.append(
@@ -244,14 +306,26 @@ class EodService:
         )
 
     async def _recipients(self, employee: Employee) -> list[str]:
+        """Single-report path (the `approve()` endpoint) — one manager + admins."""
+        admins = await self._employees.list_by_role(Role.ADMIN)
+        manager = (
+            await self._employees.get(employee.manager_id)
+            if employee.manager_id is not None
+            else None
+        )
+        return self._recipients_for(employee, manager, admins)
+
+    @staticmethod
+    def _recipients_for(
+        employee: Employee | None, manager: Employee | None, admins: Sequence[Employee]
+    ) -> list[str]:
+        """Manager (if active) + admins, de-duped, minus the employee's own address."""
+        if employee is None:
+            return []
         emails: list[str] = []
-        if employee.manager_id is not None:
-            manager = await self._employees.get(employee.manager_id)
-            if manager is not None and manager.is_active:
-                emails.append(manager.work_email)
-        for admin in await self._employees.list_by_role(Role.ADMIN):
-            emails.append(admin.work_email)
-        # de-dup, drop the employee's own address
+        if manager is not None and manager.is_active:
+            emails.append(manager.work_email)
+        emails.extend(admin.work_email for admin in admins)
         return [e for e in dict.fromkeys(emails) if e and e != employee.work_email]
 
     # ---- context + time helpers ------------------------------------------- #

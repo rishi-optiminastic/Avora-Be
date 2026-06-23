@@ -23,9 +23,7 @@ from app.schemas.org_settings import OrgSettingsUpdate
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_LOGO_TYPES = frozenset(
-    {"image/jpeg", "image/png", "image/webp", "image/svg+xml"}
-)
+ALLOWED_LOGO_TYPES = frozenset({"image/jpeg", "image/png", "image/webp", "image/svg+xml"})
 MAX_LOGO_BYTES = 2 * 1024 * 1024  # 2 MB — matches the UI hint.
 
 

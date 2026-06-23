@@ -9,12 +9,14 @@ regularizations (Security rule 5.3 — every read scoped via `all_in_scope`).
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app.core.attendance import PolicySpec, classify_day
 from app.core.exceptions import NotFoundError, ValidationError
+from app.models.employee import Employee
 from app.repositories.activity import ActivityRepository, DailyAgg
 from app.repositories.employee import EmployeeRepository
 from app.repositories.regularization import RegularizationRepository
@@ -83,9 +85,16 @@ class AttendanceService:
             return agg.login_at, agg.logout_at, _minutes(agg.login_at, agg.logout_at), None
         return None, None, 0, None
 
-    async def daily(self, caller: CurrentUser, day: datetime) -> list[AttendanceRead]:
+    async def daily(
+        self,
+        caller: CurrentUser,
+        day: datetime,
+        employees: Sequence[Employee] | None = None,
+    ) -> list[AttendanceRead]:
         spec = await self._policy.spec()
-        employees = await self._employees.all_in_scope(caller)
+        # Callers with the scope already resolved (dashboard overview) pass it in.
+        if employees is None:
+            employees = await self._employees.all_in_scope(caller)
         ids = [e.id for e in employees]
         local_date = _aware(day).astimezone(ZoneInfo(spec.timezone)).date().isoformat()
         start, end = self._local_bounds(local_date, spec.timezone)

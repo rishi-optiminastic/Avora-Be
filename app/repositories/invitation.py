@@ -67,6 +67,11 @@ class InvitationRepository:
         await self._session.flush()
         return invitation
 
+    async def mark_revoked(self, invitation: Invitation) -> Invitation:
+        invitation.status = InvitationStatus.REVOKED
+        await self._session.flush()
+        return invitation
+
     async def list_pending(self) -> Sequence[Invitation]:
         result = await self._session.execute(
             select(Invitation)

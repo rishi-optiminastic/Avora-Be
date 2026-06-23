@@ -1,8 +1,9 @@
-"""Payroll endpoints — HR/Admin only (org-wide salary, settings, HR digest).
+"""Payroll endpoints.
 
-Authorization lives in `PayrollService`: every method requires HR/Admin, so an
-out-of-scope caller gets 403 on all of these (payroll is inherently org-wide and
-not employee-facing). Money is returned in minor units; the client formats it.
+Most are HR/Admin only (org-wide salary, settings, HR digest); authorization
+lives in `PayrollService`, so an out-of-scope caller gets 403. The one
+employee-facing endpoint is `GET /payroll/me`: a person's own slip, self-or-HR
+scoped. Money is returned in minor units; the client formats it.
 """
 
 from __future__ import annotations
@@ -15,9 +16,20 @@ from app.schemas.payroll import (
     PayrollRunRead,
     PayrollSettingsRead,
     PayrollSettingsUpdate,
+    PayslipRead,
 )
 
 router = APIRouter(prefix="/payroll", tags=["payroll"])
+
+
+@router.get("/me", response_model=PayslipRead)
+async def get_my_payslip(
+    caller: CurrentUserDep,
+    service: PayrollServiceDep,
+    month: str | None = Query(default=None, description="YYYY-MM; defaults to the current month"),
+) -> PayslipRead:
+    """The caller's own salary slip for a month (self-service 'My Pay')."""
+    return await service.my_slip(caller, None, month)
 
 
 @router.get("/settings", response_model=PayrollSettingsRead)

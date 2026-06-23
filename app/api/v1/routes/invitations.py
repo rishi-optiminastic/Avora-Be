@@ -13,7 +13,7 @@ import uuid
 
 from fastapi import APIRouter
 
-from app.core.deps import AdminDep, AuthIdentityDep, InvitationServiceDep
+from app.core.deps import AdminDep, AdminOrHrDep, AuthIdentityDep, InvitationServiceDep
 from app.schemas.employee import EmployeeRead
 from app.schemas.invitation import (
     InvitationAccept,
@@ -70,6 +70,17 @@ async def resend_invitation(
         accept_url=accept_url,
         expires_at=invitation.expires_at,
     )
+
+
+@router.post("/{invitation_id}/revoke", response_model=InvitationRead)
+async def revoke_invitation(
+    invitation_id: uuid.UUID,
+    manager: AdminOrHrDep,
+    service: InvitationServiceDep,
+) -> InvitationRead:
+    """Admin/HR: cancel a pending invitation so its link can no longer be used."""
+    invitation = await service.revoke(manager, invitation_id=invitation_id)
+    return InvitationRead.model_validate(invitation)
 
 
 @router.get("/{token}", response_model=InvitationInfo)

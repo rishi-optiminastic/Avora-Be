@@ -32,6 +32,9 @@ class ActivitySample(UUIDPrimaryKeyMixin, Base):
         # Dedup / replay key per Security rule 5.4.
         UniqueConstraint("device_id", "sequence", name="uq_activity_device_sequence"),
         Index("ix_activity_employee_received", "employee_id", "received_at"),
+        # Supports the retention purge (DELETE WHERE received_at < cutoff) — the
+        # composite above leads with employee_id and can't range-scan time alone.
+        Index("ix_activity_received_at", "received_at"),
     )
 
     device_id: Mapped[uuid.UUID] = mapped_column(

@@ -134,6 +134,31 @@ class LeaveRepository:
             out.setdefault(emp_id, []).append((s, e, kind))
         return out
 
+    async def for_employee_in_window(
+        self,
+        employee_id: uuid.UUID,
+        start: datetime,
+        end: datetime,
+        statuses: Sequence[LeaveStatus],
+    ) -> list[tuple[datetime, datetime, LeaveType, LeaveStatus]]:
+        """One employee's leaves overlapping [start, end) in the given statuses.
+
+        Used by the balance calc (APPROVED = used, SUBMITTED = pending). The
+        caller is the employee themselves or an authorised viewer — the service
+        checks visibility before calling in, so this is not scope-clamped.
+        """
+        if not statuses:
+            return []
+        rows = await self._session.execute(
+            select(Leave.start_date, Leave.end_date, Leave.leave_type, Leave.status).where(
+                Leave.employee_id == employee_id,
+                Leave.status.in_(statuses),
+                Leave.start_date < end,
+                Leave.end_date >= start,
+            )
+        )
+        return [(s, e, kind, status) for s, e, kind, status in rows.all()]
+
     async def count_on_leave(
         self, employee_ids: Sequence[uuid.UUID], start: datetime, end: datetime
     ) -> int:

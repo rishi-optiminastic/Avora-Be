@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -48,6 +48,24 @@ class LeaveRead(ORMModel):
     updated_at: datetime
     # Populated on list responses so the UI can badge the thread count.
     comment_count: int = 0
+
+
+class LeaveTypeBalance(BaseModel):
+    """The entitlement picture for one paid leave type, in working days."""
+
+    leave_type: LeaveType
+    allocated: float  # annual quota from the leave policy
+    used: float  # approved days in the current leave year
+    pending: float  # submitted-but-undecided days in the current leave year
+    remaining: float  # allocated - used - pending (may be negative if over-quota)
+
+
+class LeaveBalanceRead(BaseModel):
+    """An employee's leave balances for their current (joining-anniversary) year."""
+
+    leave_year_start: date
+    leave_year_end: date
+    balances: list[LeaveTypeBalance]
 
 
 class LeaveCommentCreate(BaseModel):

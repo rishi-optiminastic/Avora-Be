@@ -7,6 +7,7 @@ and the *service* authorizes the caller (HR/Admin or self) before calling in.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,6 +25,18 @@ class CompensationRepository:
             select(Compensation).where(Compensation.employee_id == employee_id)
         )
         return record
+
+    async def get_for_employees(
+        self, employee_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, Compensation]:
+        """Batch lookup keyed by employee_id — avoids the per-employee N+1 in the
+        org-wide payroll estimate."""
+        if not employee_ids:
+            return {}
+        rows = await self._session.execute(
+            select(Compensation).where(Compensation.employee_id.in_(employee_ids))
+        )
+        return {c.employee_id: c for c in rows.scalars().all()}
 
     async def upsert(
         self, employee_id: uuid.UUID, data: CompensationWrite, *, updated_by: uuid.UUID

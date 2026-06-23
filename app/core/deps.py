@@ -26,6 +26,7 @@ from app.core.security import (
     verify_hmac_sha256,
 )
 from app.db.session import get_session
+from app.models.employee import Role
 from app.repositories.activity import ActivityRepository
 from app.repositories.attendance_policy import AttendancePolicyRepository
 from app.repositories.attribution_correction import AttributionCorrectionRepository
@@ -40,6 +41,7 @@ from app.repositories.holiday import HolidayRepository
 from app.repositories.invitation import InvitationRepository
 from app.repositories.leave import LeaveRepository
 from app.repositories.leave_comment import LeaveCommentRepository
+from app.repositories.leave_policy import LeavePolicyRepository
 from app.repositories.notification import NotificationRepository
 from app.repositories.onboarding_config import OnboardingConfigRepository
 from app.repositories.org_settings import OrgSettingsRepository
@@ -73,6 +75,7 @@ from app.services.eod_service import EodService
 from app.services.holiday_service import HolidayService
 from app.services.hr_service import HRService
 from app.services.invitation_service import InvitationService
+from app.services.leave_policy_service import LeavePolicyService
 from app.services.leave_service import LeaveService
 from app.services.llm_service import LlmService
 from app.services.meeting_service import MeetingService
@@ -154,6 +157,10 @@ def get_target_repo(db: DbDep) -> TargetRepository:
 
 def get_leave_repo(db: DbDep) -> LeaveRepository:
     return LeaveRepository(db)
+
+
+def get_leave_policy_repo(db: DbDep) -> LeavePolicyRepository:
+    return LeavePolicyRepository(db)
 
 
 def get_notification_repo(db: DbDep) -> NotificationRepository:
@@ -389,9 +396,7 @@ def get_dashboard_service(
     attendance: Annotated[AttendanceService, Depends(get_attendance_service)],
     monitoring: Annotated[MonitoringService, Depends(get_monitoring_service)],
 ) -> DashboardService:
-    return DashboardService(
-        tasks, employees, activity, entities, leaves, attendance, monitoring
-    )
+    return DashboardService(tasks, employees, activity, entities, leaves, attendance, monitoring)
 
 
 def get_attribution_correction_service(
@@ -490,6 +495,13 @@ def get_target_service(
     return TargetService(targets, employees, audit)
 
 
+def get_leave_policy_service(
+    policies: Annotated[LeavePolicyRepository, Depends(get_leave_policy_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> LeavePolicyService:
+    return LeavePolicyService(policies, audit)
+
+
 def get_leave_service(
     leaves: Annotated[LeaveRepository, Depends(get_leave_repo)],
     comments: Annotated[LeaveCommentRepository, Depends(get_leave_comment_repo)],
@@ -497,8 +509,10 @@ def get_leave_service(
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
     notifications: Annotated[NotificationService, Depends(get_notification_service)],
     email: Annotated[EmailService, Depends(get_email_service)],
+    policy: Annotated[LeavePolicyService, Depends(get_leave_policy_service)],
+    holidays: Annotated[HolidayRepository, Depends(get_holiday_repo)],
 ) -> LeaveService:
-    return LeaveService(leaves, comments, employees, audit, notifications, email)
+    return LeaveService(leaves, comments, employees, audit, notifications, email, policy, holidays)
 
 
 def get_holiday_service(
@@ -580,6 +594,7 @@ InvitationServiceDep = Annotated[InvitationService, Depends(get_invitation_servi
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
 TargetServiceDep = Annotated[TargetService, Depends(get_target_service)]
 LeaveServiceDep = Annotated[LeaveService, Depends(get_leave_service)]
+LeavePolicyServiceDep = Annotated[LeavePolicyService, Depends(get_leave_policy_service)]
 MeetingServiceDep = Annotated[MeetingService, Depends(get_meeting_service)]
 NotificationServiceDep = Annotated[NotificationService, Depends(get_notification_service)]
 HolidayServiceDep = Annotated[HolidayService, Depends(get_holiday_service)]
@@ -699,6 +714,17 @@ def require_admin(user: CurrentUserDep) -> CurrentUser:
 
 
 AdminDep = Annotated[CurrentUser, Depends(require_admin)]
+
+
+def require_admin_or_hr(user: CurrentUserDep) -> CurrentUser:
+    """User-management actions (profile/status/tracking/invites) are admin OR HR.
+    NOTE: privilege (role) changes stay admin-only — see EmployeeService.set_role."""
+    if user.role not in (Role.ADMIN, Role.HR):
+        raise AuthorizationError()
+    return user
+
+
+AdminOrHrDep = Annotated[CurrentUser, Depends(require_admin_or_hr)]
 
 
 # Per-user write/expensive-call throttles so a copied request can't be replayed

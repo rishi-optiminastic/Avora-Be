@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import calendar
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 
 @dataclass(frozen=True)
@@ -94,3 +94,21 @@ def weekdays_in_month(year: int, month: int) -> list[date]:
         for day in range(1, last + 1)
         if (d := date(year, month, day)).weekday() < 5  # 0=Mon … 4=Fri
     ]
+
+
+def working_days_between(start: date, end: date, holidays: set[date]) -> int:
+    """Count Mon-Fri dates in [start, end] inclusive, minus the given holidays.
+
+    The working-day baseline for leave accounting (mirrors payroll's
+    weekdays-minus-holidays rule), so a Fri-Mon leave over a weekend is 2 days,
+    not 4. Returns 0 when the range is inverted.
+    """
+    if end < start:
+        return 0
+    total = 0
+    current = start
+    while current <= end:
+        if current.weekday() < 5 and current not in holidays:
+            total += 1
+        current += timedelta(days=1)
+    return total

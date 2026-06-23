@@ -6,8 +6,10 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
+from typing import Any, cast
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity import ActivitySample
@@ -177,3 +179,11 @@ class ActivityRepository:
             .order_by(ActivitySample.received_at.asc())
         )
         return rows.scalars().all()
+
+    async def purge_before(self, cutoff: datetime) -> int:
+        """Delete activity samples received before `cutoff` (retention). Returns
+        the number of rows removed. Uses `ix_activity_received_at` for the scan."""
+        result = await self._session.execute(
+            delete(ActivitySample).where(ActivitySample.received_at < cutoff)
+        )
+        return cast("CursorResult[Any]", result).rowcount or 0

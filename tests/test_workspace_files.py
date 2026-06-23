@@ -112,9 +112,7 @@ async def test_non_uploader_cannot_delete(
     assert len(listed.json()) == 1
 
 
-async def test_admin_can_delete_any(
-    client: AsyncClient, settings: Settings, seed: _Seed
-) -> None:
+async def test_admin_can_delete_any(client: AsyncClient, settings: Settings, seed: _Seed) -> None:
     created = await _upload(client, settings, seed.report)
     removed = await client.delete(
         f"/api/v1/workspace/files/{created['id']}",
@@ -123,9 +121,7 @@ async def test_admin_can_delete_any(
     assert removed.status_code == 204
 
 
-async def test_empty_file_rejected(
-    client: AsyncClient, settings: Settings, seed: _Seed
-) -> None:
+async def test_empty_file_rejected(client: AsyncClient, settings: Settings, seed: _Seed) -> None:
     resp = await client.post(
         "/api/v1/workspace/files",
         params={"name": "Empty", "category": "other"},
@@ -158,9 +154,7 @@ async def test_links_to_project_and_filters(
     db.add(project)
     await db.commit()
 
-    created = await _upload(
-        client, settings, seed.report, params={"project_id": str(project.id)}
-    )
+    created = await _upload(client, settings, seed.report, params={"project_id": str(project.id)})
     assert created["project_id"] == str(project.id)
     assert created["project_name"] == "Acme Redesign"
 
@@ -222,9 +216,7 @@ async def test_download_forces_attachment(
     assert resp.headers["content-type"] == "application/octet-stream"
 
 
-async def test_upload_is_rate_limited(
-    client: AsyncClient, settings: Settings, seed: _Seed
-) -> None:
+async def test_upload_is_rate_limited(client: AsyncClient, settings: Settings, seed: _Seed) -> None:
     # The per-user upload cap is 20/min — a tight loop is throttled with 429.
     statuses = []
     for i in range(22):

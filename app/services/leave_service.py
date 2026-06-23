@@ -9,21 +9,35 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 
 from app.core.exceptions import AuthorizationError, ConflictError, NotFoundError
 from app.core.logging import get_logger
-from app.models.leave import Leave, LeaveStatus
+from app.core.payroll import working_days_between
+from app.models.leave import Leave, LeaveStatus, LeaveType
 from app.models.leave_comment import LeaveComment
 from app.models.notification import NotificationKind, NotificationLevel
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
+from app.repositories.holiday import HolidayRepository
 from app.repositories.leave import LeaveRepository
 from app.repositories.leave_comment import LeaveCommentRepository
 from app.schemas.auth import CurrentUser
-from app.schemas.leave import LeaveCommentCreate, LeaveCreate, LeaveDecision
+from app.schemas.leave import (
+    LeaveBalanceRead,
+    LeaveCommentCreate,
+    LeaveCreate,
+    LeaveDecision,
+    LeaveTypeBalance,
+)
 from app.services.email_service import EmailError, EmailService
+from app.services.leave_policy_service import LeavePolicyService
 from app.services.notification_service import NotificationService
+
+# A half-day leave consumes half a working day; full-day types consume one.
+_HALF_DAY_WEIGHT = 0.5
+# Half-day time off draws from the planned-leave quota (it is planned time off).
+_PLANNED_TYPES = (LeaveType.PLANNED, LeaveType.HALF_DAY)
 
 _LEAVES_LINK = "/dashboard/time/leaves"
 
@@ -39,6 +53,8 @@ class LeaveService:
         audit: AuditRepository,
         notifications: NotificationService,
         email: EmailService,
+        policy: LeavePolicyService,
+        holidays: HolidayRepository,
     ) -> None:
         self._leaves = leaves
         self._comments = comments
@@ -46,6 +62,8 @@ class LeaveService:
         self._audit = audit
         self._notifications = notifications
         self._email = email
+        self._policy = policy
+        self._holidays = holidays
 
     async def list_for_caller(
         self, caller: CurrentUser, *, offset: int, limit: int, status: LeaveStatus | None = None
@@ -164,6 +182,79 @@ class LeaveService:
         )
         return leave
 
+    async def balance(
+        self, caller: CurrentUser, employee_id: uuid.UUID | None = None
+    ) -> LeaveBalanceRead:
+        """The caller's (or an authorised viewer's) leave balances for the current
+        joining-anniversary year. Days are counted as working days (weekends and
+        holidays excluded), so the picture matches how leave is actually spent."""
+        target_id = employee_id or caller.employee_id
+        if target_id != caller.employee_id and not await self._employees.can_read(
+            caller, target_id
+        ):
+            # Prefer 404 over 403 — revealing existence would leak scope (§7).
+            raise NotFoundError()
+        employee = await self._employees.get(target_id)
+        if employee is None or not employee.is_active:
+            raise NotFoundError()
+
+        anchor = employee.hire_date or employee.created_at.date()
+        year_start, year_end = _leave_year_window(anchor, datetime.now(UTC).date())
+        holidays = await self._holidays.dates_in_range(year_start, year_end)
+        start_dt = datetime(year_start.year, year_start.month, year_start.day, tzinfo=UTC)
+        end_dt = datetime(year_end.year, year_end.month, year_end.day, tzinfo=UTC) + timedelta(
+            days=1
+        )
+
+        approved = await self._leaves.for_employee_in_window(
+            target_id, start_dt, end_dt, [LeaveStatus.APPROVED]
+        )
+        pending = await self._leaves.for_employee_in_window(
+            target_id, start_dt, end_dt, [LeaveStatus.SUBMITTED]
+        )
+        policy = await self._policy.get_or_create()
+
+        def bucket(
+            rows: list[tuple[datetime, datetime, LeaveType, LeaveStatus]],
+            types: tuple[LeaveType, ...],
+        ) -> float:
+            total = 0.0
+            for s, e, kind, _status in rows:
+                if kind not in types:
+                    continue
+                ls = max(year_start, _utc_date(s))
+                le = min(year_end, _utc_date(e))
+                days = float(working_days_between(ls, le, holidays))
+                total += days * (_HALF_DAY_WEIGHT if kind is LeaveType.HALF_DAY else 1.0)
+            return total
+
+        balances: list[LeaveTypeBalance] = []
+        for leave_type, allocated, types in (
+            (LeaveType.PLANNED, float(policy.annual_planned_days), _PLANNED_TYPES),
+            (LeaveType.SICK, float(policy.annual_sick_days), (LeaveType.SICK,)),
+            (LeaveType.UNPAID, 0.0, (LeaveType.UNPAID,)),
+        ):
+            used = bucket(approved, types)
+            pend = bucket(pending, types)
+            balances.append(
+                LeaveTypeBalance(
+                    leave_type=leave_type,
+                    allocated=allocated,
+                    used=used,
+                    pending=pend,
+                    remaining=allocated - used - pend,
+                )
+            )
+
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="leave.balance.read",
+            target=f"employee:{target_id}",
+        )
+        return LeaveBalanceRead(
+            leave_year_start=year_start, leave_year_end=year_end, balances=balances
+        )
+
     async def list_comments(
         self, caller: CurrentUser, leave_id: uuid.UUID
     ) -> Sequence[LeaveComment]:
@@ -186,3 +277,33 @@ class LeaveService:
             target=f"leave:{leave_id}",
         )
         return comment
+
+
+def _utc_date(value: datetime) -> date:
+    """The UTC calendar date of a stored leave bound. Leaves are persisted at UTC
+    midnight; a naive value (e.g. from SQLite) is treated as already-UTC rather
+    than shifted by the machine's local timezone."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).date()
+
+
+def _leave_year_window(anchor: date, today: date) -> tuple[date, date]:
+    """The joining-anniversary leave year containing `today`.
+
+    Returns [start, end] inclusive, where start is the most recent anniversary of
+    `anchor` on or before `today`, and end is the day before the next one. A
+    Feb-29 anchor is clamped to Feb-28 in non-leap years.
+    """
+
+    def anniversary(year: int) -> date:
+        try:
+            return anchor.replace(year=year)
+        except ValueError:  # Feb 29 in a non-leap year
+            return anchor.replace(year=year, day=28)
+
+    start = anniversary(today.year)
+    if start > today:
+        start = anniversary(today.year - 1)
+    end = anniversary(start.year + 1) - timedelta(days=1)
+    return start, end

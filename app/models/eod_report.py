@@ -13,7 +13,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -31,13 +31,16 @@ class EodReport(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "eod_reports"
     __table_args__ = (
         UniqueConstraint("employee_id", "report_date", name="uq_eod_reports_employee_report_date"),
+        # The overdue-draft sweep filters status + created_at; a composite serves
+        # that (and status-alone queries via the leading column).
+        Index("ix_eod_reports_status_created", "status", "created_at"),
     )
 
     employee_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("employees.id", ondelete="CASCADE"), index=True
     )
     report_date: Mapped[str] = mapped_column(String(10), index=True)  # local YYYY-MM-DD
-    status: Mapped[EodStatus] = mapped_column(default=EodStatus.DRAFT, index=True)
+    status: Mapped[EodStatus] = mapped_column(default=EodStatus.DRAFT)
 
     # The generated narrative; `edited_summary` holds the employee's override.
     summary: Mapped[str] = mapped_column(Text, default="")

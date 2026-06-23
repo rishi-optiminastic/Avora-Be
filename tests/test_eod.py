@@ -15,6 +15,7 @@ from app.core.config import Settings
 from app.models.activity import ActivitySample
 from app.models.employee import Role
 from app.models.eod_report import EodReport, EodStatus
+from app.models.screenshot import Screenshot
 from app.repositories.activity import ActivityRepository
 from app.repositories.attendance_policy import AttendancePolicyRepository
 from app.repositories.audit import AuditRepository
@@ -29,6 +30,7 @@ from app.schemas.eod import EodDraftContent
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.attendance_service import AttendanceService
 from app.services.eod_service import EodService
+from app.services.llm_service import LlmError
 from app.services.notification_service import NotificationService
 from tests.conftest import _Seed, auth_headers
 
@@ -42,6 +44,13 @@ class _StubLlm:
         return EodDraftContent(
             summary="Shipped the thing.", worked_on=["Avora"], tasks_completed=["t"], confidence=80
         )
+
+
+class _FailingLlm:
+    """Always errors — exercises the concurrent gather's failure → FAILED path."""
+
+    async def generate_eod(self, context: str) -> EodDraftContent:
+        raise LlmError("provider down")
 
 
 class _CapturingEmail:
@@ -149,6 +158,79 @@ async def test_present_generates_draft(db: AsyncSession, seed: _Seed, settings: 
     assert report.status is EodStatus.DRAFT
     assert report.summary == "Shipped the thing."
     assert report.model == "test/model"
+
+
+async def test_failed_llm_marks_failed(db: AsyncSession, seed: _Seed, settings: Settings) -> None:
+    await _add_activity(db, seed)
+    service = _build_service(db, settings, llm=_FailingLlm(), email=_CapturingEmail())
+
+    created = await service.generate_for_day(_admin_caller(seed), datetime.now(UTC))
+    assert created == 0  # the LLM failed for the one present employee
+    report = (
+        await db.execute(select(EodReport).where(EodReport.employee_id == seed.report.id))
+    ).scalar_one()
+    assert report.status is EodStatus.FAILED
+
+
+async def test_purge_old_activity(db: AsyncSession, seed: _Seed, settings: Settings) -> None:
+    now = datetime.now(UTC)
+    db.add(
+        ActivitySample(
+            device_id=seed.device.id,
+            employee_id=seed.report.id,
+            sequence=50,
+            client_timestamp=now - timedelta(days=40),
+            received_at=now - timedelta(days=40),  # older than the 30-day window
+            idle_seconds=0,
+            flags=[],
+        )
+    )
+    db.add(
+        ActivitySample(
+            device_id=seed.device.id,
+            employee_id=seed.report.id,
+            sequence=51,
+            client_timestamp=now,
+            received_at=now,  # recent — must survive
+            idle_seconds=0,
+            flags=[],
+        )
+    )
+    await db.commit()
+
+    service = _build_service(db, settings, llm=_StubLlm(), email=_CapturingEmail())
+    purged = await service.purge_old_activity(now)
+    assert purged == 1
+    survivors = (await db.execute(select(ActivitySample))).scalars().all()
+    assert [s.sequence for s in survivors] == [51]
+
+
+async def test_purge_old_screenshots(db: AsyncSession, seed: _Seed, settings: Settings) -> None:
+    now = datetime.now(UTC)
+    for received_at, byte_size in ((now - timedelta(days=40), 1), (now, 2)):
+        db.add(
+            Screenshot(
+                device_id=seed.device.id,
+                employee_id=seed.report.id,
+                captured_at=received_at,
+                received_at=received_at,
+                content_type="image/jpeg",
+                width=100,
+                height=100,
+                byte_size=byte_size,  # marks which row is which
+                object_key=None,
+                image=b"x",
+                flags=[],
+            )
+        )
+    await db.commit()
+
+    # No S3 in tests, so this is a DB-only purge (blob deletion is skipped).
+    service = _build_service(db, settings, llm=_StubLlm(), email=_CapturingEmail())
+    purged = await service.purge_old_screenshots(now)
+    assert purged == 1
+    survivors = (await db.execute(select(Screenshot))).scalars().all()
+    assert [s.byte_size for s in survivors] == [2]  # only the recent one remains
 
 
 async def test_approve_emails_manager_and_admin(
