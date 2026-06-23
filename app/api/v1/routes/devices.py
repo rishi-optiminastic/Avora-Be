@@ -6,8 +6,15 @@ import uuid
 
 from fastapi import APIRouter, status
 
-from app.core.deps import CurrentUserDep, DeviceServiceDep
-from app.schemas.device import DeviceCreate, DeviceCreated, DeviceRead, DeviceSelfEnroll
+from app.core.deps import AgentNudgeServiceDep, CurrentUserDep, DeviceServiceDep
+from app.schemas.device import (
+    DeviceCreate,
+    DeviceCreated,
+    DeviceNudge,
+    DeviceNudgeResult,
+    DeviceRead,
+    DeviceSelfEnroll,
+)
 
 router = APIRouter(prefix="/devices", tags=["devices"])
 
@@ -59,3 +66,15 @@ async def revoke_device(
     service: DeviceServiceDep,
 ) -> DeviceRead:
     return DeviceRead.model_validate(await service.revoke(caller, device_id))
+
+
+@router.post("/nudge", response_model=DeviceNudgeResult)
+async def nudge_agent(
+    payload: DeviceNudge,
+    caller: CurrentUserDep,
+    service: AgentNudgeServiceDep,
+) -> DeviceNudgeResult:
+    """Nudge an employee about their agent: an on-screen ping if it's live,
+    else an in-app notification + reinstall email. Manager+ and in-scope only."""
+    channel = await service.nudge(caller, payload.employee_id, payload.message)
+    return DeviceNudgeResult(channel=channel)
