@@ -12,17 +12,25 @@ import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
+from botocore.exceptions import BotoCoreError, ClientError
+
 from app.core import storage
 from app.core.config import Settings
 from app.core.exceptions import NotFoundError, ValidationError
+from app.core.logging import get_logger
 from app.models.employee import TrackingMode
 from app.models.screenshot import Screenshot
 from app.repositories.employee import EmployeeRepository
 from app.repositories.screenshot import ScreenshotRepository
 from app.schemas.auth import CurrentDevice, CurrentUser
 
+logger = get_logger("app.screenshot")
+
 MAX_LIST = 60
-MAX_IMAGE_BYTES = 5_000_000
+# Full-screen captures (esp. multi-monitor Windows desktops) are larger than the
+# old 5 MB cap, which was silently 422-rejecting them and stalling capture. The
+# agent downscales, but keep generous headroom so a busy desktop is never dropped.
+MAX_IMAGE_BYTES = 15_000_000
 ALLOWED_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
 
 
@@ -63,12 +71,19 @@ class ScreenshotService:
 
         # Prefer S3: upload the bytes and store only the key, keeping the DB
         # small. Without S3 configured, fall back to bytes in the `image` column.
+        # If S3 is configured but the upload FAILS, also fall back to the DB so a
+        # storage hiccup (bad creds, bucket, region) never silently drops every
+        # screenshot — capture stays working while the S3 issue is fixed.
         object_key: str | None = None
         stored_image: bytes | None = image
         if self._settings.s3_enabled:
-            object_key = storage.object_key(str(device.employee_id), uuid.uuid4().hex, content_type)
-            await storage.put_object(object_key, image, content_type)
-            stored_image = None
+            key = storage.object_key(str(device.employee_id), uuid.uuid4().hex, content_type)
+            try:
+                await storage.put_object(key, image, content_type)
+                object_key = key
+                stored_image = None
+            except (ClientError, BotoCoreError):
+                logger.warning("screenshot_s3_put_failed_db_fallback", extra={"key": key})
 
         return await self._screenshots.add(
             device_id=device.device_id,
