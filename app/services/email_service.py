@@ -11,6 +11,7 @@ import httpx
 
 from app.core.config import Settings
 from app.services.email_templates import (
+    agent_reinstall_email,
     invite_email,
     leave_decision_email,
     task_assigned_email,
@@ -112,5 +113,14 @@ class EmailService:
             assigned_by=assigned_by,
             due_label=due_label,
             task_url=self._absolute(link_path),
+        )
+        await self.send(to=to, subject=subject, html=html)
+
+    async def send_agent_reinstall(
+        self, *, to: str, employee_name: str, link_path: str
+    ) -> None:
+        subject, html = agent_reinstall_email(
+            employee_name=employee_name,
+            install_url=self._absolute(link_path),
         )
         await self.send(to=to, subject=subject, html=html)

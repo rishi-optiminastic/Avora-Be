@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -48,3 +49,16 @@ class DeviceRead(ORMModel):
     last_seen_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+class DeviceNudge(BaseModel):
+    """Admin/manager nudges an employee to keep/reinstall the agent."""
+
+    employee_id: uuid.UUID
+    message: str | None = Field(default=None, max_length=280)
+
+
+class DeviceNudgeResult(BaseModel):
+    """Which channel the nudge went out on (agent on-screen vs notification+email)."""
+
+    channel: Literal["agent", "notification_email"]

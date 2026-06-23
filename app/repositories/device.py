@@ -63,6 +63,16 @@ class DeviceRepository:
         rows = await self._session.execute(stmt.order_by(Device.created_at.desc()))
         return rows.scalars().all()
 
+    async def list_for_employee(self, employee_id: uuid.UUID) -> Sequence[Device]:
+        """Every device for one employee. UNSCOPED — the caller's scope must be
+        checked (via `can_read`) by the service before calling this."""
+        rows = await self._session.execute(
+            select(Device)
+            .where(Device.employee_id == employee_id)
+            .order_by(Device.last_seen_at.desc().nullslast())
+        )
+        return rows.scalars().all()
+
     async def revoke(self, device: Device) -> Device:
         device.is_revoked = True
         await self._session.flush()

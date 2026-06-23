@@ -77,6 +77,9 @@ class _FakeEmailService:
     async def send_leave_decision(self, **kwargs: object) -> None:
         return None
 
+    async def send_agent_reinstall(self, **kwargs: object) -> None:
+        return None
+
     async def send_task_assigned(self, **kwargs: object) -> None:
         return None
 

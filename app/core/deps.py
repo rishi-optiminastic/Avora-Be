@@ -59,6 +59,7 @@ from app.repositories.work_session import WorkSessionRepository
 from app.repositories.workspace_file import WorkspaceFileRepository
 from app.schemas.auth import AuthIdentity, CurrentDevice, CurrentUser
 from app.services.activity_service import ActivityService
+from app.services.agent_nudge_service import AgentNudgeService
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.attendance_service import AttendanceService
 from app.services.attribution_correction_service import AttributionCorrectionService
@@ -475,6 +476,17 @@ def get_notification_service(
     return NotificationService(notifications)
 
 
+def get_agent_nudge_service(
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    devices: Annotated[DeviceRepository, Depends(get_device_repo)],
+    pings: Annotated[PingRepository, Depends(get_ping_repo)],
+    notifications: Annotated[NotificationService, Depends(get_notification_service)],
+    email: Annotated[EmailService, Depends(get_email_service)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> AgentNudgeService:
+    return AgentNudgeService(employees, devices, pings, notifications, email, audit)
+
+
 def get_task_service(
     tasks: Annotated[TaskRepository, Depends(get_task_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
@@ -577,6 +589,7 @@ EmployeeServiceDep = Annotated[EmployeeService, Depends(get_employee_service)]
 HRServiceDep = Annotated[HRService, Depends(get_hr_service)]
 ActivityServiceDep = Annotated[ActivityService, Depends(get_activity_service)]
 DeviceServiceDep = Annotated[DeviceService, Depends(get_device_service)]
+AgentNudgeServiceDep = Annotated[AgentNudgeService, Depends(get_agent_nudge_service)]
 MonitoringServiceDep = Annotated[MonitoringService, Depends(get_monitoring_service)]
 AttendancePolicyServiceDep = Annotated[
     AttendancePolicyService, Depends(get_attendance_policy_service)

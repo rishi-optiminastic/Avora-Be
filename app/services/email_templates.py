@@ -252,6 +252,29 @@ def task_assigned_email(
     )
 
 
+def agent_reinstall_email(*, employee_name: str, install_url: str) -> tuple[str, str]:
+    """Render the (subject, html) asking an employee to reinstall the desktop
+    agent — sent when their agent has stopped reporting."""
+    subject = "Reinstall the Avora agent"
+    content = f"""\
+<div style="font-size:11px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:{_MUTED};">
+  Action needed
+</div>
+<h1 style="margin:8px 0 16px;font-family:{_SERIF};font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
+  Reinstall the Avora agent
+</h1>
+<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:{_INK};">
+  Hi {employee_name}, your Avora agent isn't reporting right now — it may have been
+  closed, uninstalled, or disabled. Please reinstall it so your activity keeps syncing.
+</p>
+<p style="margin:0 0 4px;">{_button("Reinstall the agent", install_url)}</p>"""
+    return subject, _layout(
+        preheader="Your Avora agent stopped reporting — please reinstall it.",
+        content_html=content,
+        footer=_ACTIVITY_FOOTER,
+    )
+
+
 def _bullets(label: str, items: list[str]) -> str:
     if not items:
         return ""
