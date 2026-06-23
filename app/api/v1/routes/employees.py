@@ -16,6 +16,7 @@ from fastapi.responses import RedirectResponse
 from app.core import storage
 from app.core.deps import (
     AdminDep,
+    AdminOrHrDep,
     CurrentUserDep,
     EmployeeServiceDep,
     UploadRateLimitDep,
@@ -24,8 +25,10 @@ from app.core.exceptions import NotFoundError
 from app.core.http import read_capped_body
 from app.schemas.common import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Page
 from app.schemas.employee import (
+    AdminProfileUpdate,
     EmployeeRead,
     EmployeeRoleUpdate,
+    EmployeeStatusUpdate,
     SelfProfileUpdate,
     TrackingModeUpdate,
 )
@@ -136,3 +139,62 @@ async def set_employee_role(
     """Admin-only privilege change — the sole path that sets a role (rule 5.5)."""
     employee = await service.set_role(admin, employee_id, payload.role)
     return EmployeeRead.model_validate(employee)
+
+
+@router.patch("/{employee_id}", response_model=EmployeeRead)
+async def admin_update_employee(
+    employee_id: uuid.UUID,
+    payload: AdminProfileUpdate,
+    manager: AdminOrHrDep,
+    service: EmployeeServiceDep,
+) -> EmployeeRead:
+    """Admin/HR edit of another employee's profile (name, department, title,
+    manager, timezone, hire date, biometric id). Only the fields present in the
+    body are written (PATCH). Role is NOT settable here — use the role endpoint;
+    email/hr_external_id are identity keys and never editable."""
+    employee = await service.admin_update_profile(manager, employee_id, payload)
+    return EmployeeRead.model_validate(employee)
+
+
+@router.patch("/{employee_id}/status", response_model=EmployeeRead)
+async def set_employee_status(
+    employee_id: uuid.UUID,
+    payload: EmployeeStatusUpdate,
+    manager: AdminOrHrDep,
+    service: EmployeeServiceDep,
+) -> EmployeeRead:
+    """Admin/HR activate or deactivate (soft-delete / offboard) an employee."""
+    employee = await service.set_active(manager, employee_id, payload.is_active)
+    return EmployeeRead.model_validate(employee)
+
+
+@router.patch("/{employee_id}/tracking-mode", response_model=EmployeeRead)
+async def set_employee_tracking_mode(
+    employee_id: uuid.UUID,
+    payload: TrackingModeUpdate,
+    manager: AdminOrHrDep,
+    service: EmployeeServiceDep,
+) -> EmployeeRead:
+    """Admin/HR set another employee's capture mode (work/personal)."""
+    employee = await service.set_tracking_mode_for(manager, employee_id, payload.mode)
+    return EmployeeRead.model_validate(employee)
+
+
+@router.post(
+    "/{employee_id}/avatar",
+    response_model=EmployeeRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def admin_upload_employee_avatar(
+    employee_id: uuid.UUID,
+    request: Request,
+    manager: UploadRateLimitDep,
+    service: EmployeeServiceDep,
+    content_type: Annotated[str, Header()] = "application/octet-stream",
+) -> EmployeeRead:
+    """Admin/HR upload another employee's profile photo (image bytes in body, ≤2 MB).
+    The service re-checks admin/HR authorization; the rate-limit dep caps abuse."""
+    data = await read_capped_body(request, MAX_AVATAR_BYTES)
+    return EmployeeRead.model_validate(
+        await service.set_avatar_for(manager, employee_id, data, content_type)
+    )

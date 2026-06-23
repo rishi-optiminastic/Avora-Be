@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from datetime import date
 
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -66,6 +67,33 @@ class EmployeeRepository:
         employee.full_name = full_name
         employee.job_title = job_title
         employee.timezone = timezone
+        await self._session.flush()
+
+    # The only profile attributes an admin/HR PATCH may set (role/email/identity
+    # keys are deliberately excluded — see AdminProfileUpdate). The whitelist
+    # guards setattr against ever touching anything outside this set.
+    _ADMIN_PROFILE_FIELDS = frozenset(
+        {
+            "full_name",
+            "department",
+            "job_title",
+            "manager_id",
+            "timezone",
+            "hire_date",
+            "biometric_id",
+        }
+    )
+
+    async def admin_update_profile(self, employee: Employee, fields: dict[str, object]) -> None:
+        """Apply ONLY the supplied profile fields (PATCH semantics — keys the client
+        omitted are left untouched, so a single-field edit can't blank the rest)."""
+        for key, value in fields.items():
+            if key in self._ADMIN_PROFILE_FIELDS:
+                setattr(employee, key, value)
+        await self._session.flush()
+
+    async def set_active(self, employee: Employee, is_active: bool) -> None:
+        employee.is_active = is_active
         await self._session.flush()
 
     async def set_avatar(
@@ -189,6 +217,13 @@ class EmployeeRepository:
         )
         return rows.scalars().all()
 
+    async def get_many(self, ids: Sequence[uuid.UUID]) -> dict[uuid.UUID, Employee]:
+        """Batch lookup keyed by id — avoids per-row `get()` in loops."""
+        if not ids:
+            return {}
+        rows = await self._session.execute(select(Employee).where(Employee.id.in_(ids)))
+        return {e.id: e for e in rows.scalars().all()}
+
     async def upsert_from_hr(
         self,
         *,
@@ -199,6 +234,7 @@ class EmployeeRepository:
         manager_id: uuid.UUID | None,
         status: EmployeeStatus,
         biometric_id: str | None = None,
+        hire_date: date | None = None,
     ) -> Employee:
         """Create or update from HR. Never touches `role` (rule 5.5)."""
         employee = await self.get_by_external_id(hr_external_id)
@@ -219,6 +255,10 @@ class EmployeeRepository:
         # value an admin set manually otherwise).
         if biometric_id is not None:
             employee.biometric_id = biometric_id
+        # Same conservative rule for the joining date: only set it when HR sends
+        # one, so a manually-corrected hire date is not wiped by a later sync.
+        if hire_date is not None:
+            employee.hire_date = hire_date
         await self._session.flush()
         return employee
 

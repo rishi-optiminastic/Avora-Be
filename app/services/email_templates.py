@@ -261,7 +261,7 @@ def _bullets(label: str, items: list[str]) -> str:
     )
     return (
         f'<div style="margin:0 0 14px;"><div style="font-size:11px;font-weight:600;'
-        f"letter-spacing:0.14em;text-transform:uppercase;color:{_MUTED};margin:0 0 6px;\">"
+        f'letter-spacing:0.14em;text-transform:uppercase;color:{_MUTED};margin:0 0 6px;">'
         f"{label}</div>"
         f'<ul style="margin:0;padding-left:18px;">{lis}</ul></div>'
     )

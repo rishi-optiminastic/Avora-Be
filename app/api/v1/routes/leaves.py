@@ -7,18 +7,52 @@ from typing import Annotated
 
 from fastapi import APIRouter, Query, status
 
-from app.core.deps import CommentRateLimitDep, CurrentUserDep, LeaveServiceDep
+from app.core.deps import (
+    CommentRateLimitDep,
+    CurrentUserDep,
+    LeavePolicyServiceDep,
+    LeaveServiceDep,
+)
 from app.models.leave import LeaveStatus
 from app.schemas.common import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Page
 from app.schemas.leave import (
+    LeaveBalanceRead,
     LeaveCommentCreate,
     LeaveCommentRead,
     LeaveCreate,
     LeaveDecision,
     LeaveRead,
 )
+from app.schemas.leave_policy import LeavePolicyRead, LeavePolicyUpdate
 
 router = APIRouter(prefix="/leaves", tags=["leaves"])
+
+
+@router.get("/balance", response_model=LeaveBalanceRead)
+async def get_leave_balance(
+    caller: CurrentUserDep,
+    service: LeaveServiceDep,
+    employee_id: Annotated[uuid.UUID | None, Query()] = None,
+) -> LeaveBalanceRead:
+    """Leave balances for the caller's current joining-anniversary year. Pass
+    `employee_id` to read a report's balance (only if they're in your scope)."""
+    return await service.balance(caller, employee_id)
+
+
+@router.get("/policy", response_model=LeavePolicyRead)
+async def get_leave_policy(
+    caller: CurrentUserDep, service: LeavePolicyServiceDep
+) -> LeavePolicyRead:
+    """The org leave entitlement — readable by everyone (you should see your quota)."""
+    return LeavePolicyRead.from_model(await service.get_or_create())
+
+
+@router.put("/policy", response_model=LeavePolicyRead)
+async def update_leave_policy(
+    payload: LeavePolicyUpdate, caller: CurrentUserDep, service: LeavePolicyServiceDep
+) -> LeavePolicyRead:
+    """Update the org leave entitlement (HR/Admin only; enforced in the service)."""
+    return LeavePolicyRead.from_model(await service.update(caller, payload))
 
 
 @router.get("", response_model=Page[LeaveRead])

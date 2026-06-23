@@ -145,6 +145,14 @@ class Settings(BaseSettings):
     eod_report_hour: int = 18  # local hour (attendance-policy tz) to generate drafts
     eod_ocr_char_budget: int = 12000  # cap concatenated OCR text fed to the LLM
     eod_auto_send_after_hours: int = 16  # unreviewed drafts auto-send after this
+    eod_concurrency: int = 5  # max simultaneous LLM calls when generating drafts
+
+    # Monitoring retention: prune `activity_samples` and `screenshots` (with their
+    # S3 blobs) older than this many days — nothing else is deleted. Both run once
+    # a day at `activity_purge_hour` (local).
+    activity_retention_days: int = 30
+    screenshot_retention_days: int = 30
+    activity_purge_hour: int = 3
     # Shared secret for the external-cron trigger (POST /eod/cron) — lets a free
     # scheduler (GitHub Actions, cron-job.org) run the tick without a user JWT,
     # for hosts (e.g. Render free) that can't run an always-on worker. Endpoint

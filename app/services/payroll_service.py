@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
-from app.core.exceptions import AuthorizationError, ValidationError
+from app.core.exceptions import AuthorizationError, NotFoundError, ValidationError
 from app.core.payroll import (
     CalcConfig,
     compute_breakdown,
@@ -24,8 +24,8 @@ from app.core.payroll import (
     prorate_net,
     weekdays_in_month,
 )
-from app.models.compensation import PayPeriod
-from app.models.employee import Role
+from app.models.compensation import Compensation, PayPeriod
+from app.models.employee import Employee, Role
 from app.models.leave import LeaveType
 from app.models.payroll_run import PayrollRun, PayrollRunSource
 from app.models.payroll_settings import PayrollSettings
@@ -44,6 +44,7 @@ from app.schemas.payroll import (
     PayrollRunRead,
     PayrollSettingsRead,
     PayrollSettingsUpdate,
+    PayslipRead,
     SalaryBreakdownRead,
     parse_recipients,
 )
@@ -174,40 +175,24 @@ class PayrollService:
             r.employee_id: r for r in await self._attendance.monthly_report(caller, period)
         }
         paid_leaves = await self._leave_days_by_employee(ids, cal)
+        comps = await self._compensation.get_for_employees(ids)  # one query, not N
 
         lines: list[PayrollLineRead] = []
         total_net = 0
         total_ctc = 0
         for e in employees:
-            comp = await self._compensation.get_for_employee(e.id)
-            mctc = (
-                monthly_ctc_minor(comp.amount_minor, is_annual=comp.period is PayPeriod.ANNUAL)
-                if comp is not None
-                else 0
+            line = await self._line_for(
+                e,
+                comp=comps.get(e.id),
+                cfg=cfg,
+                currency=s.currency,
+                cal=cal,
+                present=_present_days(summaries.get(e.id)),
+                paid=paid_leaves.get(e.id, 0.0),
             )
-            breakdown = compute_breakdown(mctc, cfg)
-            present = _present_days(summaries.get(e.id))
-            paid = paid_leaves.get(e.id, 0.0)
-            payable = min(float(cal.working_days), present + paid)
-            net = prorate_net(breakdown.net_minor, payable, cal.working_days)
-            total_net += net
-            total_ctc += mctc
-            lines.append(
-                PayrollLineRead(
-                    employee_id=e.id,
-                    name=e.full_name,
-                    department=e.department,
-                    currency=s.currency,
-                    monthly_ctc_minor=mctc,
-                    breakdown=SalaryBreakdownRead(**breakdown.__dict__),
-                    working_days=cal.working_days,
-                    present_days=present,
-                    paid_leave_days=paid,
-                    payable_days=payable,
-                    net_minor=net,
-                    missing_compensation=comp is None,
-                )
-            )
+            total_net += line.net_minor
+            total_ctc += line.monthly_ctc_minor
+            lines.append(line)
 
         return PayrollEstimateRead(
             month=period,
@@ -217,6 +202,102 @@ class PayrollService:
             total_ctc_minor=total_ctc,
             total_net_minor=total_net,
             lines=lines,
+        )
+
+    async def _line_for(
+        self,
+        employee: Employee,
+        *,
+        comp: Compensation | None,
+        cfg: CalcConfig,
+        currency: str,
+        cal: _MonthCalendar,
+        present: float,
+        paid: float,
+    ) -> PayrollLineRead:
+        """One employee's slip for the month: CTC → breakdown → attendance proration.
+
+        The single source of truth for a payroll line, shared by the org-wide
+        `estimate()` and the self-service `my_slip()` so the two never drift. The
+        caller passes the (pre-fetched) compensation so `estimate()` can batch it.
+        """
+        mctc = (
+            monthly_ctc_minor(comp.amount_minor, is_annual=comp.period is PayPeriod.ANNUAL)
+            if comp is not None
+            else 0
+        )
+        breakdown = compute_breakdown(mctc, cfg)
+        payable = min(float(cal.working_days), present + paid)
+        net = prorate_net(breakdown.net_minor, payable, cal.working_days)
+        return PayrollLineRead(
+            employee_id=employee.id,
+            name=employee.full_name,
+            department=employee.department,
+            currency=currency,
+            monthly_ctc_minor=mctc,
+            breakdown=SalaryBreakdownRead(**breakdown.__dict__),
+            working_days=cal.working_days,
+            present_days=present,
+            paid_leave_days=paid,
+            payable_days=payable,
+            net_minor=net,
+            missing_compensation=comp is None,
+        )
+
+    async def my_slip(
+        self, caller: CurrentUser, employee_id: uuid.UUID | None, month: str | None
+    ) -> PayslipRead:
+        """One person's own slip. Self-or-HR scoped (mirrors compensation): an
+        employee may read their own; HR/Admin may read anyone's. A manager
+        reading a report's slip is NOT permitted here (pay is need-to-know)."""
+        target_id = employee_id or caller.employee_id
+        if not _can_manage(caller) and caller.employee_id != target_id:
+            raise AuthorizationError()
+        employee = await self._employees.get(target_id)
+        if employee is None or not employee.is_active:
+            raise NotFoundError()
+
+        s = await self.get_settings_model()
+        spec = await self._policy.spec()
+        period = month or self.current_month(spec.timezone)
+        cal = await self._month_calendar(period, spec.timezone)
+        cfg = CalcConfig(
+            basic_pct=s.basic_pct,
+            hra_pct=s.hra_pct,
+            pf_pct=s.pf_pct,
+            pf_cap_minor=s.pf_cap_minor,
+            professional_tax_minor=s.professional_tax_minor,
+        )
+        # Self-scoped reads: monthly_report/leave lookups for just this employee.
+        summaries = {
+            r.employee_id: r for r in await self._attendance.monthly_report(caller, period)
+        }
+        paid_leaves = await self._leave_days_by_employee([target_id], cal)
+        line = await self._line_for(
+            employee,
+            comp=await self._compensation.get_for_employee(target_id),
+            cfg=cfg,
+            currency=s.currency,
+            cal=cal,
+            present=_present_days(summaries.get(target_id)),
+            paid=paid_leaves.get(target_id, 0.0),
+        )
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="payroll.slip.read",
+            target=f"employee:{target_id}:{period}",
+        )
+        return PayslipRead(
+            month=period,
+            currency=line.currency,
+            monthly_ctc_minor=line.monthly_ctc_minor,
+            breakdown=line.breakdown,
+            working_days=line.working_days,
+            present_days=line.present_days,
+            paid_leave_days=line.paid_leave_days,
+            payable_days=line.payable_days,
+            net_minor=line.net_minor,
+            missing_compensation=line.missing_compensation,
         )
 
     # ---- send -------------------------------------------------------------- #

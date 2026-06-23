@@ -106,6 +106,23 @@ class InvitationService:
             raise AuthorizationError()
         return await self._invitations.list_pending()
 
+    async def revoke(self, caller: CurrentUser, *, invitation_id: uuid.UUID) -> Invitation:
+        """Admin/HR: cancel a pending invitation so its link can no longer be used."""
+        if caller.role not in (Role.ADMIN, Role.HR):
+            raise AuthorizationError()
+        invitation = await self._invitations.get(invitation_id)
+        if invitation is None:
+            raise NotFoundError()
+        if invitation.status is not InvitationStatus.PENDING:
+            raise ConflictError("Only a pending invitation can be revoked.")
+        await self._invitations.mark_revoked(invitation)
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="invitation.revoke",
+            target=f"invite:{invitation.id}",
+        )
+        return invitation
+
     async def _deliver(self, invitation: Invitation, raw_token: str) -> str:
         """Build the accept URL and email it. Raises on send failure so the
         surrounding request transaction rolls back — we never keep an invite

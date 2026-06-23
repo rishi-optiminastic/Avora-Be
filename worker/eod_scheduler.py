@@ -85,9 +85,18 @@ async def _tick() -> None:
     now = datetime.now(UTC)
     async with SessionFactory() as session:
         try:
-            generated, sent = await _build_service(session).run_due(now)
-            if generated or sent:
-                log.info("generated %d draft(s), auto-sent %d", generated, sent)
+            generated, sent, purged_activity, purged_shots = await _build_service(
+                session
+            ).run_due(now)
+            if generated or sent or purged_activity or purged_shots:
+                log.info(
+                    "generated %d draft(s), auto-sent %d, purged %d activity row(s), "
+                    "%d screenshot(s)",
+                    generated,
+                    sent,
+                    purged_activity,
+                    purged_shots,
+                )
             await session.commit()
         except Exception:
             await session.rollback()

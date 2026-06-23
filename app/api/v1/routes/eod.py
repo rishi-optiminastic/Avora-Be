@@ -25,6 +25,8 @@ router = APIRouter(prefix="/eod", tags=["eod"])
 class EodTickResult(BaseModel):
     generated: int
     sent: int
+    purged_activity: int
+    purged_screenshots: int
 
 
 @router.get("/me/today", response_model=EodReportRead | None)
@@ -89,6 +91,11 @@ async def cron_tick(
     if not expected or not x_cron_secret or not secrets.compare_digest(x_cron_secret, expected):
         raise NotFoundError()
     if not settings.eod_configured:
-        return EodTickResult(generated=0, sent=0)
-    generated, sent = await service.run_due(datetime.now(UTC))
-    return EodTickResult(generated=generated, sent=sent)
+        return EodTickResult(generated=0, sent=0, purged_activity=0, purged_screenshots=0)
+    generated, sent, purged_activity, purged_shots = await service.run_due(datetime.now(UTC))
+    return EodTickResult(
+        generated=generated,
+        sent=sent,
+        purged_activity=purged_activity,
+        purged_screenshots=purged_shots,
+    )

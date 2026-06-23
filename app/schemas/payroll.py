@@ -132,6 +132,25 @@ class PayrollEstimateRead(BaseModel):
     lines: list[PayrollLineRead]
 
 
+class PayslipRead(BaseModel):
+    """One person's own monthly slip (the self-service 'My Pay' view).
+
+    Same numbers as a single `PayrollLineRead`, surfaced on its own so an
+    employee never sees anyone else's line. Money is in minor units.
+    """
+
+    month: str  # YYYY-MM
+    currency: str
+    monthly_ctc_minor: int
+    breakdown: SalaryBreakdownRead
+    working_days: int
+    present_days: float
+    paid_leave_days: float
+    payable_days: float
+    net_minor: int  # the prorated take-home for the month
+    missing_compensation: bool
+
+
 class PayrollRunRead(ORMModel):
     period_month: str
     currency: str

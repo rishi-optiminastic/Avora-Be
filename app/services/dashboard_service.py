@@ -53,9 +53,13 @@ class DashboardService:
         present/absent classification) services so the thresholds and policy logic
         live in exactly one place.
         """
+        # Resolve the scope once and hand it to both composed services so they
+        # don't each re-query the same employee set (was 3x the lookup).
         employees = await self._employees.all_in_scope(caller)
-        live = {r.employee_id: r for r in await self._monitoring.live_now(caller, now)}
-        att = {r.employee_id: r for r in await self._attendance.daily(caller, now)}
+        live_rows = await self._monitoring.live_now(caller, now, employees)
+        att_rows = await self._attendance.daily(caller, now, employees)
+        live = {r.employee_id: r for r in live_rows}
+        att = {r.employee_id: r for r in att_rows}
 
         people: list[OverviewPerson] = []
         active = idle = offline = present = prod_sum = prod_n = 0

@@ -49,7 +49,7 @@ class Leave(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     # Who decided (manager/HR/admin) — nullable until decided, SET NULL on offboard.
     reviewer_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("employees.id", ondelete="SET NULL"), default=None
+        ForeignKey("employees.id", ondelete="SET NULL"), default=None, index=True
     )
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     decision_note: Mapped[str | None] = mapped_column(String(1000), default=None)

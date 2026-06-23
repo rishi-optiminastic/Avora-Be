@@ -34,6 +34,7 @@ class HRService:
             manager_id=manager_id,
             status=payload.status,
             biometric_id=payload.biometric_id,
+            hire_date=payload.start_date.date() if payload.start_date else None,
         )
 
         action = "hr.offboard" if payload.status is EmployeeStatus.INACTIVE else "hr.sync"

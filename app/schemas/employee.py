@@ -8,7 +8,7 @@ here, but privilege-changing fields are absent from HR-sourced inputs.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -30,6 +30,7 @@ class EmployeeRead(ORMModel):
     is_active: bool
     tracking_mode: TrackingMode
     biometric_id: str | None
+    hire_date: date | None
     has_avatar: bool
     created_at: datetime
     updated_at: datetime
@@ -58,6 +59,31 @@ class SelfProfileUpdate(BaseModel):
     full_name: str = Field(min_length=1, max_length=256)
     job_title: str | None = Field(default=None, max_length=128)
     timezone: str | None = Field(default=None, max_length=64)
+
+
+class AdminProfileUpdate(BaseModel):
+    """Admin/HR editing another employee's profile incl. org + HR-operational fields.
+
+    Email + role + hr_external_id are still excluded: email and hr_external_id are
+    identity / HR-sync keys, and role is the admin-only privilege path (rule 5.5).
+    NOTE: department/manager/hire_date may be overwritten by the next HR sync, which
+    is the system of record for org structure. `hire_date` moves the leave-year
+    anniversary; `biometric_id` is the office-device punch-matching key.
+    """
+
+    full_name: str = Field(min_length=1, max_length=256)
+    department: str | None = Field(default=None, max_length=128)
+    job_title: str | None = Field(default=None, max_length=128)
+    manager_id: uuid.UUID | None = None
+    timezone: str | None = Field(default=None, max_length=64)
+    hire_date: date | None = None
+    biometric_id: str | None = Field(default=None, max_length=64)
+
+
+class EmployeeStatusUpdate(BaseModel):
+    """Admin/HR activating or deactivating (soft-delete / offboard) an employee."""
+
+    is_active: bool
 
 
 class HREmployeeUpsert(BaseModel):

@@ -8,9 +8,10 @@ webhook is forbidden from touching it (Security rule 5.5).
 from __future__ import annotations
 
 import uuid
+from datetime import date
 from enum import StrEnum
 
-from sqlalchemy import Boolean, ForeignKey, LargeBinary, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, ForeignKey, LargeBinary, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -63,6 +64,12 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # each punch with this so we can match it to an employee; set by HR sync or an
     # admin. Nullable (not everyone is enrolled); indexed for the lookup.
     biometric_id: Mapped[str | None] = mapped_column(String(64), default=None, index=True)
+
+    # Joining date, sourced from HR (`start_date` on the sync payload). Drives the
+    # per-employee leave year (quotas reset on the joining anniversary). Nullable
+    # for older records / invite-provisioned people; the leave-balance logic falls
+    # back to `created_at` when this is unset.
+    hire_date: Mapped[date | None] = mapped_column(Date, default=None)
 
     # Org tree: self-referential reporting line, set from HR.
     manager_id: Mapped[uuid.UUID | None] = mapped_column(

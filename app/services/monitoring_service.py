@@ -14,6 +14,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from app.core.categories import CategoryResolver, ProductivityCategory
 from app.core.exceptions import NotFoundError
 from app.models.activity import ActivitySample
+from app.models.employee import Employee
 from app.repositories.activity import ActivityRepository
 from app.repositories.category_rule import CategoryRuleRepository
 from app.repositories.employee import EmployeeRepository
@@ -50,8 +51,16 @@ class MonitoringService:
         start = datetime.combine(day.date(), time.min, tzinfo=UTC)
         return start, start + timedelta(days=1)
 
-    async def live_now(self, caller: CurrentUser, now: datetime) -> list[ActivityNowRead]:
-        employees = await self._employees.all_in_scope(caller)
+    async def live_now(
+        self,
+        caller: CurrentUser,
+        now: datetime,
+        employees: Sequence[Employee] | None = None,
+    ) -> list[ActivityNowRead]:
+        # Callers that already resolved the scope (e.g. the dashboard overview)
+        # pass `employees` so we don't re-query the same set.
+        if employees is None:
+            employees = await self._employees.all_in_scope(caller)
         ids = [e.id for e in employees]
         since = now - timedelta(minutes=ONLINE_WINDOW_MINUTES)
         latest = await self._activity.latest_since(ids, since)

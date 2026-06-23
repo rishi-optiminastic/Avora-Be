@@ -24,7 +24,6 @@ from app.schemas.auth import CurrentDevice, CurrentUser
 MAX_LIST = 60
 MAX_IMAGE_BYTES = 5_000_000
 ALLOWED_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
-RETENTION_DAYS = 14
 
 
 class ScreenshotService:
@@ -96,7 +95,7 @@ class ScreenshotService:
         return shot
 
     async def purge_old(self) -> int:
-        cutoff = datetime.now(UTC) - timedelta(days=RETENTION_DAYS)
+        cutoff = datetime.now(UTC) - timedelta(days=self._settings.screenshot_retention_days)
         # Delete the S3 blobs first so purged rows never orphan their objects.
         if self._settings.s3_enabled:
             await storage.delete_objects(await self._screenshots.object_keys_before(cutoff))

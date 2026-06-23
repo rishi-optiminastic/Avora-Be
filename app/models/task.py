@@ -83,5 +83,5 @@ class Task(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ForeignKey("tasks.id", ondelete="SET NULL"), default=None, index=True
     )
     depends_on_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("tasks.id", ondelete="SET NULL"), default=None
+        ForeignKey("tasks.id", ondelete="SET NULL"), default=None, index=True
     )
