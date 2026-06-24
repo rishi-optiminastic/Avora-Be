@@ -109,13 +109,19 @@ class WorkSessionRepository:
         await self._session.flush()
 
     async def sessions_in_range(
-        self, employee_ids: Sequence[uuid.UUID], start: datetime, end: datetime
+        self,
+        employee_ids: Sequence[uuid.UUID],
+        start: datetime,
+        end: datetime,
+        *,
+        source: str | None = None,
     ) -> list[tuple[uuid.UUID, datetime, datetime | None]]:
         """Raw (employee_id, clock_in_at, clock_out_at) over a window, for the
-        range/monthly report to group by local day in Python."""
+        range/monthly report to group by local day in Python. Pass `source` to
+        restrict to one origin (e.g. "biometric")."""
         if not employee_ids:
             return []
-        rows = await self._session.execute(
+        stmt = (
             select(WorkSession.employee_id, WorkSession.clock_in_at, WorkSession.clock_out_at)
             .where(
                 WorkSession.employee_id.in_(employee_ids),
@@ -124,6 +130,9 @@ class WorkSessionRepository:
             )
             .order_by(WorkSession.clock_in_at.asc())
         )
+        if source is not None:
+            stmt = stmt.where(WorkSession.source == source)
+        rows = await self._session.execute(stmt)
         return [(r[0], r[1], r[2]) for r in rows.all()]
 
     async def day_spans(

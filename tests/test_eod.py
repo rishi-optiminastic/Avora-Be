@@ -99,9 +99,15 @@ def _build_service(
 
 
 class _NoSessions:
-    """Stub WorkSessionRepository — no biometric spans in these tests."""
+    """Stub WorkSessionRepository — no work sessions of any kind in these tests
+    (attendance falls back to activity)."""
 
     async def day_spans(
+        self, employee_ids: object, start: object, end: object
+    ) -> dict[uuid.UUID, object]:
+        return {}
+
+    async def biometric_day_spans(
         self, employee_ids: object, start: object, end: object
     ) -> dict[uuid.UUID, object]:
         return {}
