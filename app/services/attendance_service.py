@@ -1,9 +1,11 @@
 """Attendance reads — policy-aware, scoped to the caller.
 
-The live single-day board prefers explicit clock-in/out (work sessions) and
-falls back to activity-derived times. The date-range and monthly report are the
-formal record, driven by clock-in/out and the org policy + approved
-regularizations (Security rule 5.3 — every read scoped via `all_in_scope`).
+Attendance times (clock-in / clock-out / worked) come from the BIOMETRIC punch
+when one exists; on days with no punch they fall back to a manual clock-in or the
+laptop agent's activity so active staff aren't marked absent. The agent-vs-punch
+gap itself is surfaced solely on the Reconciliation page. The date-range and
+monthly report are the formal record — biometric-preferred per day — plus the org
+policy + approved regularizations (Security rule 5.3 — scoped via `all_in_scope`).
 """
 
 from __future__ import annotations
@@ -72,11 +74,16 @@ class AttendanceService:
     def _local_day(dt: datetime, tz: str) -> str:
         return _aware(dt).astimezone(ZoneInfo(tz)).date().isoformat()
 
-    # ---- single live day (session-first, activity fallback) ---------------- #
+    # ---- single live day (biometric-preferred, then manual/agent) ---------- #
     @staticmethod
     def _resolve(
-        span: DaySpan | None, agg: DailyAgg | None, now: datetime
+        bio: DaySpan | None, other: DaySpan | None, agg: DailyAgg | None, now: datetime
     ) -> tuple[datetime | None, datetime | None, int, str | None]:
+        # The biometric punch is the source of truth for attendance times. With no
+        # punch (WFH / not enrolled / forgot), fall back to a manual clock-in, then
+        # to the agent's activity, so active people aren't marked absent. The
+        # agent-vs-punch gap itself is shown only on the Reconciliation page.
+        span = bio or other
         if span is not None:
             logout = span.logout_at
             worked = _minutes(span.login_at, logout or now)
@@ -99,6 +106,9 @@ class AttendanceService:
         local_date = _aware(day).astimezone(ZoneInfo(spec.timezone)).date().isoformat()
         start, end = self._local_bounds(local_date, spec.timezone)
         aggs = await self._activity.daily_aggregates(ids, start, end)
+        # Biometric punch drives attendance times; manual/agent sessions and
+        # activity are only the fallback when there's no punch that day.
+        bio = await self._sessions.biometric_day_spans(ids, start, end)
         spans = await self._sessions.day_spans(ids, start, end)
         approved = await self._regs.approved_days(ids, local_date, local_date)
         now = datetime.now(UTC)
@@ -106,7 +116,9 @@ class AttendanceService:
 
         rows: list[AttendanceRead] = []
         for e in employees:
-            login, logout, worked, ip = self._resolve(spans.get(e.id), aggs.get(e.id), now)
+            login, logout, worked, ip = self._resolve(
+                bio.get(e.id), spans.get(e.id), aggs.get(e.id), now
+            )
             regd = local_date in approved.get(e.id, set())
             v = classify_day(login_at=login, worked_minutes=worked, regularized=regd, policy=spec)
             agg = aggs.get(e.id)
@@ -140,13 +152,16 @@ class AttendanceService:
         ids = [e.id for e in employees]
         start, _ = self._local_bounds(start_date, spec.timezone)
         _, end = self._local_bounds(end_date, spec.timezone)
-        raw = await self._sessions.sessions_in_range(ids, start, end)
+        bio_raw = await self._sessions.sessions_in_range(ids, start, end, source="biometric")
+        all_raw = await self._sessions.sessions_in_range(ids, start, end)
         approved = await self._regs.approved_days(ids, start_date, end_date)
         now = datetime.now(UTC)
 
         # Group sessions by (employee, local day): earliest in, latest out, worked.
         grouped: dict[tuple[uuid.UUID, str], _DayAcc] = {}
-        for emp_id, cin, cout in raw:
+        bio_days: set[tuple[uuid.UUID, str]] = set()
+
+        def _accumulate(emp_id: uuid.UUID, cin: datetime, cout: datetime | None) -> None:
             day = self._local_day(cin, spec.timezone)
             acc = grouped.get((emp_id, day))
             if acc is None:
@@ -158,6 +173,16 @@ class AttendanceService:
             elif acc.logout is None or cout > acc.logout:
                 acc.logout = cout
             acc.worked += _minutes(cin, cout or now)
+
+        # Biometric punches drive each day; remember which (employee, day) they cover.
+        for emp_id, cin, cout in bio_raw:
+            bio_days.add((emp_id, self._local_day(cin, spec.timezone)))
+            _accumulate(emp_id, cin, cout)
+        # Fall back to manual/agent sessions only on days with no punch.
+        for emp_id, cin, cout in all_raw:
+            if (emp_id, self._local_day(cin, spec.timezone)) in bio_days:
+                continue
+            _accumulate(emp_id, cin, cout)
 
         rows: list[AttendanceDayRow] = []
         for (emp_id, day), acc in grouped.items():
