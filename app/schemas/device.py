@@ -62,3 +62,9 @@ class DeviceNudgeResult(BaseModel):
     """Which channel the nudge went out on (agent on-screen vs notification+email)."""
 
     channel: Literal["agent", "notification_email"]
+
+
+class FleetUpdateResult(BaseModel):
+    """How many agents were signalled to self-update on demand."""
+
+    updated: int
