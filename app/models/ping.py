@@ -22,6 +22,7 @@ class PingKind(StrEnum):
     CAPTURE = "capture"  # take a screenshot now (no notification)
     MODE_WORK = "mode_work"  # resume capture (employee switched to work mode)
     MODE_PERSONAL = "mode_personal"  # pause capture (employee switched to personal)
+    UPDATE = "update"  # self-update to the latest agent release now (on-demand)
 
 
 class Ping(UUIDPrimaryKeyMixin, Base):

@@ -14,6 +14,7 @@ from app.schemas.device import (
     DeviceNudgeResult,
     DeviceRead,
     DeviceSelfEnroll,
+    FleetUpdateResult,
 )
 
 router = APIRouter(prefix="/devices", tags=["devices"])
@@ -78,3 +79,13 @@ async def nudge_agent(
     else an in-app notification + reinstall email. Manager+ and in-scope only."""
     channel = await service.nudge(caller, payload.employee_id, payload.message)
     return DeviceNudgeResult(channel=channel)
+
+
+@router.post("/update-all", response_model=FleetUpdateResult)
+async def update_all_agents(
+    caller: CurrentUserDep,
+    service: AgentNudgeServiceDep,
+) -> FleetUpdateResult:
+    """Admin / IT-admin: tell every enrolled agent to self-update to the latest
+    release now (instead of waiting for its periodic check)."""
+    return FleetUpdateResult(updated=await service.broadcast_update(caller))

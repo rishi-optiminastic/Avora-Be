@@ -18,6 +18,7 @@ from typing import Literal
 
 from app.core.exceptions import AuthorizationError, NotFoundError
 from app.core.logging import get_logger
+from app.models.employee import Role
 from app.models.notification import NotificationKind, NotificationLevel
 from app.models.ping import PingKind
 from app.repositories.audit import AuditRepository
@@ -104,6 +105,28 @@ class AgentNudgeService:
             target=f"employee:{employee_id}:{channel}",
         )
         return channel
+
+    async def broadcast_update(self, caller: CurrentUser) -> int:
+        """Tell every enrolled agent to self-update now — a fleet-wide 'update'
+        command each agent acts on at its next poll (~15s). Device-fleet op, so
+        admin / IT-admin only (rule 5.3). Returns how many agents were signalled."""
+        if caller.role not in (Role.ADMIN, Role.IT_ADMIN):
+            raise AuthorizationError()
+        devices = await self._devices.list_for_scope(caller)  # admin/IT scope = all
+        employee_ids = {d.employee_id for d in devices if not d.is_revoked}
+        for employee_id in employee_ids:
+            await self._pings.create(
+                target_employee_id=employee_id,
+                issued_by_id=caller.employee_id,
+                message=None,
+                kind=PingKind.UPDATE,
+            )
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="agent.update_broadcast",
+            target=f"devices:{len(employee_ids)}",
+        )
+        return len(employee_ids)
 
     async def _is_online(self, employee_id: uuid.UUID) -> bool:
         now = datetime.now(UTC)
