@@ -71,10 +71,14 @@ class WorkSessionRepository:
         day_end: datetime,
         clock_in_at: datetime,
         clock_out_at: datetime | None,
+        last_at: datetime,
     ) -> tuple[WorkSession, bool]:
         """Create or merge the ONE biometric session for an employee on a local
-        day (`source="biometric"`), keeping earliest-in / latest-out. Returns
-        (session, created). Idempotent: re-pushing the same punches is a no-op."""
+        day (`source="biometric"`). Keeps the earliest clock-in. `clock_out_at` is
+        the computed clock-out (None ⇒ the latest punch is an "in", day still open).
+        `last_at` is the latest punch time, used to RE-OPEN a previously-closed day
+        when a newer in-punch arrives (lunch return, or correcting a stale close).
+        Returns (session, created). Re-pushing the same punches is idempotent."""
         existing = await self._session.scalar(
             select(WorkSession)
             .where(
@@ -100,8 +104,14 @@ class WorkSessionRepository:
         if clock_in_at < _aware(existing.clock_in_at):
             existing.clock_in_at = clock_in_at
         existing_out = _aware(existing.clock_out_at) if existing.clock_out_at else None
-        if clock_out_at is not None and (existing_out is None or clock_out_at > existing_out):
-            existing.clock_out_at = clock_out_at
+        if clock_out_at is not None:
+            # An out-punch — extend (or set) the clock-out to the latest one.
+            if existing_out is None or clock_out_at > existing_out:
+                existing.clock_out_at = clock_out_at
+        elif existing_out is not None and _aware(last_at) >= existing_out:
+            # Latest punch is an "in" at/after the recorded out → person is back in
+            # (or the prior close was stale): re-open so the timer resumes.
+            existing.clock_out_at = None
         await self._session.flush()
         return existing, False
 

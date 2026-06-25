@@ -36,6 +36,7 @@ from app.repositories.compensation import CompensationRepository
 from app.repositories.device import DeviceRepository
 from app.repositories.document import DocumentRepository
 from app.repositories.employee import EmployeeRepository
+from app.repositories.envsync import EnvSyncRepository
 from app.repositories.eod_report import EodReportRepository
 from app.repositories.holiday import HolidayRepository
 from app.repositories.invitation import InvitationRepository
@@ -57,7 +58,7 @@ from app.repositories.task_comment import TaskCommentRepository
 from app.repositories.work_entity import WorkEntityRepository
 from app.repositories.work_session import WorkSessionRepository
 from app.repositories.workspace_file import WorkspaceFileRepository
-from app.schemas.auth import AuthIdentity, CurrentDevice, CurrentUser
+from app.schemas.auth import AuthIdentity, CurrentDevice, CurrentUser, EnvPrincipal
 from app.services.activity_service import ActivityService
 from app.services.agent_nudge_service import AgentNudgeService
 from app.services.attendance_policy_service import AttendancePolicyService
@@ -72,6 +73,7 @@ from app.services.device_service import DeviceService
 from app.services.document_service import DocumentService
 from app.services.email_service import EmailService
 from app.services.employee_service import EmployeeService
+from app.services.envsync_service import EnvSyncService
 from app.services.eod_service import EodService
 from app.services.holiday_service import HolidayService
 from app.services.hr_service import HRService
@@ -222,6 +224,10 @@ def get_document_repo(db: DbDep) -> DocumentRepository:
 
 def get_workspace_file_repo(db: DbDep) -> WorkspaceFileRepository:
     return WorkspaceFileRepository(db)
+
+
+def get_envsync_repo(db: DbDep) -> EnvSyncRepository:
+    return EnvSyncRepository(db)
 
 
 # --------------------------------------------------------------------------- #
@@ -507,6 +513,18 @@ def get_target_service(
     return TargetService(targets, employees, audit)
 
 
+def get_envsync_service(
+    repo: Annotated[EnvSyncRepository, Depends(get_envsync_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    settings: SettingsDep,
+) -> EnvSyncService:
+    return EnvSyncService(repo, employees, audit, settings)
+
+
+EnvSyncServiceDep = Annotated[EnvSyncService, Depends(get_envsync_service)]
+
+
 def get_leave_policy_service(
     policies: Annotated[LeavePolicyRepository, Depends(get_leave_policy_repo)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
@@ -718,6 +736,38 @@ async def get_current_user(
 
 
 CurrentUserDep = Annotated[CurrentUser, Depends(get_current_user)]
+
+
+async def get_envsync_principal(
+    settings: SettingsDep,
+    service: EnvSyncServiceDep,
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    jwks_client: JwksClientDep,
+    authorization: Annotated[str | None, Header()] = None,
+) -> EnvPrincipal:
+    """An Env Sync caller — a Personal Access Token (VSCode extension) OR a Better
+    Auth JWT (web dashboard). PAT is tried first (a single indexed DB lookup, no
+    network); only if it misses do we verify the bearer as a JWT. Either way the
+    employee is re-derived and must be active (Golden rules #1, #2)."""
+    if not settings.envsync_enabled:
+        raise AuthenticationError()
+    token = _bearer_token(authorization)
+
+    employee_id = await service.resolve_token(token)
+    if employee_id is not None:
+        employee = await employees.get(employee_id)
+        if employee is None or not employee.is_active:
+            raise AuthenticationError()
+        return EnvPrincipal(employee_id=employee.id)
+
+    identity = _verify_identity(settings, jwks_client, authorization)
+    employee = await employees.get_by_work_email(identity.email)
+    if employee is None or not employee.is_active:
+        raise AuthenticationError()
+    return EnvPrincipal(employee_id=employee.id)
+
+
+EnvPrincipalDep = Annotated[EnvPrincipal, Depends(get_envsync_principal)]
 
 
 def require_admin(user: CurrentUserDep) -> CurrentUser:

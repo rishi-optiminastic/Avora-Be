@@ -14,6 +14,8 @@ from app.models.compensation import Compensation, PayPeriod
 from app.models.device import Device
 from app.models.document import DocumentCategory, EmployeeDocument
 from app.models.employee import Employee, EmployeeStatus, Role, TrackingMode
+from app.models.env_access_token import EnvAccessToken
+from app.models.env_project import EnvMemberRole, EnvProject, EnvProjectMember, EnvVersion
 from app.models.eod_report import EodReport, EodStatus
 from app.models.holiday import Holiday, HolidayType
 from app.models.invitation import Invitation, InvitationStatus
@@ -50,6 +52,11 @@ __all__ = [
     "Employee",
     "EmployeeDocument",
     "EmployeeStatus",
+    "EnvAccessToken",
+    "EnvMemberRole",
+    "EnvProject",
+    "EnvProjectMember",
+    "EnvVersion",
     "EodReport",
     "EodStatus",
     "Holiday",

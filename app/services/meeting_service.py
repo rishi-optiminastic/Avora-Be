@@ -23,6 +23,7 @@ import jwt
 
 from app.core.config import Settings
 from app.core.exceptions import AppError
+from app.core.logging import get_logger
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.quick_meet import QuickMeetRepository
@@ -32,6 +33,8 @@ from app.schemas.meeting import QuickMeetDefaultsRead, QuickMeetingRead
 # calendar.events lets us insert an event with a Meet conference and invite people.
 _CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events"
 _CALENDAR_EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+
+logger = get_logger("app.meeting")
 
 
 class IntegrationError(AppError):
@@ -130,6 +133,19 @@ class MeetingService:
         except httpx.HTTPError as exc:
             raise IntegrationError("Could not reach Google to authorize.") from exc
         if resp.status_code >= 400:
+            # Google's token-endpoint error body carries no secrets — only
+            # {"error", "error_description"}. Log it so prod failures are
+            # diagnosable instead of an opaque 400 -> 503. The subject is the
+            # impersonated user, not a secret.
+            logger.warning(
+                "google_token_exchange_failed",
+                extra={
+                    "status": resp.status_code,
+                    "google_error": resp.text,
+                    "subject": subject,
+                    "sa_client_email": self._settings.google_sa_client_email,
+                },
+            )
             raise IntegrationError("Google rejected the meeting authorization.")
         token = resp.json().get("access_token")
         if not isinstance(token, str):

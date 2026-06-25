@@ -113,6 +113,52 @@ async def test_ingest_is_idempotent(
     assert count == 1  # merged into one day session, not duplicated
 
 
+async def test_in_punches_keep_day_open_then_out_closes(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    seed.report.biometric_id = "1042"
+    await db.commit()
+    rid = seed.report.id
+
+    async def _clock_out() -> object:
+        db.expire_all()  # avoid the identity-map cache; read the DB value
+        return await db.scalar(
+            select(WorkSession.clock_out_at).where(
+                WorkSession.employee_id == rid, WorkSession.source == "biometric"
+            )
+        )
+
+    # Two morning IN scans, no OUT yet → the day stays OPEN (not closed at 09:05),
+    # so the person isn't scored half-day / early-out while still working.
+    ins = {
+        "punches": [
+            {"external_id": "1042", "punched_at": "2026-06-15T09:00:00+05:30", "direction": "in"},
+            {"external_id": "1042", "punched_at": "2026-06-15T09:05:00+05:30", "direction": "in"},
+        ]
+    }
+    raw, headers = _signed(settings, ins)
+    r1 = await client.post("/api/v1/attendance/biometric", content=raw, headers=headers)
+    assert r1.status_code == 200
+    sessions = await db.scalar(
+        select(func.count())
+        .select_from(WorkSession)
+        .where(WorkSession.employee_id == seed.report.id, WorkSession.source == "biometric")
+    )
+    assert sessions == 1
+    assert await _clock_out() is None  # open
+
+    # The evening OUT punch (sent on its own, like an incremental sync) closes it.
+    out = {
+        "punches": [
+            {"external_id": "1042", "punched_at": "2026-06-15T18:00:00+05:30", "direction": "out"},
+        ]
+    }
+    raw2, headers2 = _signed(settings, out)
+    r2 = await client.post("/api/v1/attendance/biometric", content=raw2, headers=headers2)
+    assert r2.status_code == 200
+    assert await _clock_out() is not None  # closed at the out punch
+
+
 # ---- reconciliation -------------------------------------------------------- #
 
 

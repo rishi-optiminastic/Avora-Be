@@ -107,6 +107,17 @@ class Settings(BaseSettings):
     slack_webhook_url: str = ""  # Slack Incoming Webhook for the team channel
     quick_meet_message: str = "{starter} started a quick meeting. Join now: {url}"
 
+    # Env Sync (App Store app) -----------------------------------------------
+    # Fernet key(s) used to encrypt project `.env` content at rest. Newest first;
+    # whitespace/comma-separated to support rotation via MultiFernet. The feature
+    # refuses to store/serve secrets until this is set. Generate with:
+    #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    envsync_fernet_key: str = ""
+
+    @property
+    def envsync_enabled(self) -> bool:
+        return bool(self.envsync_fernet_key.strip())
+
     # Transactional email (SendGrid) + invitations ---------------------------
     sendgrid_api_key: str = Field(default="change-me", min_length=8)
     email_from: str = "no-reply@signalor.ai"
