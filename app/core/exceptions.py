@@ -60,6 +60,19 @@ class ConflictError(AppError):
     message = "Conflicting request."
 
 
+class EnvConflictError(ConflictError):
+    """Env Sync push rejected because the remote head moved past the client's
+    base version. Carries the current head so the client can resolve/merge — the
+    handler emits the extension's expected `{detail, head}` body (not the generic
+    error envelope)."""
+
+    message = "Remote env changed since you last pulled."
+
+    def __init__(self, head: dict[str, object] | None) -> None:
+        super().__init__()
+        self.head = head
+
+
 class ReplayError(AppError):
     status_code = status.HTTP_409_CONFLICT
     code = "replay_detected"
@@ -98,6 +111,15 @@ def register_exception_handlers(app: FastAPI) -> None:
         return JSONResponse(
             status_code=exc.status_code,
             content=_error_body(exc.code, exc.message),
+        )
+
+    @app.exception_handler(EnvConflictError)
+    async def _env_conflict(_: Request, exc: EnvConflictError) -> JSONResponse:
+        # Extension-specific shape: {detail, head}. Registered before the generic
+        # AppError handler so Starlette picks this more specific class.
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.message, "head": exc.head},
         )
 
     @app.exception_handler(RequestValidationError)

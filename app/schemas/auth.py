@@ -46,3 +46,11 @@ class CurrentDevice(BaseModel):
     device_id: uuid.UUID
     employee_id: uuid.UUID
     last_sequence: int
+
+
+class EnvPrincipal(BaseModel):
+    """An Env Sync caller — either a human (Better Auth JWT) or the VSCode
+    extension presenting a Personal Access Token. Resolved to an employee id
+    server-side; membership/role is re-derived per project, never trusted."""
+
+    employee_id: uuid.UUID

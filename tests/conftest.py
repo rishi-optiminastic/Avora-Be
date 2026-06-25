@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 import jwt
 import pytest
 import pytest_asyncio
+from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from httpx import ASGITransport, AsyncClient
@@ -99,6 +100,7 @@ def settings() -> Settings:
         jwt_algorithm="HS256",
         agent_token_pepper="test-agent-pepper-value",
         hr_webhook_secret="test-hr-secret-value",
+        envsync_fernet_key=Fernet.generate_key().decode(),
         cookie_secure=False,
         # Force the in-DB image path; never touch real S3 in tests.
         aws_region="",

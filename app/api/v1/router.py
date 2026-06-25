@@ -16,6 +16,7 @@ from app.api.v1.routes import (
     devices,
     documents,
     employees,
+    envsync,
     eod,
     health,
     holidays,
@@ -66,3 +67,4 @@ api_router.include_router(documents.router)
 api_router.include_router(workspace_files.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(eod.router)
+api_router.include_router(envsync.router)
