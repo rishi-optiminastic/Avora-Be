@@ -43,6 +43,7 @@ class WorkSessionService:
         if session is None:
             raise ValidationError("You are not clocked in.")
         session.clock_out_at = datetime.now(UTC)
+        session.clock_out_source = "dashboard"
         await self._sessions.flush()
         await self._audit.append(
             actor=str(caller.employee_id),

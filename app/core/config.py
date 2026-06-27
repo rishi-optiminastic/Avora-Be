@@ -158,6 +158,14 @@ class Settings(BaseSettings):
     eod_auto_send_after_hours: int = 16  # unreviewed drafts auto-send after this
     eod_concurrency: int = 5  # max simultaneous LLM calls when generating drafts
 
+    # Auto-checkout: a worker closes work sessions left open past the office
+    # window (someone forgot to check out), stamping the time their PC last showed
+    # activity (≈ when it turned off) and emailing them. "PC is off" = no activity
+    # for `auto_checkout_idle_grace_minutes`.
+    auto_checkout_enabled: bool = False
+    auto_checkout_tick_seconds: int = 900  # 15 min between sweeps
+    auto_checkout_idle_grace_minutes: int = 30  # quiet this long ⇒ treat PC as off
+
     # Monitoring retention: prune `activity_samples` and `screenshots` (with their
     # S3 blobs) older than this many days — nothing else is deleted. Both run once
     # a day at `activity_purge_hour` (local).

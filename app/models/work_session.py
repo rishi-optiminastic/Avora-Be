@@ -31,8 +31,11 @@ class WorkSession(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     clock_out_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
-    # How it was started/ended (dashboard, agent tray, …) — for audit/visibility.
+    # How the session was STARTED (dashboard, biometric, agent, …) — for audit/visibility.
     source: Mapped[str] = mapped_column(String(32), default="dashboard")
+    # How it was ENDED: dashboard (the person clicked it), biometric (out-punch),
+    # auto (the auto-checkout worker closed a forgotten session). NULL while open.
+    clock_out_source: Mapped[str | None] = mapped_column(String(32), default=None)
     # Server-observed at clock-in (spec: login IP + location for HR/attendance).
     ip_address: Mapped[str | None] = mapped_column(String(64), default=None)
     location: Mapped[str | None] = mapped_column(String(128), default=None)

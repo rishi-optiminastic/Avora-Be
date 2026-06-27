@@ -56,8 +56,17 @@ def classify_day(
     worked_minutes: int,
     regularized: bool,
     policy: PolicySpec,
+    day_complete: bool = True,
 ) -> DayVerdict:
-    """Classify one employee-day against the policy."""
+    """Classify one employee-day against the policy.
+
+    `day_complete` is False while the day is still running (it's today and the
+    office window hasn't closed yet). Hours-based outcomes — the too-few-hours
+    half-day and the early-logout flag — only apply once the day is complete:
+    mid-day nobody has yet put in a full day's hours, so an on-time person who's
+    still working shows as PRESENT (on track), not a premature HALF_DAY. Arrival
+    facts (arriving after the reg window) still count immediately.
+    """
     if login_at is None:
         return DayVerdict(AttendanceStatus.ABSENT, False, False, regularized, False, None)
 
@@ -66,10 +75,11 @@ def classify_day(
     in_reg_window = policy.on_time_cutoff < arrival <= policy.regularizable_cutoff
     too_late = arrival > policy.regularizable_cutoff
     hours_ok = worked_minutes >= policy.full_day_min_minutes
-    too_few_hours = worked_minutes < policy.half_day_min_minutes
+    # Worked hours only judge someone once the day is over (see docstring).
+    too_few_hours = day_complete and worked_minutes < policy.half_day_min_minutes
+    early_logout = day_complete and worked_minutes < policy.full_day_min_minutes
 
     arrival_ok = on_time or regularized
-    early_logout = worked_minutes < policy.full_day_min_minutes
 
     if too_late and not regularized:
         status = AttendanceStatus.HALF_DAY
@@ -77,6 +87,8 @@ def classify_day(
         status = AttendanceStatus.HALF_DAY
     elif arrival_ok and hours_ok:
         status = AttendanceStatus.FULL_DAY
+    elif arrival_ok and not day_complete:
+        status = AttendanceStatus.PRESENT  # on time / regularized, day still running
     elif in_reg_window and not regularized:
         status = AttendanceStatus.LATE  # eligible to regularize → full day on approval
     else:

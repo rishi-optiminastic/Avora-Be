@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime, time, timedelta
 
 from app.models.task import Task
-from app.repositories.activity import ActivityRepository
+from app.repositories.activity import ActivityRepository, idle_minutes
 from app.repositories.employee import EmployeeRepository
 from app.repositories.leave import LeaveRepository
 from app.repositories.task import TaskRepository
@@ -132,7 +132,7 @@ class DashboardService:
             if agg is None:
                 continue
             worked = max(0, int((agg.logout_at - agg.login_at).total_seconds() // 60))
-            active = max(0, worked - min(worked, agg.idle_seconds // 60))
+            active = max(0, worked - idle_minutes(agg, worked))
             bucket[1] += 1
             bucket[2] += round((active / worked) * 100) if worked else 0
 

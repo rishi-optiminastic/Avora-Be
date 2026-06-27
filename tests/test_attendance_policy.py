@@ -55,6 +55,47 @@ def test_too_late_is_half_day() -> None:
 def test_too_few_hours_is_half_day() -> None:
     v = classify_day(login_at=_at(9, 0), worked_minutes=120, regularized=False, policy=_POLICY)
     assert v.status is AttendanceStatus.HALF_DAY
+    assert v.early_logout is True
+
+
+def test_in_progress_on_time_is_present_not_half() -> None:
+    # Mid-day: on time but only a couple of hours logged so far. Must NOT be
+    # downgraded to half day, and the early-out flag must stay off.
+    v = classify_day(
+        login_at=_at(9, 5),
+        worked_minutes=120,
+        regularized=False,
+        policy=_POLICY,
+        day_complete=False,
+    )
+    assert v.status is AttendanceStatus.PRESENT
+    assert v.early_logout is False
+    assert v.late_login is False
+
+
+def test_in_progress_too_late_is_still_half() -> None:
+    # Arriving past the reg window is an arrival fact — half day even mid-day.
+    v = classify_day(
+        login_at=_at(10, 30),
+        worked_minutes=60,
+        regularized=False,
+        policy=_POLICY,
+        day_complete=False,
+    )
+    assert v.status is AttendanceStatus.HALF_DAY
+
+
+def test_in_progress_late_in_window_is_regularizable() -> None:
+    # Late but inside the window, day still running → Late + regularizable.
+    v = classify_day(
+        login_at=_at(9, 30),
+        worked_minutes=60,
+        regularized=False,
+        policy=_POLICY,
+        day_complete=False,
+    )
+    assert v.status is AttendanceStatus.LATE
+    assert v.regularizable is True
 
 
 def test_no_login_is_absent() -> None:

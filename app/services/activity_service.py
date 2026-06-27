@@ -16,7 +16,6 @@ from app.core.categories import extract_domain
 from app.core.config import Settings
 from app.core.exceptions import ReplayError
 from app.models.activity import ActivitySample
-from app.models.employee import TrackingMode
 from app.repositories.activity import ActivityRepository
 from app.repositories.audit import AuditRepository
 from app.repositories.device import DeviceRepository
@@ -50,12 +49,7 @@ class ActivityService:
         return flags
 
     async def ingest(self, device: CurrentDevice, payload: ActivityIngest) -> ActivitySample | None:
-        # Capture gate: if the employee is in PERSONAL mode we drop the sample —
-        # nothing is stored and the sequence is not advanced. Returning None
-        # signals "paused" (HTTP 202, not an error, so the agent doesn't retry).
-        if await self._employees.tracking_mode(device.employee_id) is TrackingMode.PERSONAL:
-            return None
-
+        # Capture is always on (work mode) — the personal-mode pause was removed.
         # Replay / ordering: a sequence we've already seen, or one that goes
         # backwards, is rejected. Dedup is also enforced by the DB unique
         # constraint on (device_id, sequence) as a backstop.

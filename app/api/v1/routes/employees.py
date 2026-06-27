@@ -30,7 +30,6 @@ from app.schemas.employee import (
     EmployeeRoleUpdate,
     EmployeeStatusUpdate,
     SelfProfileUpdate,
-    TrackingModeUpdate,
 )
 from app.services.employee_service import MAX_AVATAR_BYTES
 
@@ -58,16 +57,6 @@ async def list_employees(
 async def get_me(caller: CurrentUserDep, service: EmployeeServiceDep) -> EmployeeRead:
     """The caller's own record — lets the client tailor UI to their role/scope."""
     return EmployeeRead.model_validate(await service.get_self(caller))
-
-
-@router.patch("/me/tracking-mode", response_model=EmployeeRead)
-async def set_my_tracking_mode(
-    payload: TrackingModeUpdate,
-    caller: CurrentUserDep,
-    service: EmployeeServiceDep,
-) -> EmployeeRead:
-    """The employee pauses/resumes their own capture (work ↔ personal mode)."""
-    return EmployeeRead.model_validate(await service.set_tracking_mode(caller, payload.mode))
 
 
 @router.patch("/me/profile", response_model=EmployeeRead)
@@ -165,18 +154,6 @@ async def set_employee_status(
 ) -> EmployeeRead:
     """Admin/HR activate or deactivate (soft-delete / offboard) an employee."""
     employee = await service.set_active(manager, employee_id, payload.is_active)
-    return EmployeeRead.model_validate(employee)
-
-
-@router.patch("/{employee_id}/tracking-mode", response_model=EmployeeRead)
-async def set_employee_tracking_mode(
-    employee_id: uuid.UUID,
-    payload: TrackingModeUpdate,
-    manager: AdminOrHrDep,
-    service: EmployeeServiceDep,
-) -> EmployeeRead:
-    """Admin/HR set another employee's capture mode (work/personal)."""
-    employee = await service.set_tracking_mode_for(manager, employee_id, payload.mode)
     return EmployeeRead.model_validate(employee)
 
 

@@ -19,13 +19,14 @@ from zoneinfo import ZoneInfo
 from app.core.attendance import PolicySpec, classify_day
 from app.core.exceptions import NotFoundError, ValidationError
 from app.models.employee import Employee
-from app.repositories.activity import ActivityRepository, DailyAgg
+from app.repositories.activity import ActivityRepository, DailyAgg, idle_minutes
 from app.repositories.employee import EmployeeRepository
 from app.repositories.regularization import RegularizationRepository
 from app.repositories.work_session import DaySpan, WorkSessionRepository
 from app.schemas.attendance_report import AttendanceDayRow, AttendanceMonthSummary
 from app.schemas.auth import CurrentUser
 from app.schemas.monitoring import AttendanceRead, AttendanceStatus
+from app.schemas.work_session import BiometricTodayRead
 from app.services.attendance_policy_service import AttendancePolicyService
 
 MAX_RANGE_DAYS = 92
@@ -47,6 +48,8 @@ class _DayAcc:
     logout: datetime | None
     worked: int = 0
     is_open: bool = False
+    in_source: str | None = None
+    out_source: str | None = None
 
 
 class AttendanceService:
@@ -74,11 +77,24 @@ class AttendanceService:
     def _local_day(dt: datetime, tz: str) -> str:
         return _aware(dt).astimezone(ZoneInfo(tz)).date().isoformat()
 
+    @staticmethod
+    def _day_work_end_utc(local_date: str, spec: PolicySpec) -> datetime:
+        """The local date's office-window end (e.g. 4 PM), in UTC."""
+        y, m, d = (int(x) for x in local_date.split("-"))
+        midnight = datetime(y, m, d, tzinfo=ZoneInfo(spec.timezone))
+        return (midnight + timedelta(minutes=spec.work_end_minute)).astimezone(UTC)
+
     # ---- single live day (biometric-preferred, then manual/agent) ---------- #
     @staticmethod
     def _resolve(
-        bio: DaySpan | None, other: DaySpan | None, agg: DailyAgg | None, now: datetime
-    ) -> tuple[datetime | None, datetime | None, int, str | None]:
+        bio: DaySpan | None,
+        other: DaySpan | None,
+        agg: DailyAgg | None,
+        *,
+        now: datetime,
+        is_today: bool,
+        day_end: datetime,
+    ) -> tuple[datetime | None, datetime | None, int, str | None, str | None, str | None]:
         # The biometric punch is the source of truth for attendance times. With no
         # punch (WFH / not enrolled / forgot), fall back to a manual clock-in, then
         # to the agent's activity, so active people aren't marked absent. The
@@ -86,11 +102,21 @@ class AttendanceService:
         span = bio or other
         if span is not None:
             logout = span.logout_at
-            worked = _minutes(span.login_at, logout or now)
-            return span.login_at, logout, worked, span.ip_address
+            if logout is not None:
+                out = logout
+            elif is_today:
+                out = now  # still in progress today
+            else:
+                # Past day left open (missed clock-out): cap worked at the last
+                # activity sample (≈ when the PC went off), else the office-window
+                # end — never let it bleed into following days (the 195h bug).
+                out = (agg.logout_at if agg is not None else None) or day_end
+            worked = _minutes(span.login_at, out)
+            return span.login_at, logout, worked, span.ip_address, span.in_source, span.out_source
         if agg is not None:
-            return agg.login_at, agg.logout_at, _minutes(agg.login_at, agg.logout_at), None
-        return None, None, 0, None
+            worked = _minutes(agg.login_at, agg.logout_at)
+            return agg.login_at, agg.logout_at, worked, None, "agent", "agent"
+        return None, None, 0, None, None, None
 
     async def daily(
         self,
@@ -112,17 +138,41 @@ class AttendanceService:
         spans = await self._sessions.day_spans(ids, start, end)
         approved = await self._regs.approved_days(ids, local_date, local_date)
         now = datetime.now(UTC)
-        today = now.astimezone(ZoneInfo(spec.timezone)).date().isoformat()
+        now_local = now.astimezone(ZoneInfo(spec.timezone))
+        today = now_local.date().isoformat()
+        now_minute = now_local.hour * 60 + now_local.minute
+        # The office window has closed for everyone (a past day, or today past the
+        # end time). Used as the floor for "the day's hours are final".
+        window_closed = local_date < today or (
+            local_date == today and now_minute >= spec.work_end_minute
+        )
+        is_today = local_date == today
+        day_end = self._day_work_end_utc(local_date, spec)
 
         rows: list[AttendanceRead] = []
         for e in employees:
-            login, logout, worked, ip = self._resolve(
-                bio.get(e.id), spans.get(e.id), aggs.get(e.id), now
+            login, logout, worked, ip, in_src, out_src = self._resolve(
+                bio.get(e.id),
+                spans.get(e.id),
+                aggs.get(e.id),
+                now=now,
+                is_today=is_today,
+                day_end=day_end,
             )
             regd = local_date in approved.get(e.id, set())
-            v = classify_day(login_at=login, worked_minutes=worked, regularized=regd, policy=spec)
+            # Hours are "final" — and can downgrade the day to half / flag early-out
+            # — once the window has closed, OR the person deliberately clocked out
+            # (the app or the auto-checkout). A biometric out-punch alone doesn't
+            # count (it may just be a lunch break) and an open session never does.
+            v = classify_day(
+                login_at=login,
+                worked_minutes=worked,
+                regularized=regd,
+                policy=spec,
+                day_complete=window_closed or out_src in ("dashboard", "auto"),
+            )
             agg = aggs.get(e.id)
-            idle = min(worked, agg.idle_seconds // 60) if agg else 0
+            idle = idle_minutes(agg, worked) if agg else 0
             active = max(0, worked - idle)
             rows.append(
                 AttendanceRead(
@@ -140,9 +190,23 @@ class AttendanceService:
                     regularizable=v.regularizable,
                     regularized=v.regularized,
                     ip_address=ip,
+                    clock_in_source=in_src,
+                    clock_out_source=out_src,
                 )
             )
         return rows
+
+    async def my_biometric_today(self, caller: CurrentUser) -> BiometricTodayRead | None:
+        """The caller's own biometric punch session for today — drives the navbar
+        timer. Biometric only (agent/manual are not used here); None if no punch."""
+        spec = await self._policy.spec()
+        local_date = datetime.now(UTC).astimezone(ZoneInfo(spec.timezone)).date().isoformat()
+        start, end = self._local_bounds(local_date, spec.timezone)
+        spans = await self._sessions.biometric_day_spans([caller.employee_id], start, end)
+        span = spans.get(caller.employee_id)
+        if span is None:
+            return None
+        return BiometricTodayRead(clock_in_at=span.login_at, clock_out_at=span.logout_at)
 
     # ---- range + monthly report (clock-in/out driven) ---------------------- #
     async def _day_rows(
@@ -156,39 +220,58 @@ class AttendanceService:
         all_raw = await self._sessions.sessions_in_range(ids, start, end)
         approved = await self._regs.approved_days(ids, start_date, end_date)
         now = datetime.now(UTC)
+        now_local = now.astimezone(ZoneInfo(spec.timezone))
+        today = now_local.date().isoformat()
+        now_minute = now_local.hour * 60 + now_local.minute
 
         # Group sessions by (employee, local day): earliest in, latest out, worked.
         grouped: dict[tuple[uuid.UUID, str], _DayAcc] = {}
         bio_days: set[tuple[uuid.UUID, str]] = set()
 
-        def _accumulate(emp_id: uuid.UUID, cin: datetime, cout: datetime | None) -> None:
+        def _accumulate(
+            emp_id: uuid.UUID,
+            cin: datetime,
+            cout: datetime | None,
+            src: str | None,
+            cout_src: str | None,
+        ) -> None:
             day = self._local_day(cin, spec.timezone)
             acc = grouped.get((emp_id, day))
             if acc is None:
-                acc = _DayAcc(login=cin, logout=cout)
+                acc = _DayAcc(login=cin, logout=None, in_source=src)
                 grouped[(emp_id, day)] = acc
-            acc.login = min(acc.login, cin)
+            if cin < acc.login:
+                acc.login, acc.in_source = cin, src
             if cout is None:
                 acc.is_open = True
             elif acc.logout is None or cout > acc.logout:
-                acc.logout = cout
-            acc.worked += _minutes(cin, cout or now)
+                acc.logout, acc.out_source = cout, cout_src
+            # Cap an open session at the day's window-end on PAST days so a forgotten
+            # clock-out can't accumulate days of "worked" time (the 195h bug).
+            cutoff = now if day == today else self._day_work_end_utc(day, spec)
+            acc.worked += _minutes(cin, cout or cutoff)
 
         # Biometric punches drive each day; remember which (employee, day) they cover.
-        for emp_id, cin, cout in bio_raw:
+        for emp_id, cin, cout, src, cout_src, _ip in bio_raw:
             bio_days.add((emp_id, self._local_day(cin, spec.timezone)))
-            _accumulate(emp_id, cin, cout)
+            _accumulate(emp_id, cin, cout, src, cout_src)
         # Fall back to manual/agent sessions only on days with no punch.
-        for emp_id, cin, cout in all_raw:
+        for emp_id, cin, cout, src, cout_src, _ip in all_raw:
             if (emp_id, self._local_day(cin, spec.timezone)) in bio_days:
                 continue
-            _accumulate(emp_id, cin, cout)
+            _accumulate(emp_id, cin, cout, src, cout_src)
 
         rows: list[AttendanceDayRow] = []
         for (emp_id, day), acc in grouped.items():
             regd = day in approved.get(emp_id, set())
+            window_closed = day < today or (day == today and now_minute >= spec.work_end_minute)
+            out_src = None if acc.is_open else acc.out_source
             v = classify_day(
-                login_at=acc.login, worked_minutes=acc.worked, regularized=regd, policy=spec
+                login_at=acc.login,
+                worked_minutes=acc.worked,
+                regularized=regd,
+                policy=spec,
+                day_complete=window_closed or out_src in ("dashboard", "auto"),
             )
             rows.append(
                 AttendanceDayRow(
@@ -201,6 +284,8 @@ class AttendanceService:
                     late_login=v.late_login,
                     regularizable=v.regularizable,
                     regularized=v.regularized,
+                    clock_in_source=acc.in_source,
+                    clock_out_source=None if acc.is_open else acc.out_source,
                 )
             )
         rows.sort(key=lambda r: (r.day, str(r.employee_id)))

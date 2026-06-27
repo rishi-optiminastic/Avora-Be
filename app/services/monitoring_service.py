@@ -15,7 +15,7 @@ from app.core.categories import CategoryResolver, ProductivityCategory
 from app.core.exceptions import NotFoundError
 from app.models.activity import ActivitySample
 from app.models.employee import Employee
-from app.repositories.activity import ActivityRepository
+from app.repositories.activity import IDLE_SAMPLE_SECONDS, ActivityRepository
 from app.repositories.category_rule import CategoryRuleRepository
 from app.repositories.employee import EmployeeRepository
 from app.schemas.auth import CurrentUser
@@ -26,8 +26,8 @@ from app.schemas.monitoring import (
     InsightRead,
 )
 
-# Tunables (Phase 1 — move to settings/config-per-org later).
-IDLE_SAMPLE_SECONDS = 300  # a sample with ≥5 min idle marks the person idle
+# Tunables (Phase 1 — move to settings/config-per-org later). IDLE_SAMPLE_SECONDS
+# lives in the repository so the daily rollup and this live view share one rule.
 ONLINE_WINDOW_MINUTES = 15  # last sample within 15 min ⇒ currently online
 TOP_DOMAINS = 6  # how many domains to surface per person on the browsing view
 INSIGHT_WINDOW_DAYS = 7  # productivity trend length

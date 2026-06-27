@@ -8,11 +8,16 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, cast
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import case, delete, func, select
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.activity import ActivitySample
+
+# A single sample counts as "idle" once there's been no input for this long. The
+# live view uses the same rule (monitoring imports this), so the daily rollup and
+# the live dot agree.
+IDLE_SAMPLE_SECONDS = 300
 
 
 @dataclass
@@ -22,7 +27,17 @@ class DailyAgg:
     login_at: datetime
     logout_at: datetime
     sample_count: int
-    idle_seconds: int
+    idle_samples: int  # samples that were idle (≥ IDLE_SAMPLE_SECONDS)
+
+
+def idle_minutes(agg: DailyAgg, worked_minutes: int) -> int:
+    """Idle minutes inside `worked_minutes`, from the SHARE of samples that were
+    idle. We must use the sample share, never `sum(idle_seconds)` — `idle_seconds`
+    is a gauge that ramps up while idle, so summing it across samples wildly
+    overcounts (a 20-min lunch can read as hours and zero out the whole day)."""
+    if agg.sample_count <= 0 or worked_minutes <= 0:
+        return 0
+    return min(worked_minutes, round(worked_minutes * agg.idle_samples / agg.sample_count))
 
 
 class ActivityRepository:
@@ -64,17 +79,20 @@ class ActivityRepository:
     async def daily_aggregates(
         self, employee_ids: Sequence[uuid.UUID], start: datetime, end: datetime
     ) -> dict[uuid.UUID, DailyAgg]:
-        """min/max receive time, sample count and total idle per employee, for a
-        day window. Server-stamped `received_at` is the only time we trust."""
+        """min/max receive time, total sample count, and the count of IDLE samples
+        per employee, for a day window. Server-stamped `received_at` is the only
+        time we trust. Idle is a sample COUNT (≥ IDLE_SAMPLE_SECONDS), not a sum of
+        the idle gauge — see `idle_minutes`."""
         if not employee_ids:
             return {}
+        idle_flag = case((ActivitySample.idle_seconds >= IDLE_SAMPLE_SECONDS, 1), else_=0)
         stmt = (
             select(
                 ActivitySample.employee_id,
                 func.min(ActivitySample.received_at),
                 func.max(ActivitySample.received_at),
                 func.count(),
-                func.coalesce(func.sum(ActivitySample.idle_seconds), 0),
+                func.coalesce(func.sum(idle_flag), 0),
             )
             .where(
                 ActivitySample.employee_id.in_(employee_ids),
@@ -87,7 +105,7 @@ class ActivityRepository:
         result: dict[uuid.UUID, DailyAgg] = {}
         for emp_id, login, logout, count, idle in rows.all():
             result[emp_id] = DailyAgg(
-                login_at=login, logout_at=logout, sample_count=int(count), idle_seconds=int(idle)
+                login_at=login, logout_at=logout, sample_count=int(count), idle_samples=int(idle)
             )
         return result
 
