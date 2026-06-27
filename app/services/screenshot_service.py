@@ -18,7 +18,6 @@ from app.core import storage
 from app.core.config import Settings
 from app.core.exceptions import NotFoundError, ValidationError
 from app.core.logging import get_logger
-from app.models.employee import TrackingMode
 from app.models.screenshot import Screenshot
 from app.repositories.employee import EmployeeRepository
 from app.repositories.screenshot import ScreenshotRepository
@@ -55,10 +54,7 @@ class ScreenshotService:
         height: int,
         image: bytes,
     ) -> Screenshot | None:
-        # Capture gate: drop screenshots while the employee is in PERSONAL mode
-        # (nothing uploaded to S3, nothing stored). None signals "paused".
-        if await self._employees.tracking_mode(device.employee_id) is TrackingMode.PERSONAL:
-            return None
+        # Capture is always on (work mode) — the personal-mode pause was removed.
         if content_type not in ALLOWED_TYPES:
             raise ValidationError("Unsupported image type.")
         if not image or len(image) > MAX_IMAGE_BYTES:

@@ -22,6 +22,8 @@ class AttendanceDayRow(BaseModel):
     late_login: bool
     regularizable: bool
     regularized: bool
+    clock_in_source: str | None = None
+    clock_out_source: str | None = None
 
 
 class AttendanceMonthSummary(BaseModel):

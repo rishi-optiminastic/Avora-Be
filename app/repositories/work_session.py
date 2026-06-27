@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.work_session import WorkSession
@@ -19,6 +19,18 @@ def _aware(dt: datetime) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
+@dataclass
+class _SpanAcc:
+    """Mutable accumulator while folding a day's sessions into one span."""
+
+    first_in: datetime
+    in_source: str | None
+    ip: str | None = None
+    last_out: datetime | None = None
+    out_source: str | None = None
+    open: bool = False
+
+
 @dataclass(frozen=True)
 class DaySpan:
     """A day's clock-in/out summary for one employee."""
@@ -26,6 +38,8 @@ class DaySpan:
     login_at: datetime
     logout_at: datetime | None  # None ⇒ still open (no clock-out that day)
     ip_address: str | None
+    in_source: str | None = None  # source of the earliest clock-in
+    out_source: str | None = None  # source of the latest clock-out (None while open)
 
 
 class WorkSessionRepository:
@@ -96,6 +110,7 @@ class WorkSessionRepository:
                 clock_in_at=clock_in_at,
                 clock_out_at=clock_out_at,
                 source="biometric",
+                clock_out_source="biometric" if clock_out_at is not None else None,
             )
             self._session.add(ws)
             await self._session.flush()
@@ -108,12 +123,24 @@ class WorkSessionRepository:
             # An out-punch — extend (or set) the clock-out to the latest one.
             if existing_out is None or clock_out_at > existing_out:
                 existing.clock_out_at = clock_out_at
+                existing.clock_out_source = "biometric"
         elif existing_out is not None and _aware(last_at) >= existing_out:
             # Latest punch is an "in" at/after the recorded out → person is back in
             # (or the prior close was stale): re-open so the timer resumes.
             existing.clock_out_at = None
+            existing.clock_out_source = None
         await self._session.flush()
         return existing, False
+
+    async def list_open_before(self, cutoff: datetime) -> list[WorkSession]:
+        """Every still-open session (no clock-out) that began on/before `cutoff`.
+        The auto-checkout worker uses this to close forgotten sessions."""
+        rows = await self._session.execute(
+            select(WorkSession)
+            .where(WorkSession.clock_out_at.is_(None), WorkSession.clock_in_at <= cutoff)
+            .order_by(WorkSession.clock_in_at.asc())
+        )
+        return list(rows.scalars().all())
 
     async def flush(self) -> None:
         await self._session.flush()
@@ -125,14 +152,21 @@ class WorkSessionRepository:
         end: datetime,
         *,
         source: str | None = None,
-    ) -> list[tuple[uuid.UUID, datetime, datetime | None]]:
-        """Raw (employee_id, clock_in_at, clock_out_at) over a window, for the
-        range/monthly report to group by local day in Python. Pass `source` to
-        restrict to one origin (e.g. "biometric")."""
+    ) -> list[tuple[uuid.UUID, datetime, datetime | None, str, str | None, str | None]]:
+        """Raw (employee_id, clock_in_at, clock_out_at, source, clock_out_source,
+        ip_address) over a window, for the range/monthly report to group by local
+        day in Python. Pass `source` to restrict to one origin (e.g. "biometric")."""
         if not employee_ids:
             return []
         stmt = (
-            select(WorkSession.employee_id, WorkSession.clock_in_at, WorkSession.clock_out_at)
+            select(
+                WorkSession.employee_id,
+                WorkSession.clock_in_at,
+                WorkSession.clock_out_at,
+                WorkSession.source,
+                WorkSession.clock_out_source,
+                WorkSession.ip_address,
+            )
             .where(
                 WorkSession.employee_id.in_(employee_ids),
                 WorkSession.clock_in_at >= start,
@@ -143,7 +177,7 @@ class WorkSessionRepository:
         if source is not None:
             stmt = stmt.where(WorkSession.source == source)
         rows = await self._session.execute(stmt)
-        return [(r[0], r[1], r[2]) for r in rows.all()]
+        return [(r[0], r[1], r[2], r[3], r[4], r[5]) for r in rows.all()]
 
     async def day_spans(
         self, employee_ids: Sequence[uuid.UUID], start: datetime, end: datetime
@@ -167,27 +201,31 @@ class WorkSessionRepository:
         *,
         source: str | None,
     ) -> dict[uuid.UUID, DaySpan]:
-        if not employee_ids:
-            return {}
-        stmt = (
-            select(
-                WorkSession.employee_id,
-                func.min(WorkSession.clock_in_at),
-                func.max(WorkSession.clock_out_at),
-                func.count().filter(WorkSession.clock_out_at.is_(None)),
-                func.max(WorkSession.ip_address),
+        # Grouped in Python (not a SQL aggregate) so we can keep the SOURCE of the
+        # earliest clock-in and the latest clock-out — an aggregate can't tell us
+        # which row the min/max came from portably. Org-scale data, so cheap.
+        rows = await self.sessions_in_range(employee_ids, start, end, source=source)
+        acc: dict[uuid.UUID, _SpanAcc] = {}
+        for emp_id, cin, cout, src, cout_src, ip in rows:
+            a = acc.get(emp_id)
+            if a is None:
+                a = _SpanAcc(first_in=cin, in_source=src, ip=ip)
+                acc[emp_id] = a
+            if cin < a.first_in:
+                a.first_in, a.in_source = cin, src
+            if a.ip is None and ip is not None:
+                a.ip = ip
+            if cout is None:
+                a.open = True
+            elif a.last_out is None or cout > a.last_out:
+                a.last_out, a.out_source = cout, cout_src
+        return {
+            emp_id: DaySpan(
+                login_at=a.first_in,
+                logout_at=None if a.open else a.last_out,
+                ip_address=a.ip,
+                in_source=a.in_source,
+                out_source=None if a.open else a.out_source,
             )
-            .where(
-                WorkSession.employee_id.in_(employee_ids),
-                WorkSession.clock_in_at >= start,
-                WorkSession.clock_in_at < end,
-            )
-            .group_by(WorkSession.employee_id)
-        )
-        if source is not None:
-            stmt = stmt.where(WorkSession.source == source)
-        rows = await self._session.execute(stmt)
-        spans: dict[uuid.UUID, DaySpan] = {}
-        for emp_id, first_in, last_out, open_count, ip in rows.all():
-            spans[emp_id] = DaySpan(first_in, None if open_count else last_out, ip)
-        return spans
+            for emp_id, a in acc.items()
+        }

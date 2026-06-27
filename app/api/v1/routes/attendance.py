@@ -27,7 +27,7 @@ from app.schemas.regularization import (
     RegularizationRead,
     RegularizationReview,
 )
-from app.schemas.work_session import WorkSessionRead
+from app.schemas.work_session import BiometricTodayRead, WorkSessionRead
 
 router = APIRouter(prefix="/attendance", tags=["attendance"])
 
@@ -123,6 +123,15 @@ async def my_session(
     """The caller's open work session (or null if not clocked in)."""
     session = await service.current(caller)
     return WorkSessionRead.model_validate(session) if session else None
+
+
+@router.get("/me/today", response_model=BiometricTodayRead | None)
+async def my_biometric_today(
+    caller: CurrentUserDep,
+    service: AttendanceServiceDep,
+) -> BiometricTodayRead | None:
+    """The caller's biometric check-in for today (drives the navbar timer)."""
+    return await service.my_biometric_today(caller)
 
 
 @router.post("/clock-in", response_model=WorkSessionRead, status_code=status.HTTP_201_CREATED)

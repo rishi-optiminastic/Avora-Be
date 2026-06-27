@@ -4,6 +4,7 @@ reconciliation read. Mirrors the HR-webhook trust model (CLAUDE §5.1/§9)."""
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 
 from httpx import AsyncClient
 from sqlalchemy import func, select
@@ -157,6 +158,36 @@ async def test_in_punches_keep_day_open_then_out_closes(
     r2 = await client.post("/api/v1/attendance/biometric", content=raw2, headers=headers2)
     assert r2.status_code == 200
     assert await _clock_out() is not None  # closed at the out punch
+
+
+async def test_me_today_reflects_biometric_checkin(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    seed.report.biometric_id = "1042"
+    await db.commit()
+    me = auth_headers(settings, seed.report)
+
+    # No punch today → the navbar timer endpoint returns null.
+    r0 = await client.get("/api/v1/attendance/me/today", headers=me)
+    assert r0.status_code == 200
+    assert r0.json() is None
+
+    # An IN punch right now → open session, timer running (no clock-out).
+    body = {
+        "punches": [
+            {"external_id": "1042", "punched_at": datetime.now(UTC).isoformat(), "direction": "in"}
+        ]
+    }
+    raw, headers = _signed(settings, body)
+    post = await client.post("/api/v1/attendance/biometric", content=raw, headers=headers)
+    assert post.status_code == 200
+
+    r1 = await client.get("/api/v1/attendance/me/today", headers=me)
+    assert r1.status_code == 200
+    today = r1.json()
+    assert today is not None
+    assert today["is_open"] is True
+    assert today["clock_out_at"] is None
 
 
 # ---- reconciliation -------------------------------------------------------- #

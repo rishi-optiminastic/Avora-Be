@@ -252,6 +252,35 @@ def task_assigned_email(
     )
 
 
+def forgot_checkout_email(
+    *, employee_name: str, day_label: str, checkout_label: str
+) -> tuple[str, str]:
+    """Render the (subject, html) telling an employee they forgot to check out and
+    were auto-checked-out at the given time."""
+    subject = f"You were auto-checked-out — {day_label}"
+    content = f"""\
+<div style="font-size:11px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:{_MUTED};">
+  Attendance
+</div>
+<h1 style="margin:8px 0 16px;font-family:{_SERIF};font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
+  We checked you out for you
+</h1>
+<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:{_INK};">
+  Hi {employee_name}, it looks like you forgot to check out on {day_label}. We've
+  closed your session automatically at {_chip(checkout_label)} — the time your
+  computer last showed activity.
+</p>
+<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:{_MUTED};">
+  If that's wrong, ask HR to adjust the day. Remember to check out before you leave
+  so your hours stay accurate.
+</p>"""
+    return subject, _layout(
+        preheader=f"You forgot to check out on {day_label} — we closed it at {checkout_label}.",
+        content_html=content,
+        footer=_ACTIVITY_FOOTER,
+    )
+
+
 def agent_reinstall_email(*, employee_name: str, install_url: str) -> tuple[str, str]:
     """Render the (subject, html) asking an employee to reinstall the desktop
     agent — sent when their agent has stopped reporting."""

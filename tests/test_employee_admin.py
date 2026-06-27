@@ -1,6 +1,6 @@
-"""Admin/HR user management — profile edit, activate/deactivate, tracking mode,
-and invite revoke. Authorization is the point (CLAUDE.md §9): admin OR HR may do
-these; everyone else gets 403 — and ROLE changes stay admin-only (rule 5.5)."""
+"""Admin/HR user management — profile edit, activate/deactivate, and invite
+revoke. Authorization is the point (CLAUDE.md §9): admin OR HR may do these;
+everyone else gets 403 — and ROLE changes stay admin-only (rule 5.5)."""
 
 from __future__ import annotations
 
@@ -193,21 +193,6 @@ async def test_admin_cannot_deactivate_self(
         headers=auth_headers(settings, seed.admin),
     )
     assert resp.status_code == 422  # ValidationError — no self-lockout
-
-
-async def test_admin_sets_other_tracking_mode(
-    client: AsyncClient, seed: _Seed, settings: Settings
-) -> None:
-    url = f"/api/v1/employees/{seed.report.id}/tracking-mode"
-    assert (
-        await client.patch(
-            url, json={"mode": "personal"}, headers=auth_headers(settings, seed.outsider)
-        )
-    ).status_code == 403
-    ok = await client.patch(
-        url, json={"mode": "personal"}, headers=auth_headers(settings, seed.admin)
-    )
-    assert ok.status_code == 200 and ok.json()["tracking_mode"] == "personal"
 
 
 async def test_role_change_stays_admin_only(

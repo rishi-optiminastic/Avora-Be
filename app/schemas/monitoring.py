@@ -16,7 +16,7 @@ class AttendanceStatus(StrEnum):
     HALF_DAY = "half_day"  # too late (past the reg window) or too few hours
     LATE = "late"  # arrived in the regularization window, not yet regularized
     ABSENT = "absent"
-    PRESENT = "present"  # legacy alias (pre-policy rows / fallbacks)
+    PRESENT = "present"  # on time / regularized, day still in progress (also legacy fallback)
 
 
 class AttendanceRead(BaseModel):
@@ -37,6 +37,10 @@ class AttendanceRead(BaseModel):
     regularizable: bool = False  # late within the window → can request regularization
     regularized: bool = False  # an approved regularization upgraded this day
     ip_address: str | None = None
+    # Where the clock-in / clock-out came from: "biometric", "dashboard" (the app),
+    # "agent" (activity fallback), or "auto" (auto-checkout). None when not set.
+    clock_in_source: str | None = None
+    clock_out_source: str | None = None
 
 
 class ActivityNowRead(BaseModel):

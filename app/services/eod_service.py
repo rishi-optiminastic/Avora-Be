@@ -22,7 +22,7 @@ from app.models.employee import Employee, Role
 from app.models.eod_report import EodReport, EodStatus
 from app.models.notification import NotificationKind
 from app.models.task import Task, TaskStatus
-from app.repositories.activity import ActivityRepository, DailyAgg
+from app.repositories.activity import ActivityRepository, DailyAgg, idle_minutes
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.eod_report import EodReportRepository
@@ -395,6 +395,5 @@ def _worked_summary(agg: DailyAgg | None) -> str:
     if agg is None:
         return "no activity captured"
     worked = max(0, int((agg.logout_at - agg.login_at).total_seconds() // 60))
-    idle = min(worked, agg.idle_seconds // 60)
-    active = max(0, worked - idle)
+    active = max(0, worked - idle_minutes(agg, worked))
     return f"{worked} min on machine, ~{active} min active"
