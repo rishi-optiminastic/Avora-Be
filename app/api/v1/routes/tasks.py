@@ -8,17 +8,27 @@ and we return the schema, never the ORM object (Golden rule #5).
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Header, Query, status
 
-from app.core.deps import CommentRateLimitDep, CurrentUserDep, TaskServiceDep
+from app.core.deps import (
+    CommentRateLimitDep,
+    CurrentUserDep,
+    IdempotencyKeyHeader,
+    IdempotencyServiceDep,
+    TaskServiceDep,
+)
 from app.models.task import TaskCadence, TaskStatus
 from app.schemas.common import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Page
 from app.schemas.task import (
+    CollaboratorAdd,
+    TaskBulkCreate,
     TaskCommentCreate,
     TaskCommentRead,
     TaskCreate,
+    TaskParseRequest,
+    TaskParseResult,
     TaskRead,
     TaskUpdate,
 )
@@ -58,9 +68,71 @@ async def create_task(
     payload: TaskCreate,
     caller: CurrentUserDep,
     service: TaskServiceDep,
-) -> TaskRead:
-    task = await service.create(caller, payload)
-    return TaskRead.model_validate(task)
+    idem: IdempotencyServiceDep,
+    idempotency_key: IdempotencyKeyHeader = None,
+) -> Any:
+    async def _op() -> TaskRead:
+        return TaskRead.model_validate(await service.create(caller, payload))
+
+    return await idem.run(
+        principal_id=caller.employee_id,
+        scope="tasks.create",
+        key=idempotency_key,
+        request=payload,
+        operation=_op,
+        success_status=status.HTTP_201_CREATED,
+    )
+
+
+@router.post("/bulk", response_model=list[TaskRead], status_code=status.HTTP_201_CREATED)
+async def create_tasks_bulk(
+    payload: TaskBulkCreate,
+    caller: CurrentUserDep,
+    service: TaskServiceDep,
+    idem: IdempotencyServiceDep,
+    idempotency_key: IdempotencyKeyHeader = None,
+) -> Any:
+    """Create many tasks at once (paste-import). Manager/admin only; every
+    assignee is authorized server-side. Idempotent on `Idempotency-Key` so a
+    re-submitted paste can't create the whole batch twice."""
+
+    async def _op() -> list[TaskRead]:
+        tasks = await service.create_bulk(caller, payload)
+        return [TaskRead.model_validate(t) for t in tasks]
+
+    return await idem.run(
+        principal_id=caller.employee_id,
+        scope="tasks.bulk",
+        key=idempotency_key,
+        request=payload,
+        operation=_op,
+        success_status=status.HTTP_201_CREATED,
+    )
+
+
+@router.post("/parse", response_model=TaskParseResult)
+async def parse_tasks(
+    payload: TaskParseRequest,
+    caller: CurrentUserDep,
+    service: TaskServiceDep,
+    idem: IdempotencyServiceDep,
+    idempotency_key: IdempotencyKeyHeader = None,
+) -> Any:
+    """Parse a pasted blob into structured tasks (assignees matched to the
+    caller's visible roster). Manager/admin only — nothing is created here.
+    Idempotent on `Idempotency-Key` so a replay returns the first parse instead
+    of paying for the LLM call again."""
+
+    async def _op() -> TaskParseResult:
+        return TaskParseResult(tasks=await service.parse_tasks(caller, payload.text))
+
+    return await idem.run(
+        principal_id=caller.employee_id,
+        scope="tasks.parse",
+        key=idempotency_key,
+        request=payload,
+        operation=_op,
+    )
 
 
 @router.get("/{task_id}", response_model=TaskRead)
@@ -101,6 +173,31 @@ async def delete_task(
     service: TaskServiceDep,
 ) -> None:
     await service.delete(caller, task_id)
+
+
+@router.post("/{task_id}/collaborators", response_model=TaskRead)
+async def add_task_collaborator(
+    task_id: uuid.UUID,
+    payload: CollaboratorAdd,
+    caller: CurrentUserDep,
+    service: TaskServiceDep,
+) -> TaskRead:
+    """Add a collaborator (view + comment-level). Allowed for the assigner, the
+    assignee, or a manager/admin who can see the task and the added person."""
+    task = await service.add_collaborator(caller, task_id, payload.employee_id)
+    return TaskRead.model_validate(task)
+
+
+@router.delete("/{task_id}/collaborators/{employee_id}", response_model=TaskRead)
+async def remove_task_collaborator(
+    task_id: uuid.UUID,
+    employee_id: uuid.UUID,
+    caller: CurrentUserDep,
+    service: TaskServiceDep,
+) -> TaskRead:
+    """Remove a collaborator. Same authority as adding one."""
+    task = await service.remove_collaborator(caller, task_id, employee_id)
+    return TaskRead.model_validate(task)
 
 
 @router.get("/{task_id}/comments", response_model=list[TaskCommentRead])

@@ -11,11 +11,15 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, String
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+
+if TYPE_CHECKING:
+    from app.models.employee import Employee
 
 
 class TaskPriority(StrEnum):
@@ -85,3 +89,19 @@ class Task(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     depends_on_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("tasks.id", ondelete="SET NULL"), default=None, index=True
     )
+
+    # Collaborators get view + comment-level access (the task enters their scope
+    # and they may report progress). Read-only on the Task — membership lives in
+    # task_collaborators and is managed via the repository. selectin-loaded so a
+    # task read carries its collaborator ids without an N+1 round-trip.
+    collaborators: Mapped[list[Employee]] = relationship(
+        secondary="task_collaborators",
+        lazy="selectin",
+        viewonly=True,
+        order_by="Employee.full_name",
+    )
+
+    @property
+    def collaborator_ids(self) -> list[uuid.UUID]:
+        """The collaborator employee ids — surfaced on `TaskRead`."""
+        return [collaborator.id for collaborator in self.collaborators]

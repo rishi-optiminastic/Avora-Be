@@ -18,6 +18,7 @@ from app.models.env_access_token import EnvAccessToken
 from app.models.env_project import EnvMemberRole, EnvProject, EnvProjectMember, EnvVersion
 from app.models.eod_report import EodReport, EodStatus
 from app.models.holiday import Holiday, HolidayType
+from app.models.idempotency_key import IdempotencyKey, IdempotencyStatus
 from app.models.invitation import Invitation, InvitationStatus
 from app.models.leave import Leave, LeaveStatus, LeaveType
 from app.models.leave_comment import LeaveComment
@@ -33,6 +34,7 @@ from app.models.regularization import Regularization, RegularizationStatus
 from app.models.screenshot import OcrStatus, Screenshot
 from app.models.target import Target, TargetPeriod, TargetStatus
 from app.models.task import Task, TaskCadence, TaskPriority, TaskStatus
+from app.models.task_collaborator import TaskCollaborator
 from app.models.task_comment import TaskComment
 from app.models.work_entity import WorkEntity
 from app.models.work_session import WorkSession
@@ -61,6 +63,8 @@ __all__ = [
     "EodStatus",
     "Holiday",
     "HolidayType",
+    "IdempotencyKey",
+    "IdempotencyStatus",
     "Invitation",
     "InvitationStatus",
     "Leave",
@@ -90,6 +94,7 @@ __all__ = [
     "TargetStatus",
     "Task",
     "TaskCadence",
+    "TaskCollaborator",
     "TaskComment",
     "TaskPriority",
     "TaskStatus",

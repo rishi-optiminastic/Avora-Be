@@ -11,6 +11,9 @@ dist/
 .env.*
 !.env.example
 !.env.worker.example
+!.env.prod.example
+# Real production env on the VPS (never commit it).
+deploy/.env.prod
 .venv/
 venv/
 

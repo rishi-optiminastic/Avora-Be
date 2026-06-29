@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, status
 
-from app.core.deps import CategoryRuleServiceDep, CurrentUserDep
+from app.core.deps import (
+    CategoryRuleServiceDep,
+    CurrentUserDep,
+    IdempotencyKeyHeader,
+    IdempotencyServiceDep,
+)
 from app.schemas.category_rule import CategoryRuleCreate, CategoryRuleRead, CategoryRuleUpdate
 
 router = APIRouter(prefix="/category-rules", tags=["category-rules"])
@@ -25,8 +31,20 @@ async def create_category_rule(
     payload: CategoryRuleCreate,
     caller: CurrentUserDep,
     service: CategoryRuleServiceDep,
-) -> CategoryRuleRead:
-    return CategoryRuleRead.model_validate(await service.create(caller, payload))
+    idem: IdempotencyServiceDep,
+    idempotency_key: IdempotencyKeyHeader = None,
+) -> Any:
+    async def _op() -> CategoryRuleRead:
+        return CategoryRuleRead.model_validate(await service.create(caller, payload))
+
+    return await idem.run(
+        principal_id=caller.employee_id,
+        scope="category_rules.create",
+        key=idempotency_key,
+        request=payload,
+        operation=_op,
+        success_status=status.HTTP_201_CREATED,
+    )
 
 
 @router.patch("/{rule_id}", response_model=CategoryRuleRead)

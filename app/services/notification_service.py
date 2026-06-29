@@ -83,3 +83,12 @@ class NotificationService:
             entity_id=entity_id,
             actor_id=actor_id,
         )
+
+    async def recent_count(
+        self, *, recipient_id: uuid.UUID, kind: NotificationKind, within: timedelta
+    ) -> int:
+        """How many notifications of `kind` this recipient received within the
+        window — lets a caller throttle a matching email to one per window."""
+        return await self._notifications.count_kind_since(
+            recipient_id, kind, datetime.now(UTC) - within
+        )

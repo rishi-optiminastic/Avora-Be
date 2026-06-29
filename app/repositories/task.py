@@ -15,9 +15,11 @@ from datetime import datetime
 
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.models.employee import Employee, Role
 from app.models.task import Task, TaskCadence, TaskStatus
+from app.models.task_collaborator import TaskCollaborator
 from app.schemas.auth import CurrentUser
 from app.schemas.task import TaskCreate
 
@@ -35,11 +37,21 @@ class TaskRepository:
         self._session = session
 
     def _scope_clause(self, caller: CurrentUser) -> ColumnElement[bool] | None:
-        """What tasks may THIS caller read? Returns None for unrestricted."""
+        """What tasks may THIS caller read? Returns None for unrestricted.
+
+        Everyone additionally sees any task they collaborate on (view +
+        comment-level access) — that membership is OR-ed into every role's clause.
+        """
         if caller.role in (Role.ADMIN, Role.HR):
             return None
 
         assigned_by_me = Task.assigned_by_id == caller.employee_id
+        # Tasks the caller is a collaborator on — read access regardless of role.
+        i_collaborate = Task.id.in_(
+            select(TaskCollaborator.task_id).where(
+                TaskCollaborator.employee_id == caller.employee_id
+            )
+        )
 
         if caller.role is Role.SENIOR_MANAGER:
             caller_dept = (
@@ -50,7 +62,7 @@ class TaskRepository:
             assignee_dept = (
                 select(Employee.department).where(Employee.id == Task.assignee_id).scalar_subquery()
             )
-            return (assignee_dept == caller_dept) | assigned_by_me
+            return (assignee_dept == caller_dept) | assigned_by_me | i_collaborate
 
         if caller.role is Role.MANAGER:
             assignee_manager = (
@@ -60,10 +72,12 @@ class TaskRepository:
                 (Task.assignee_id == caller.employee_id)
                 | (assignee_manager == caller.employee_id)
                 | assigned_by_me
+                | i_collaborate
             )
 
-        # executive / it_admin / viewer / employee: own tasks (+ anything they assigned).
-        return (Task.assignee_id == caller.employee_id) | assigned_by_me
+        # executive / it_admin / viewer / employee: own tasks (+ anything they
+        # assigned, + anything they collaborate on).
+        return (Task.assignee_id == caller.employee_id) | assigned_by_me | i_collaborate
 
     async def create(self, payload: TaskCreate, *, assigned_by_id: uuid.UUID) -> Task:
         task = Task(
@@ -85,10 +99,66 @@ class TaskRepository:
         )
         self._session.add(task)
         await self._session.flush()
+        # A new task has no collaborators yet — seed the (selectin) collection so
+        # serializing `collaborator_ids` never triggers a lazy load outside async.
+        set_committed_value(task, "collaborators", [])
         return task
+
+    async def create_many(
+        self, payloads: Sequence[TaskCreate], *, assigned_by_id: uuid.UUID
+    ) -> list[Task]:
+        """Insert a batch of tasks (paste-import). Authorization of each assignee
+        happens in the service before this is called."""
+        tasks = [
+            Task(
+                title=payload.title,
+                description=payload.description,
+                assignee_id=payload.assignee_id,
+                assigned_by_id=assigned_by_id,
+                project=payload.project,
+                project_id=payload.project_id,
+                priority=payload.priority,
+                cadence=payload.cadence,
+                start_date=payload.start_date,
+                due_date=payload.due_date,
+                remarks=payload.remarks,
+                expected_output=payload.expected_output,
+                attachments=[a.model_dump() for a in payload.attachments],
+                parent_task_id=payload.parent_task_id,
+                depends_on_id=payload.depends_on_id,
+            )
+            for payload in payloads
+        ]
+        self._session.add_all(tasks)
+        await self._session.flush()
+        for task in tasks:
+            set_committed_value(task, "collaborators", [])
+        return tasks
 
     async def get(self, task_id: uuid.UUID) -> Task | None:
         return await self._session.get(Task, task_id)
+
+    async def is_collaborator(self, task_id: uuid.UUID, employee_id: uuid.UUID) -> bool:
+        row = await self._session.get(TaskCollaborator, (task_id, employee_id))
+        return row is not None
+
+    async def add_collaborator(self, task_id: uuid.UUID, employee_id: uuid.UUID) -> None:
+        """Idempotent — adding an existing collaborator is a no-op."""
+        if await self.is_collaborator(task_id, employee_id):
+            return
+        self._session.add(TaskCollaborator(task_id=task_id, employee_id=employee_id))
+        await self._session.flush()
+
+    async def remove_collaborator(self, task_id: uuid.UUID, employee_id: uuid.UUID) -> None:
+        row = await self._session.get(TaskCollaborator, (task_id, employee_id))
+        if row is not None:
+            await self._session.delete(row)
+            await self._session.flush()
+
+    async def reload_collaborators(self, task: Task) -> None:
+        """Re-read a task's collaborators after a membership change (the relation
+        is read-only/secondary, so it doesn't auto-sync with add/remove)."""
+        await self._session.refresh(task, attribute_names=["collaborators"])
 
     async def get_in_scope(self, caller: CurrentUser, task_id: uuid.UUID) -> Task | None:
         clause = self._scope_clause(caller)

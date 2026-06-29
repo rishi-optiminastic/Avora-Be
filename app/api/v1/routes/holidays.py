@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Query, status
 
-from app.core.deps import CurrentUserDep, HolidayServiceDep
+from app.core.deps import (
+    CurrentUserDep,
+    HolidayServiceDep,
+    IdempotencyKeyHeader,
+    IdempotencyServiceDep,
+)
 from app.schemas.common import MAX_PAGE_SIZE, Page
 from app.schemas.holiday import HolidayCreate, HolidayRead, HolidayUpdate
 
@@ -36,8 +41,20 @@ async def create_holiday(
     payload: HolidayCreate,
     caller: CurrentUserDep,
     service: HolidayServiceDep,
-) -> HolidayRead:
-    return HolidayRead.model_validate(await service.create(caller, payload))
+    idem: IdempotencyServiceDep,
+    idempotency_key: IdempotencyKeyHeader = None,
+) -> Any:
+    async def _op() -> HolidayRead:
+        return HolidayRead.model_validate(await service.create(caller, payload))
+
+    return await idem.run(
+        principal_id=caller.employee_id,
+        scope="holidays.create",
+        key=idempotency_key,
+        request=payload,
+        operation=_op,
+        success_status=status.HTTP_201_CREATED,
+    )
 
 
 @router.patch("/{holiday_id}", response_model=HolidayRead)

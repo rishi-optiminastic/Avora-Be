@@ -78,6 +78,22 @@ class NotificationRepository:
         )
         return int(total or 0)
 
+    async def count_kind_since(
+        self, recipient_id: uuid.UUID, kind: NotificationKind, since: datetime
+    ) -> int:
+        """How many notifications of `kind` this recipient got since `since`.
+        Used to throttle the matching email to one per recipient per window."""
+        total = await self._session.scalar(
+            select(func.count())
+            .select_from(Notification)
+            .where(
+                Notification.recipient_id == recipient_id,
+                Notification.kind == kind,
+                Notification.created_at >= since,
+            )
+        )
+        return int(total or 0)
+
     async def mark_read(
         self, recipient_id: uuid.UUID, notification_id: uuid.UUID, *, now: datetime
     ) -> bool:

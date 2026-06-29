@@ -9,9 +9,16 @@ writes their own list (Golden rule #3).
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, status
 
-from app.core.deps import CurrentUserDep, MeetingServiceDep
+from app.core.deps import (
+    CurrentUserDep,
+    IdempotencyKeyHeader,
+    IdempotencyServiceDep,
+    MeetingServiceDep,
+)
 from app.schemas.meeting import QuickMeetDefaultsRead, QuickMeetDefaultsUpdate, QuickMeetingRead
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
@@ -19,9 +26,22 @@ router = APIRouter(prefix="/meetings", tags=["meetings"])
 
 @router.post("/quick", response_model=QuickMeetingRead, status_code=status.HTTP_201_CREATED)
 async def start_quick_meeting(
-    caller: CurrentUserDep, service: MeetingServiceDep
-) -> QuickMeetingRead:
-    return await service.start_quick(caller)
+    caller: CurrentUserDep,
+    service: MeetingServiceDep,
+    idem: IdempotencyServiceDep,
+    idempotency_key: IdempotencyKeyHeader = None,
+) -> Any:
+    async def _op() -> QuickMeetingRead:
+        return await service.start_quick(caller)
+
+    return await idem.run(
+        principal_id=caller.employee_id,
+        scope="meetings.quick",
+        key=idempotency_key,
+        request={},
+        operation=_op,
+        success_status=status.HTTP_201_CREATED,
+    )
 
 
 @router.get("/quick/defaults", response_model=QuickMeetDefaultsRead)

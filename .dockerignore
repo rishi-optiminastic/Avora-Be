@@ -1,0 +1,45 @@
+# Keep the build context small and—critically—keep secrets and the host venv
+# OUT of the image. The Dockerfile does `COPY . .`, so anything not excluded here
+# is baked into an image layer.
+
+# Secrets — NEVER copy real env files into the image.
+.env
+.env.*
+!.env.example
+!.env.worker.example
+deploy/.env.prod
+
+# Host virtualenv (built for the host OS; the image builds its own with uv).
+.venv/
+venv/
+
+# VCS + CI
+.git/
+.github/
+
+# Tooling caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+htmlcov/
+.coverage
+.coverage.*
+
+# Tests are not needed in the runtime image.
+tests/
+
+# Local build artifacts / editor / OS
+build/
+dist/
+*.egg-info/
+.idea/
+.vscode/
+.DS_Store
+
+# The deploy stack itself doesn't belong inside the app image.
+deploy/
+
+# Sibling components that are not part of the backend image.
+integrations/
