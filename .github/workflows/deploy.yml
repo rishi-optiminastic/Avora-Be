@@ -33,16 +33,25 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up SSH
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
         run: |
+          if [ -z "$VPS_SSH_KEY" ] || [ -z "$VPS_HOST" ] || [ -z "$VPS_USER" ]; then
+            echo "::error::Missing required secret(s). In repo Settings -> Secrets and variables -> Actions -> Repository secrets, set VPS_HOST, VPS_USER, VPS_SSH_KEY."
+            exit 1
+          fi
           mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          # accept-new on the later ssh/rsync handles host key; keyscan is best-effort.
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Rsync code to VPS
         run: |
           rsync -az --delete \
-            -e "ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes" \
+            -e "ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
             --exclude '.git' \
             --exclude '.venv' \
             --exclude '__pycache__' \
@@ -59,6 +68,6 @@ jobs:
         # No shell variables in the remote command — the VPS login shell is zsh,
         # which doesn't word-split them. Repeat the full compose invocation.
         run: |
-          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes \
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new \
             "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
             'cd /opt/avora/be/deploy && docker compose -f docker-compose.prod.yml --env-file .env.prod build && docker compose -f docker-compose.prod.yml --env-file .env.prod up -d db migrate api caddy && docker compose -f docker-compose.prod.yml --env-file .env.prod ps'
