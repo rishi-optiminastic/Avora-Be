@@ -23,14 +23,22 @@ from app.repositories.task import TaskRepository
 from app.repositories.task_comment import TaskCommentRepository
 from app.repositories.work_entity import WorkEntityRepository
 from app.schemas.auth import CurrentUser
-from app.schemas.task import TaskCommentCreate, TaskCreate, TaskUpdate
+from app.schemas.task import (
+    ParsedTask,
+    TaskBulkCreate,
+    TaskCommentCreate,
+    TaskCreate,
+    TaskUpdate,
+)
 from app.services.email_service import EmailError, EmailService
+from app.services.llm_service import LlmError, LlmService
 from app.services.notification_service import NotificationService
 
 logger = get_logger("app.task")
 
 # An assignee updating their OWN task may report progress (move it on the board,
 # update %, note blockers) — but not retitle, reassign, or write the review.
+# Collaborators get the same comment-level write surface (view + progress).
 _ASSIGNEE_EDITABLE = frozenset(
     {"status", "remarks", "completion_pct", "blocked_reason", "attachments"}
 )
@@ -38,6 +46,11 @@ _ASSIGNEE_EDITABLE = frozenset(
 # Window in which an identical comment from the same author is treated as a
 # duplicate of the first (idempotent replay protection on the discussion thread).
 _COMMENT_DEDUP_WINDOW = timedelta(seconds=30)
+
+# At most one task-assignment EMAIL per recipient per this window — so assigning
+# tasks one-by-one doesn't flood an inbox. The in-app notification still fires on
+# every task; only the email is throttled (paste-import sends no email at all).
+_ASSIGNMENT_EMAIL_WINDOW = timedelta(minutes=15)
 
 
 class TaskService:
@@ -50,6 +63,7 @@ class TaskService:
         audit: AuditRepository,
         notifications: NotificationService,
         email: EmailService,
+        llm: LlmService,
     ) -> None:
         self._tasks = tasks
         self._employees = employees
@@ -58,6 +72,7 @@ class TaskService:
         self._audit = audit
         self._notifications = notifications
         self._email = email
+        self._llm = llm
 
     async def _validate_project(self, project_id: uuid.UUID | None) -> None:
         if project_id is None:
@@ -118,9 +133,18 @@ class TaskService:
             actor_id=caller.employee_id,
         )
         # Mirror to email only when a notification was actually delivered (i.e.
-        # not a self-assignment, which notify() drops).
+        # not a self-assignment, which notify() drops) AND we haven't already
+        # emailed this recipient about another task in the throttle window. The
+        # count includes the notification we just created, so >1 means a prior
+        # assignment already triggered an email — keeps one-by-one adds quiet.
         if notified is not None:
-            await self._email_assignment(task, caller)
+            recent = await self._notifications.recent_count(
+                recipient_id=payload.assignee_id,
+                kind=NotificationKind.TASK_ASSIGNED,
+                within=_ASSIGNMENT_EMAIL_WINDOW,
+            )
+            if recent <= 1:
+                await self._email_assignment(task, caller)
         return task
 
     async def _email_assignment(self, task: Task, caller: CurrentUser) -> None:
@@ -144,18 +168,68 @@ class TaskService:
         except EmailError:
             logger.warning("task_assigned_email_failed", extra={"task_id": str(task.id)})
 
+    async def create_bulk(self, caller: CurrentUser, payload: TaskBulkCreate) -> list[Task]:
+        """Create many tasks at once (the paste-import flow). Manager-only, and
+        every assignee is authorized up front — one out-of-scope assignee fails
+        the whole batch (atomic; nothing is created)."""
+        if not caller.is_manager:
+            raise AuthorizationError()
+        for item in payload.tasks:
+            if not await self._employees.can_read(caller, item.assignee_id):
+                raise AuthorizationError()
+            await self._validate_project(item.project_id)
+
+        tasks = await self._tasks.create_many(payload.tasks, assigned_by_id=caller.employee_id)
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="task.create_bulk",
+            target=f"count:{len(tasks)}",
+        )
+        # In-app notify each assignee (self-assignments drop). No email — a paste
+        # of 30 tasks must not fire 30 emails.
+        for task in tasks:
+            await self._notifications.notify(
+                recipient_id=task.assignee_id,
+                kind=NotificationKind.TASK_ASSIGNED,
+                title=f"New task assigned: {task.title}",
+                link=f"/dashboard/goals/tasks?task={task.id}",
+                entity_type="task",
+                entity_id=task.id,
+                actor_id=caller.employee_id,
+            )
+        return tasks
+
+    async def parse_tasks(self, caller: CurrentUser, text: str) -> list[ParsedTask]:
+        """Turn a pasted blob into structured tasks via the LLM. Manager-only; the
+        model only ever sees the caller's VISIBLE roster, so it can't resolve a
+        name to anyone outside the caller's scope."""
+        if not caller.is_manager:
+            raise AuthorizationError()
+        if not self._llm.task_parse_ready:
+            raise ValidationError("Task parsing isn't configured.")
+        roster = [(e.id, e.full_name) for e in await self._employees.all_in_scope(caller)]
+        try:
+            return await self._llm.parse_tasks(text, roster)
+        except LlmError as exc:
+            logger.warning("task_parse_failed")
+            raise ValidationError(
+                "Couldn't read those tasks. Try again or add them manually."
+            ) from exc
+
     async def update(self, caller: CurrentUser, task_id: uuid.UUID, payload: TaskUpdate) -> Task:
         task = await self._tasks.get_in_scope(caller, task_id)
         if task is None:
             raise NotFoundError()
 
         fields = payload.model_dump(exclude_unset=True)
-        # A non-manager can only update tasks assigned TO them, and only their
-        # status/remarks — never retitle, reassign, or change the project.
+        # A non-manager can only report progress (status/remarks/…) on a task they
+        # own OR collaborate on — never retitle, reassign, or change the project.
         if not caller.is_manager:
-            if task.assignee_id != caller.employee_id or not set(fields).issubset(
-                _ASSIGNEE_EDITABLE
-            ):
+            may_report = (
+                task.assignee_id == caller.employee_id
+                or await self._tasks.is_collaborator(task_id, caller.employee_id)
+            )
+            if not may_report or not set(fields).issubset(_ASSIGNEE_EDITABLE):
                 raise AuthorizationError()
         else:
             # Reassignment / re-project must stay valid and within scope.
@@ -208,6 +282,60 @@ class TaskService:
             action="task.delete",
             target=f"task:{task_id}",
         )
+
+    # -- Collaborators -------------------------------------------------------- #
+    async def _task_for_collaborator_change(self, caller: CurrentUser, task_id: uuid.UUID) -> Task:
+        """Fetch a task the caller may change the collaborators of. Only the
+        assigner, the assignee, or a manager/admin who can see it qualifies."""
+        task = await self._tasks.get_in_scope(caller, task_id)
+        if task is None:
+            raise NotFoundError()
+        if not (
+            caller.is_manager
+            or task.assigned_by_id == caller.employee_id
+            or task.assignee_id == caller.employee_id
+        ):
+            raise AuthorizationError()
+        return task
+
+    async def add_collaborator(
+        self, caller: CurrentUser, task_id: uuid.UUID, employee_id: uuid.UUID
+    ) -> Task:
+        task = await self._task_for_collaborator_change(caller, task_id)
+        # The person added must be someone the caller can see.
+        if not await self._employees.can_read(caller, employee_id):
+            raise AuthorizationError()
+        await self._tasks.add_collaborator(task_id, employee_id)
+        await self._tasks.reload_collaborators(task)
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="task.collaborator.add",
+            target=f"task:{task_id}:employee:{employee_id}",
+        )
+        # Tell the new collaborator (self-add is dropped by notify()).
+        await self._notifications.notify(
+            recipient_id=employee_id,
+            kind=NotificationKind.TASK_ASSIGNED,
+            title=f"Added as a collaborator: {task.title}",
+            link=f"/dashboard/goals/tasks?task={task.id}",
+            entity_type="task",
+            entity_id=task.id,
+            actor_id=caller.employee_id,
+        )
+        return task
+
+    async def remove_collaborator(
+        self, caller: CurrentUser, task_id: uuid.UUID, employee_id: uuid.UUID
+    ) -> Task:
+        task = await self._task_for_collaborator_change(caller, task_id)
+        await self._tasks.remove_collaborator(task_id, employee_id)
+        await self._tasks.reload_collaborators(task)
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="task.collaborator.remove",
+            target=f"task:{task_id}:employee:{employee_id}",
+        )
+        return task
 
     # -- Discussion thread ---------------------------------------------------- #
     async def list_comments(self, caller: CurrentUser, task_id: uuid.UUID) -> Sequence[TaskComment]:

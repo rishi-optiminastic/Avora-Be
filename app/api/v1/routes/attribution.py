@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Query, status
 
@@ -12,6 +12,8 @@ from app.core.deps import (
     AttributionCorrectionServiceDep,
     AttributionServiceDep,
     CurrentUserDep,
+    IdempotencyKeyHeader,
+    IdempotencyServiceDep,
 )
 from app.models.attribution_correction import CorrectionStatus
 from app.schemas.attribution import AttributionRead
@@ -37,9 +39,22 @@ async def propose_correction(
     payload: CorrectionCreate,
     caller: CurrentUserDep,
     service: AttributionCorrectionServiceDep,
-) -> CorrectionRead:
+    idem: IdempotencyServiceDep,
+    idempotency_key: IdempotencyKeyHeader = None,
+) -> Any:
     """An employee re-labels their own work to a project (pending manager review)."""
-    return CorrectionRead.model_validate(await service.propose(caller, payload))
+
+    async def _op() -> CorrectionRead:
+        return CorrectionRead.model_validate(await service.propose(caller, payload))
+
+    return await idem.run(
+        principal_id=caller.employee_id,
+        scope="attribution.corrections",
+        key=idempotency_key,
+        request=payload,
+        operation=_op,
+        success_status=status.HTTP_201_CREATED,
+    )
 
 
 @router.get("/corrections", response_model=list[CorrectionRead])

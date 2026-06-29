@@ -39,6 +39,7 @@ from app.repositories.employee import EmployeeRepository
 from app.repositories.envsync import EnvSyncRepository
 from app.repositories.eod_report import EodReportRepository
 from app.repositories.holiday import HolidayRepository
+from app.repositories.idempotency import IdempotencyRepository
 from app.repositories.invitation import InvitationRepository
 from app.repositories.leave import LeaveRepository
 from app.repositories.leave_comment import LeaveCommentRepository
@@ -77,6 +78,7 @@ from app.services.envsync_service import EnvSyncService
 from app.services.eod_service import EodService
 from app.services.holiday_service import HolidayService
 from app.services.hr_service import HRService
+from app.services.idempotency import IdempotencyService
 from app.services.invitation_service import InvitationService
 from app.services.leave_policy_service import LeavePolicyService
 from app.services.leave_service import LeaveService
@@ -144,6 +146,24 @@ def get_audit_repo(db: DbDep) -> AuditRepository:
 
 def get_invitation_repo(db: DbDep) -> InvitationRepository:
     return InvitationRepository(db)
+
+
+def get_idempotency_repo(db: DbDep) -> IdempotencyRepository:
+    return IdempotencyRepository(db)
+
+
+def get_idempotency_service(
+    repo: Annotated[IdempotencyRepository, Depends(get_idempotency_repo)],
+) -> IdempotencyService:
+    return IdempotencyService(repo)
+
+
+IdempotencyServiceDep = Annotated[IdempotencyService, Depends(get_idempotency_service)]
+
+# Opt-in replay protection. A route reads this header and hands it to
+# IdempotencyService.run(...); absent (None) means no protection (back-compat).
+# The param name maps to the `Idempotency-Key` request header.
+IdempotencyKeyHeader = Annotated[str | None, Header(max_length=64)]
 
 
 def get_task_repo(db: DbDep) -> TaskRepository:
@@ -501,8 +521,9 @@ def get_task_service(
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
     notifications: Annotated[NotificationService, Depends(get_notification_service)],
     email: Annotated[EmailService, Depends(get_email_service)],
+    llm: Annotated[LlmService, Depends(get_llm_service)],
 ) -> TaskService:
-    return TaskService(tasks, employees, entities, comments, audit, notifications, email)
+    return TaskService(tasks, employees, entities, comments, audit, notifications, email, llm)
 
 
 def get_target_service(

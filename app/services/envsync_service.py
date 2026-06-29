@@ -80,9 +80,7 @@ class EnvSyncService:
             raise AuthorizationError("You have read-only access to this project.")
         return member
 
-    async def _require_owner(
-        self, caller: EnvPrincipal, project_id: uuid.UUID
-    ) -> EnvProjectMember:
+    async def _require_owner(self, caller: EnvPrincipal, project_id: uuid.UUID) -> EnvProjectMember:
         member = await self._require_member(caller, project_id)
         if member.role is not EnvMemberRole.OWNER:
             raise AuthorizationError("Only an owner can manage collaborators.")
@@ -171,7 +169,8 @@ class EnvSyncService:
             raise NotFoundError("That person is not a collaborator on this project.")
         if target.role is EnvMemberRole.OWNER:
             owners = [
-                m for m, _ in await self._repo.list_members(project_id)
+                m
+                for m, _ in await self._repo.list_members(project_id)
                 if m.role is EnvMemberRole.OWNER
             ]
             if len(owners) <= 1:

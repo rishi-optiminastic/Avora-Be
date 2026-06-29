@@ -10,10 +10,18 @@ Routes only parse input, call the service, and return a response schema.
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from fastapi import APIRouter
 
-from app.core.deps import AdminDep, AdminOrHrDep, AuthIdentityDep, InvitationServiceDep
+from app.core.deps import (
+    AdminDep,
+    AdminOrHrDep,
+    AuthIdentityDep,
+    IdempotencyKeyHeader,
+    IdempotencyServiceDep,
+    InvitationServiceDep,
+)
 from app.schemas.employee import EmployeeRead
 from app.schemas.invitation import (
     InvitationAccept,
@@ -32,18 +40,31 @@ async def create_invitation(
     payload: InvitationCreate,
     admin: AdminDep,
     service: InvitationServiceDep,
-) -> InvitationCreated:
+    idem: IdempotencyServiceDep,
+    idempotency_key: IdempotencyKeyHeader = None,
+) -> Any:
     """Admin-only: invite a person at a role and email them the link (rule 5.5)."""
-    invitation, accept_url = await service.create(
-        admin, email=payload.email, role=payload.role, department=payload.department
-    )
-    return InvitationCreated(
-        id=invitation.id,
-        email=invitation.email,
-        role=invitation.role,
-        department=invitation.department,
-        accept_url=accept_url,
-        expires_at=invitation.expires_at,
+
+    async def _op() -> InvitationCreated:
+        invitation, accept_url = await service.create(
+            admin, email=payload.email, role=payload.role, department=payload.department
+        )
+        return InvitationCreated(
+            id=invitation.id,
+            email=invitation.email,
+            role=invitation.role,
+            department=invitation.department,
+            accept_url=accept_url,
+            expires_at=invitation.expires_at,
+        )
+
+    return await idem.run(
+        principal_id=admin.employee_id,
+        scope="invitations.create",
+        key=idempotency_key,
+        request=payload,
+        operation=_op,
+        success_status=201,
     )
 
 
@@ -59,16 +80,28 @@ async def resend_invitation(
     invitation_id: uuid.UUID,
     admin: AdminDep,
     service: InvitationServiceDep,
-) -> InvitationCreated:
+    idem: IdempotencyServiceDep,
+    idempotency_key: IdempotencyKeyHeader = None,
+) -> Any:
     """Admin-only: re-issue and re-email a pending invite (old link is revoked)."""
-    invitation, accept_url = await service.resend(admin, invitation_id=invitation_id)
-    return InvitationCreated(
-        id=invitation.id,
-        email=invitation.email,
-        role=invitation.role,
-        department=invitation.department,
-        accept_url=accept_url,
-        expires_at=invitation.expires_at,
+
+    async def _op() -> InvitationCreated:
+        invitation, accept_url = await service.resend(admin, invitation_id=invitation_id)
+        return InvitationCreated(
+            id=invitation.id,
+            email=invitation.email,
+            role=invitation.role,
+            department=invitation.department,
+            accept_url=accept_url,
+            expires_at=invitation.expires_at,
+        )
+
+    return await idem.run(
+        principal_id=admin.employee_id,
+        scope="invitations.resend",
+        key=idempotency_key,
+        request={"invitation_id": str(invitation_id)},
+        operation=_op,
     )
 
 

@@ -1,0 +1,24 @@
+# Caddy reverse proxy with automatic HTTPS (Let's Encrypt).
+# DOMAIN and ACME_EMAIL are injected from .env.prod at container start.
+#
+# Caddy obtains + renews the TLS cert for $DOMAIN automatically; you only need a
+# DNS A record for $DOMAIN pointing at this VPS's public IP, and ports 80+443
+# open. HTTP is redirected to HTTPS by default.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode gzip
+
+	# Forward everything to the API container on the internal network.
+	reverse_proxy api:8000
+
+	# Caddy already sets sensible defaults; the app also emits its own security
+	# headers (HSTS, X-Frame-Options, ...) via SecurityHeadersMiddleware.
+	log {
+		output stdout
+		format console
+	}
+}

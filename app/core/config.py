@@ -182,6 +182,20 @@ class Settings(BaseSettings):
     def eod_configured(self) -> bool:
         return bool(self.eod_enabled and self.openrouter_api_key and self.eod_model)
 
+    # Task paste-import parsing (OpenRouter LLM) -----------------------------
+    # Turns a pasted blob ("Tushar -\n  do X\n  do Y\nGeneral -\n  do Z") into
+    # structured tasks with assignees matched to the caller's visible roster.
+    # Falls back to the EOD model so it works wherever EOD is already configured.
+    task_parse_model: str = ""
+
+    @property
+    def effective_task_parse_model(self) -> str:
+        return self.task_parse_model or self.eod_model
+
+    @property
+    def task_parse_configured(self) -> bool:
+        return bool(self.openrouter_api_key and self.effective_task_parse_model)
+
     # CORS -------------------------------------------------------------------
     cors_origins: str = "http://localhost:3000"
 

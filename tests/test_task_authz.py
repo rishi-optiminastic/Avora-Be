@@ -225,3 +225,165 @@ async def test_non_assigner_cannot_delete(
         f"/api/v1/tasks/{task['id']}", headers=auth_headers(settings, seed.report)
     )
     assert resp.status_code == 403
+
+
+# -- Bulk create (paste-import) --------------------------------------------- #
+
+
+async def test_manager_can_bulk_create(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    body = {
+        "tasks": [
+            _new_task(str(seed.report.id), "Bulk one"),
+            _new_task(str(seed.manager.id), "Bulk two"),
+        ]
+    }
+    resp = await client.post(
+        "/api/v1/tasks/bulk", json=body, headers=auth_headers(settings, seed.manager)
+    )
+    assert resp.status_code == 201, resp.text
+    created = resp.json()
+    assert {t["title"] for t in created} == {"Bulk one", "Bulk two"}
+
+
+async def test_employee_cannot_bulk_create(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    body = {"tasks": [_new_task(str(seed.report.id))]}
+    resp = await client.post(
+        "/api/v1/tasks/bulk", json=body, headers=auth_headers(settings, seed.report)
+    )
+    assert resp.status_code == 403
+
+
+async def test_bulk_create_is_atomic_on_out_of_scope_assignee(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    # One in-scope (report) + one out-of-scope (outsider) -> whole batch rejected,
+    # and nothing is created.
+    body = {
+        "tasks": [
+            _new_task(str(seed.report.id), "Should not persist"),
+            _new_task(str(seed.outsider.id), "Out of scope"),
+        ]
+    }
+    resp = await client.post(
+        "/api/v1/tasks/bulk", json=body, headers=auth_headers(settings, seed.manager)
+    )
+    assert resp.status_code == 403
+    listing = await client.get("/api/v1/tasks", headers=auth_headers(settings, seed.manager))
+    assert listing.json()["total"] == 0
+
+
+# -- Free-text parse -------------------------------------------------------- #
+
+
+async def test_parse_requires_manager(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    resp = await client.post(
+        "/api/v1/tasks/parse",
+        json={"text": "Remy -\n  do a thing"},
+        headers=auth_headers(settings, seed.report),
+    )
+    assert resp.status_code == 403
+
+
+# (Parsing past the manager gate calls OpenRouter — covered by the manager-gate
+# test above; we don't exercise the live model in the unit suite.)
+
+
+# -- Collaborators ---------------------------------------------------------- #
+
+
+async def test_collaborator_gains_visibility_and_progress_rights(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    task = await _create_as(client, settings, seed.manager, str(seed.report.id))
+    # Outsider can't see the task yet.
+    assert (
+        await client.get(
+            f"/api/v1/tasks/{task['id']}", headers=auth_headers(settings, seed.outsider)
+        )
+    ).status_code == 404
+
+    # Admin (sees everyone) adds the outsider as a collaborator.
+    added = await client.post(
+        f"/api/v1/tasks/{task['id']}/collaborators",
+        json={"employee_id": str(seed.outsider.id)},
+        headers=auth_headers(settings, seed.admin),
+    )
+    assert added.status_code == 200, added.text
+    assert str(seed.outsider.id) in added.json()["collaborator_ids"]
+
+    # Now the outsider can read it...
+    assert (
+        await client.get(
+            f"/api/v1/tasks/{task['id']}", headers=auth_headers(settings, seed.outsider)
+        )
+    ).status_code == 200
+    # ...report progress (status)...
+    status_patch = await client.patch(
+        f"/api/v1/tasks/{task['id']}",
+        json={"status": "in_progress"},
+        headers=auth_headers(settings, seed.outsider),
+    )
+    assert status_patch.status_code == 200
+    # ...but NOT retitle it.
+    title_patch = await client.patch(
+        f"/api/v1/tasks/{task['id']}",
+        json={"title": "Hijacked"},
+        headers=auth_headers(settings, seed.outsider),
+    )
+    assert title_patch.status_code == 403
+
+
+async def test_remove_collaborator_revokes_visibility(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    task = await _create_as(client, settings, seed.manager, str(seed.report.id))
+    await client.post(
+        f"/api/v1/tasks/{task['id']}/collaborators",
+        json={"employee_id": str(seed.outsider.id)},
+        headers=auth_headers(settings, seed.admin),
+    )
+    removed = await client.delete(
+        f"/api/v1/tasks/{task['id']}/collaborators/{seed.outsider.id}",
+        headers=auth_headers(settings, seed.admin),
+    )
+    assert removed.status_code == 200
+    assert str(seed.outsider.id) not in removed.json()["collaborator_ids"]
+    # Access is gone again.
+    assert (
+        await client.get(
+            f"/api/v1/tasks/{task['id']}", headers=auth_headers(settings, seed.outsider)
+        )
+    ).status_code == 404
+
+
+async def test_cannot_add_collaborator_to_invisible_task(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    task = await _create_as(client, settings, seed.manager, str(seed.report.id))
+    # Outsider can't see the task, so they can't manage its collaborators (404 so
+    # we never reveal the task exists).
+    resp = await client.post(
+        f"/api/v1/tasks/{task['id']}/collaborators",
+        json={"employee_id": str(seed.report.id)},
+        headers=auth_headers(settings, seed.outsider),
+    )
+    assert resp.status_code == 404
+
+
+async def test_manager_cannot_add_out_of_scope_collaborator(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    task = await _create_as(client, settings, seed.manager, str(seed.report.id))
+    # The manager can see the task but not the outsider -> can't add them.
+    resp = await client.post(
+        f"/api/v1/tasks/{task['id']}/collaborators",
+        json={"employee_id": str(seed.outsider.id)},
+        headers=auth_headers(settings, seed.manager),
+    )
+    assert resp.status_code == 403

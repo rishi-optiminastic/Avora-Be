@@ -96,5 +96,53 @@ class TaskRead(ORMModel):
     escalated: bool
     parent_task_id: uuid.UUID | None
     depends_on_id: uuid.UUID | None
+    collaborator_ids: list[uuid.UUID] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+
+# -- Bulk create ------------------------------------------------------------ #
+
+# A paste can hold a lot of lines; cap it so one request can't create thousands
+# of rows. Matches the page-size ceiling elsewhere in the API.
+MAX_BULK_TASKS = 100
+
+
+class TaskBulkCreate(BaseModel):
+    """Create many tasks in one call (the paste-import flow). Each item is a
+    normal `TaskCreate`, so every task still names an assignee the caller can see
+    — 'general' tasks are assigned to the caller on the client before sending."""
+
+    tasks: list[TaskCreate] = Field(min_length=1, max_length=MAX_BULK_TASKS)
+
+
+# -- Free-text parsing (LLM) ------------------------------------------------ #
+
+# The pasted blob. Generous but bounded — never feed an unbounded string to the
+# model, and never echo it back in logs.
+MAX_PARSE_CHARS = 8000
+
+
+class TaskParseRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=MAX_PARSE_CHARS)
+
+
+class ParsedTask(BaseModel):
+    """One task the model pulled out of the paste. `assignee_id` is resolved to a
+    real employee in the caller's scope when a name header matched; otherwise it
+    is null (the client defaults it to the caller / lets the user pick)."""
+
+    title: str = Field(min_length=1, max_length=256)
+    assignee_id: uuid.UUID | None = None
+    assignee_name: str | None = Field(default=None, max_length=128)
+
+
+class TaskParseResult(BaseModel):
+    tasks: list[ParsedTask]
+
+
+# -- Collaborators ---------------------------------------------------------- #
+
+
+class CollaboratorAdd(BaseModel):
+    employee_id: uuid.UUID

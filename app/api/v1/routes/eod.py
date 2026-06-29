@@ -10,12 +10,18 @@ from __future__ import annotations
 import secrets
 import uuid
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Header, Query
 from pydantic import BaseModel
 
-from app.core.deps import CurrentUserDep, EodServiceDep, SettingsDep
+from app.core.deps import (
+    CurrentUserDep,
+    EodServiceDep,
+    IdempotencyKeyHeader,
+    IdempotencyServiceDep,
+    SettingsDep,
+)
 from app.core.exceptions import NotFoundError
 from app.schemas.eod import EodReportRead, EodReportUpdate
 
@@ -72,9 +78,24 @@ async def approve_report(
 
 
 @router.post("/generate", response_model=int)
-async def generate_reports(caller: CurrentUserDep, service: EodServiceDep) -> int:
+async def generate_reports(
+    caller: CurrentUserDep,
+    service: EodServiceDep,
+    idem: IdempotencyServiceDep,
+    idempotency_key: IdempotencyKeyHeader = None,
+) -> Any:
     """Admin-only manual trigger — generate today's drafts. Returns count created."""
-    return await service.generate_for_day(caller, datetime.now(UTC))
+
+    async def _op() -> int:
+        return await service.generate_for_day(caller, datetime.now(UTC))
+
+    return await idem.run(
+        principal_id=caller.employee_id,
+        scope="eod.generate",
+        key=idempotency_key,
+        request={},
+        operation=_op,
+    )
 
 
 @router.post("/cron", response_model=EodTickResult)

@@ -1,0 +1,133 @@
+# Production stack for a single Hetzner VPS.
+#
+#   caddy ──TLS──> api (uvicorn)
+#                  ├── db        (self-hosted Postgres + named volume)
+#                  ├── migrate   (one-shot: alembic upgrade head, runs before api)
+#                  └── workers   ocr · eod · payroll · auto-checkout
+#
+# Build then start:
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod build
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+#
+# All app containers share ONE image (avora-pms-api:latest), built once from the
+# `api` service; the schedulers + migrate just re-run it with a different command.
+# The OCR worker is a separate slim image (bundles Tesseract).
+#
+# Nothing but caddy publishes a host port — db/api are reachable only on the
+# internal `avora` network.
+
+# Shared config for every container that runs the FastAPI app image.
+x-app-image: &app-image
+  image: avora-pms-api:latest
+  env_file: .env.prod
+  restart: unless-stopped
+  depends_on:
+    db:
+      condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
+  networks: [avora]
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    # POSTGRES_* come from .env.prod. The password here MUST match the one inside
+    # DATABASE_URL (also in .env.prod) — they describe the same database.
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [avora]
+
+  # One-shot: bring the schema to head BEFORE the api/workers start. Exits 0 on
+  # success; `service_completed_successfully` gates everything else on that.
+  migrate:
+    image: avora-pms-api:latest
+    env_file: .env.prod
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [avora]
+
+  api:
+    <<: *app-image
+    # The ONLY service with a build section — it produces avora-pms-api:latest,
+    # which every other app container reuses. Context is the backend root (..).
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    # Single uvicorn process on purpose: the rate limiter is in-process, so
+    # multiple workers wouldn't share its buckets. Scale out later with Redis.
+    # (Default CMD in the image already runs uvicorn on 0.0.0.0:8000.)
+    expose:
+      - "8000"
+    healthcheck:
+      test:
+        ["CMD", "python", "-c",
+         "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/v1/healthz').status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  scheduler-eod:
+    <<: *app-image
+    command: ["python", "-m", "worker.eod_scheduler"]
+
+  scheduler-payroll:
+    <<: *app-image
+    command: ["python", "-m", "worker.payroll_scheduler"]
+
+  scheduler-autocheckout:
+    <<: *app-image
+    command: ["python", "-m", "worker.auto_checkout_scheduler"]
+
+  # Standalone slim image (Tesseract). Talks to Postgres + S3 directly; no app
+  # code, so it only needs db (not migrate). Reads DATABASE_URL + AWS_* from env.
+  worker-ocr:
+    build:
+      context: ../worker
+      dockerfile: Dockerfile
+    image: avora-ocr-worker:latest
+    env_file: .env.prod
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [avora]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    # Caddy reads {$DOMAIN} / {$ACME_EMAIL} from the env file at runtime and
+    # auto-provisions a Let's Encrypt cert for DOMAIN.
+    env_file: .env.prod
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+    networks: [avora]
+
+networks:
+  avora:
+    driver: bridge
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

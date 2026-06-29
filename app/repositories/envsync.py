@@ -67,9 +67,7 @@ class EnvSyncRepository:
         self._session.add(project)
         await self._session.flush()
         self._session.add(
-            EnvProjectMember(
-                project_id=project.id, employee_id=owner_id, role=EnvMemberRole.OWNER
-            )
+            EnvProjectMember(project_id=project.id, employee_id=owner_id, role=EnvMemberRole.OWNER)
         )
         await self._session.flush()
         return project
@@ -169,9 +167,7 @@ class EnvSyncRepository:
         )
         return list(result.scalars().all())
 
-    async def get_token(
-        self, token_id: uuid.UUID, employee_id: uuid.UUID
-    ) -> EnvAccessToken | None:
+    async def get_token(self, token_id: uuid.UUID, employee_id: uuid.UUID) -> EnvAccessToken | None:
         result = await self._session.execute(
             select(EnvAccessToken).where(
                 EnvAccessToken.id == token_id,

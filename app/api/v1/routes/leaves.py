@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Query, status
 
 from app.core.deps import (
     CommentRateLimitDep,
     CurrentUserDep,
+    IdempotencyKeyHeader,
+    IdempotencyServiceDep,
     LeavePolicyServiceDep,
     LeaveServiceDep,
 )
@@ -86,8 +88,20 @@ async def apply_leave(
     payload: LeaveCreate,
     caller: CurrentUserDep,
     service: LeaveServiceDep,
-) -> LeaveRead:
-    return LeaveRead.model_validate(await service.apply(caller, payload))
+    idem: IdempotencyServiceDep,
+    idempotency_key: IdempotencyKeyHeader = None,
+) -> Any:
+    async def _op() -> LeaveRead:
+        return LeaveRead.model_validate(await service.apply(caller, payload))
+
+    return await idem.run(
+        principal_id=caller.employee_id,
+        scope="leaves.create",
+        key=idempotency_key,
+        request=payload,
+        operation=_op,
+        success_status=status.HTTP_201_CREATED,
+    )
 
 
 @router.get("/{leave_id}", response_model=LeaveRead)

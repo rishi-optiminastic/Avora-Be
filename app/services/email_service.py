@@ -127,9 +127,7 @@ class EmailService:
         )
         await self.send(to=to, subject=subject, html=html)
 
-    async def send_agent_reinstall(
-        self, *, to: str, employee_name: str, link_path: str
-    ) -> None:
+    async def send_agent_reinstall(self, *, to: str, employee_name: str, link_path: str) -> None:
         subject, html = agent_reinstall_email(
             employee_name=employee_name,
             install_url=self._absolute(link_path),

@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Query, status
 
-from app.core.deps import CurrentUserDep, TargetServiceDep
+from app.core.deps import (
+    CurrentUserDep,
+    IdempotencyKeyHeader,
+    IdempotencyServiceDep,
+    TargetServiceDep,
+)
 from app.models.target import TargetPeriod, TargetStatus
 from app.schemas.common import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Page
 from app.schemas.target import TargetCreate, TargetRead, TargetUpdate
@@ -38,8 +43,20 @@ async def create_target(
     payload: TargetCreate,
     caller: CurrentUserDep,
     service: TargetServiceDep,
-) -> TargetRead:
-    return TargetRead.model_validate(await service.create(caller, payload))
+    idem: IdempotencyServiceDep,
+    idempotency_key: IdempotencyKeyHeader = None,
+) -> Any:
+    async def _op() -> TargetRead:
+        return TargetRead.model_validate(await service.create(caller, payload))
+
+    return await idem.run(
+        principal_id=caller.employee_id,
+        scope="targets.create",
+        key=idempotency_key,
+        request=payload,
+        operation=_op,
+        success_status=status.HTTP_201_CREATED,
+    )
 
 
 @router.get("/{target_id}", response_model=TargetRead)
