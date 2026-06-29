@@ -153,9 +153,16 @@ class Settings(BaseSettings):
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     eod_model: str = ""  # OpenRouter model id, e.g. "anthropic/claude-sonnet-4.5"
     eod_enabled: bool = False
-    eod_report_hour: int = 18  # local hour (attendance-policy tz) to generate drafts
+    # Two local (attendance-policy tz, = IST for this org) clock times:
+    #  • DRAFT at 16:30 — generate each present employee's draft and notify them
+    #    to review/edit; it auto-sends at the send time.
+    #  • SEND at 18:00 — email the (edited-or-as-is) report to manager + admins.
+    # The 16:30→18:00 gap is the employee's review window.
+    eod_report_hour: int = 16  # local hour drafts are generated
+    eod_report_minute: int = 30  # local minute drafts are generated (→ 4:30 PM IST)
+    eod_send_hour: int = 18  # local hour drafts auto-send to manager+admins
+    eod_send_minute: int = 0  # local minute (→ 6:00 PM IST)
     eod_ocr_char_budget: int = 12000  # cap concatenated OCR text fed to the LLM
-    eod_auto_send_after_hours: int = 16  # unreviewed drafts auto-send after this
     eod_concurrency: int = 5  # max simultaneous LLM calls when generating drafts
 
     # Auto-checkout: a worker closes work sessions left open past the office
@@ -165,6 +172,11 @@ class Settings(BaseSettings):
     auto_checkout_enabled: bool = False
     auto_checkout_tick_seconds: int = 900  # 15 min between sweeps
     auto_checkout_idle_grace_minutes: int = 30  # quiet this long ⇒ treat PC as off
+    # Don't auto-close TODAY's forgotten sessions until this local time (5:00 PM),
+    # independent of the attendance work-end — gives people an hour after office
+    # hours before the system steps in. Prior days are always closed.
+    auto_checkout_hour: int = 17
+    auto_checkout_minute: int = 0
 
     # Monitoring retention: prune `activity_samples` and `screenshots` (with their
     # S3 blobs) older than this many days — nothing else is deleted. Both run once

@@ -13,11 +13,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-# Load POSTGRES_USER / POSTGRES_DB from the prod env file.
-set -a
-# shellcheck disable=SC1091
-source .env.prod
-set +a
+# Read only the two values we need. We deliberately DON'T `source .env.prod` —
+# it contains unquoted multi-word values (e.g. the SA private key) that would
+# break bash parsing.
+POSTGRES_USER="$(grep -E '^POSTGRES_USER=' .env.prod | cut -d= -f2-)"
+POSTGRES_DB="$(grep -E '^POSTGRES_DB=' .env.prod | cut -d= -f2-)"
 
 RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-14}"
 COMPOSE="docker compose -f docker-compose.prod.yml --env-file .env.prod"

@@ -1,0 +1,64 @@
+# Auto-deploy the backend to the Hetzner VPS on every push to main.
+#
+# Flow: checkout -> rsync the repo to /opt/avora/be on the VPS -> rebuild images
+# -> `up -d` (the one-shot `migrate` runs `alembic upgrade head` before api/caddy
+# restart). The server's secrets file (deploy/.env.prod) is NEVER touched by CI —
+# it lives only on the VPS and is excluded from the sync.
+#
+# One-time setup — add these in GitHub:
+#   Settings -> Secrets and variables -> Actions -> New repository secret
+#     VPS_SSH_KEY   the PRIVATE key whose public half is in the VPS's
+#                   authorized_keys (the deploy key created during setup;
+#                   `cat ~/.ssh/avora_deploy` on the Mac that deployed).
+#     VPS_HOST      65.21.186.55
+#     VPS_USER      root
+#
+# To deploy a worker too, add its service name to the `up -d` line at the bottom.
+
+name: deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.VPS_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Rsync code to VPS
+        run: |
+          rsync -az --delete \
+            -e "ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes" \
+            --exclude '.git' \
+            --exclude '.venv' \
+            --exclude '__pycache__' \
+            --exclude '*.pyc' \
+            --exclude '.mypy_cache' \
+            --exclude '.ruff_cache' \
+            --exclude '.pytest_cache' \
+            --exclude 'tests' \
+            --exclude 'deploy/.env.prod' \
+            --exclude 'deploy/backups' \
+            ./ "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/avora/be/"
+
+      - name: Build & restart on VPS
+        # No shell variables in the remote command — the VPS login shell is zsh,
+        # which doesn't word-split them. Repeat the full compose invocation.
+        run: |
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes \
+            "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            'cd /opt/avora/be/deploy && docker compose -f docker-compose.prod.yml --env-file .env.prod build && docker compose -f docker-compose.prod.yml --env-file .env.prod up -d db migrate api caddy && docker compose -f docker-compose.prod.yml --env-file .env.prod ps'
