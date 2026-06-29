@@ -171,9 +171,10 @@ class EodService:
         # Phase 2 — summarise concurrently; the LLM is network-bound, so bound the fan-out.
         drafts = await self._summarise_all(contexts)
         # Phase 3 — persist (DB; sequential).
+        send_label = await self._send_time_label()
         created = 0
         for employee, draft in zip(present, drafts, strict=True):
-            created += await self._persist_draft(employee, report_date, draft)
+            created += await self._persist_draft(employee, report_date, draft, send_label)
         return created
 
     async def _summarise_all(self, contexts: list[str]) -> list[EodDraftContent | None]:
@@ -192,7 +193,11 @@ class EodService:
         return await asyncio.gather(*(summarise(c) for c in contexts))
 
     async def _persist_draft(
-        self, employee: Employee, report_date: str, draft: EodDraftContent | None
+        self,
+        employee: Employee,
+        report_date: str,
+        draft: EodDraftContent | None,
+        send_label: str,
     ) -> int:
         if draft is None:
             await self._reports.create(
@@ -214,8 +219,11 @@ class EodService:
         await self._notifications.notify(
             recipient_id=employee.id,
             kind=NotificationKind.SYSTEM,
-            title="Your End-of-Day report is ready to review",
-            body="Review and approve today's summary before it goes to your manager.",
+            title="Your End-of-Day report is drafted",
+            body=(
+                "Review and edit it if you want — it'll be sent to your manager "
+                f"automatically at {send_label}."
+            ),
             link=_EOD_LINK,
             entity_type="eod_report",
             entity_id=report.id,
@@ -223,17 +231,20 @@ class EodService:
         return 1
 
     async def run_due(self, now: datetime) -> tuple[int, int, int, int]:
-        """One scheduler tick: generate drafts once we're past the report hour,
-        sweep overdue drafts, and once a day prune old monitoring data. Returns
+        """One scheduler tick (local-tz gated): generate drafts once we're past the
+        DRAFT time (16:30), auto-send drafts to manager+admins once past the SEND
+        time (18:00), and once a day prune old monitoring data. Returns
         (drafts_created, drafts_sent, activity_rows_purged, screenshots_purged).
         Shared by the worker loop and the free-tier cron endpoint."""
-        hour = await self.local_hour(now)
+        local_dt = await self._local_dt(now)
+        minutes = local_dt.hour * 60 + local_dt.minute
         generated = 0
-        if hour >= self._settings.eod_report_hour:
+        draft_at = self._settings.eod_report_hour * 60 + self._settings.eod_report_minute
+        if minutes >= draft_at:
             generated = await self.generate_for_day(SYSTEM_CALLER, now)
-        sent = await self.auto_send_overdue(now)
+        sent = await self.auto_send_due(now, local_dt)
         purged_activity = purged_shots = 0
-        if hour == self._settings.activity_purge_hour:
+        if local_dt.hour == self._settings.activity_purge_hour:
             purged_activity = await self.purge_old_activity(now)
             purged_shots = await self.purge_old_screenshots(now)
         return generated, sent, purged_activity, purged_shots
@@ -253,13 +264,21 @@ class EodService:
             await storage.delete_objects(await self._screenshots.object_keys_before(cutoff))
         return await self._screenshots.purge_before(cutoff)
 
-    async def auto_send_overdue(self, now: datetime) -> int:
-        """Send drafts left unreviewed past the cutoff, as-is. Returns count sent.
+    async def auto_send_due(self, now: datetime, local_dt: datetime) -> int:
+        """Send drafts that are due to managers+admins, as-is. Returns count sent.
+
+        Today's drafts are sent only once the local SEND time (18:00) has passed —
+        that 16:30→18:00 gap is the employee's review window. Drafts from earlier
+        days are always overdue and sent regardless of the current time.
 
         Recipients are resolved in bulk up front (admins once, all report owners +
         their managers in two batched lookups) — no per-report DB calls."""
-        cutoff = now - timedelta(hours=self._settings.eod_auto_send_after_hours)
-        overdue = await self._reports.list_overdue_drafts(cutoff)
+        minutes = local_dt.hour * 60 + local_dt.minute
+        send_at = self._settings.eod_send_hour * 60 + self._settings.eod_send_minute
+        today = local_dt.date()
+        # Past the send time → include today; otherwise only earlier days.
+        through = today if minutes >= send_at else today - timedelta(days=1)
+        overdue = await self._reports.list_drafts_through(through.isoformat())
         if not overdue:
             return 0
         admins = await self._employees.list_by_role(Role.ADMIN)
@@ -360,10 +379,20 @@ class EodService:
         ]
         return "\n".join(lines)
 
-    async def local_hour(self, now: datetime) -> int:
-        """Current hour in the org's attendance-policy timezone (scheduler gate)."""
+    async def _local_dt(self, now: datetime) -> datetime:
+        """`now` in the org's attendance-policy timezone (the scheduler clock)."""
         spec = await self._policy.spec()
-        return now.astimezone(ZoneInfo(spec.timezone)).hour
+        return now.astimezone(ZoneInfo(spec.timezone))
+
+    async def _send_time_label(self) -> str:
+        """Human label for the auto-send time, e.g. '6:00 PM IST' — shown to the
+        employee so they know their review deadline."""
+        spec = await self._policy.spec()
+        tz = ZoneInfo(spec.timezone)
+        when = datetime(
+            2000, 1, 1, self._settings.eod_send_hour, self._settings.eod_send_minute, tzinfo=tz
+        )
+        return when.strftime("%-I:%M %p %Z")
 
     async def _local_date(self, now: datetime) -> str:
         spec = await self._policy.spec()

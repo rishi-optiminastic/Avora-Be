@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -15,6 +16,7 @@ from app.core.config import Settings
 from app.models.activity import ActivitySample
 from app.models.employee import Role
 from app.models.eod_report import EodReport, EodStatus
+from app.models.notification import Notification
 from app.models.screenshot import Screenshot
 from app.repositories.activity import ActivityRepository
 from app.repositories.attendance_policy import AttendancePolicyRepository
@@ -262,6 +264,56 @@ async def test_approve_emails_manager_and_admin(
     assert result.status == "sent"
     # manager + admin, never the employee themselves.
     assert set(email.sent) == {"manager@corp.test", "admin@corp.test"}
+
+
+async def test_auto_send_respects_the_6pm_window(
+    db: AsyncSession, seed: _Seed, settings: Settings
+) -> None:
+    tz = ZoneInfo("Asia/Kolkata")
+    now = datetime.now(UTC)
+    before = datetime(2026, 6, 29, 17, 0, tzinfo=tz)  # 5:00 PM IST — before send time
+    after = datetime(2026, 6, 29, 18, 30, tzinfo=tz)  # 6:30 PM IST — past send time
+    today = before.date().isoformat()
+    yesterday = (before.date() - timedelta(days=1)).isoformat()
+    for report_date in (today, yesterday):
+        db.add(
+            EodReport(
+                employee_id=seed.report.id,
+                report_date=report_date,
+                status=EodStatus.DRAFT,
+                summary="x",
+                highlights={},
+            )
+        )
+    await db.commit()
+
+    service = _build_service(db, settings, llm=_StubLlm(), email=_CapturingEmail())
+
+    # Before 6 PM only the earlier day's draft is overdue; today's waits.
+    assert await service.auto_send_due(now, before) == 1
+    # After 6 PM today's draft is sent too.
+    assert await service.auto_send_due(now, after) == 1
+    rows = (
+        (await db.execute(select(EodReport).where(EodReport.employee_id == seed.report.id)))
+        .scalars()
+        .all()
+    )
+    assert all(r.status is EodStatus.SENT for r in rows)
+
+
+async def test_draft_notice_tells_employee_the_auto_send_time(
+    db: AsyncSession, seed: _Seed, settings: Settings
+) -> None:
+    await _add_activity(db, seed)
+    service = _build_service(db, settings, llm=_StubLlm(), email=_CapturingEmail())
+    assert await service.generate_for_day(_admin_caller(seed), datetime.now(UTC)) == 1
+
+    note = (
+        await db.execute(select(Notification).where(Notification.recipient_id == seed.report.id))
+    ).scalar_one()
+    assert "drafted" in note.title.lower()
+    # The employee is told it auto-sends (the exact time label is tz-derived).
+    assert "automatically at" in (note.body or "")
 
 
 async def _seed_draft(db: AsyncSession, seed: _Seed) -> uuid.UUID:

@@ -16,7 +16,7 @@ dist/
 deploy/.env.prod
 .venv/
 venv/
-
+.cmd
 # uv
 .uv/
 

@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -67,13 +66,17 @@ class EodReportRepository:
         )
         return rows.scalars().all()
 
-    async def list_overdue_drafts(self, cutoff: datetime) -> Sequence[EodReport]:
-        """Drafts created before `cutoff` and still awaiting review (auto-send)."""
+    async def list_drafts_through(self, through_date: str) -> Sequence[EodReport]:
+        """Drafts for `report_date` on or before `through_date` (local YYYY-MM-DD)
+        still awaiting review — the auto-send set. ISO dates sort lexicographically,
+        so the string compare is chronological."""
         rows = await self._session.execute(
-            select(EodReport).where(
+            select(EodReport)
+            .where(
                 EodReport.status == EodStatus.DRAFT,
-                EodReport.created_at < cutoff,
+                EodReport.report_date <= through_date,
             )
+            .order_by(EodReport.report_date)
         )
         return rows.scalars().all()
 

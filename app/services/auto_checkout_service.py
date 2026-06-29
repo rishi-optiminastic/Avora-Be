@@ -1,8 +1,9 @@
 """Auto-checkout — close work sessions someone forgot to clock out of.
 
 A session left open (no clock-out) would otherwise accumulate "worked" time
-forever (the 195h bug). After the office window closes, this finds open sessions
-whose PC has gone quiet (no activity for the idle grace ⇒ the machine is off),
+forever (the 195h bug). After the auto-checkout trigger time (5 PM local, a
+buffer past the office window), this finds open sessions whose PC has gone quiet
+(no activity for the idle grace ⇒ the machine is off),
 stamps the clock-out at that last-activity time (≈ when the PC turned off),
 marks it `clock_out_source="auto"`, and emails the person. Prior-day sessions
 still open are always closed. Runs from `worker/auto_checkout_scheduler.py`.
@@ -62,10 +63,16 @@ class AutoCheckoutService:
         today = now_local.date()
         now_minute = now_local.hour * 60 + now_local.minute
 
+        # We hold off on today's sessions until the configured trigger time (5 PM
+        # local), separate from the attendance work-end used for the fallback stamp.
+        trigger_minute = (
+            self._settings.auto_checkout_hour * 60 + self._settings.auto_checkout_minute
+        )
+
         closed = 0
         for session in open_sessions:
             checkout = await self._checkout_time(
-                session, tz, today, now, now_minute, spec.work_end_minute
+                session, tz, today, now, now_minute, spec.work_end_minute, trigger_minute
             )
             if checkout is None:
                 continue  # not due yet (today, still within hours or PC still active)
@@ -91,6 +98,7 @@ class AutoCheckoutService:
         now: datetime,
         now_minute: int,
         work_end_minute: int,
+        trigger_minute: int,
     ) -> datetime | None:
         """When to clock this open session out, or None if it isn't due yet."""
         cin = _aware(session.clock_in_at)
@@ -109,8 +117,8 @@ class AutoCheckoutService:
         last_seen = _aware(agg.logout_at) if agg is not None else None
 
         if local_date == today:
-            if now_minute < work_end_minute:
-                return None  # still inside the office window — don't cut anyone off
+            if now_minute < trigger_minute:
+                return None  # before the trigger time (5 PM) — give them the buffer
             grace = timedelta(minutes=self._settings.auto_checkout_idle_grace_minutes)
             if last_seen is not None and (now - last_seen) < grace:
                 return None  # PC still active → person is still working
