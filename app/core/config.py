@@ -184,6 +184,11 @@ class Settings(BaseSettings):
     activity_retention_days: int = 30
     screenshot_retention_days: int = 30
     activity_purge_hour: int = 3
+    # Personal browsing privacy: the ONE employee (by work email) allowed to
+    # curate a personal list of domains that are hidden from the Browsing tab for
+    # everyone — a deliberately single-owner escape hatch, not an org feature.
+    # Empty disables the capability entirely (no one can manage a hidden list).
+    private_browsing_owner_email: str = "tech1@optiminastic.com"
     # Shared secret for the external-cron trigger (POST /eod/cron) — lets a free
     # scheduler (GitHub Actions, cron-job.org) run the tick without a user JWT,
     # for hosts (e.g. Render free) that can't run an always-on worker. Endpoint

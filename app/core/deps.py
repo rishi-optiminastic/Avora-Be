@@ -31,6 +31,7 @@ from app.repositories.activity import ActivityRepository
 from app.repositories.attendance_policy import AttendancePolicyRepository
 from app.repositories.attribution_correction import AttributionCorrectionRepository
 from app.repositories.audit import AuditRepository
+from app.repositories.browsing_hidden_domain import BrowsingHiddenDomainRepository
 from app.repositories.category_rule import CategoryRuleRepository
 from app.repositories.compensation import CompensationRepository
 from app.repositories.device import DeviceRepository
@@ -67,6 +68,7 @@ from app.services.attendance_service import AttendanceService
 from app.services.attribution_correction_service import AttributionCorrectionService
 from app.services.attribution_service import AttributionService
 from app.services.biometric_service import BiometricService
+from app.services.browsing_privacy_service import BrowsingPrivacyService
 from app.services.category_rule_service import CategoryRuleService
 from app.services.compensation_service import CompensationService
 from app.services.dashboard_service import DashboardService
@@ -206,6 +208,10 @@ def get_category_rule_repo(db: DbDep) -> CategoryRuleRepository:
     return CategoryRuleRepository(db)
 
 
+def get_browsing_hidden_domain_repo(db: DbDep) -> BrowsingHiddenDomainRepository:
+    return BrowsingHiddenDomainRepository(db)
+
+
 def get_attribution_correction_repo(db: DbDep) -> AttributionCorrectionRepository:
     return AttributionCorrectionRepository(db)
 
@@ -299,8 +305,18 @@ def get_monitoring_service(
     activity: Annotated[ActivityRepository, Depends(get_activity_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     rules: Annotated[CategoryRuleRepository, Depends(get_category_rule_repo)],
+    hidden: Annotated[BrowsingHiddenDomainRepository, Depends(get_browsing_hidden_domain_repo)],
 ) -> MonitoringService:
-    return MonitoringService(activity, employees, rules)
+    return MonitoringService(activity, employees, rules, hidden)
+
+
+def get_browsing_privacy_service(
+    hidden: Annotated[BrowsingHiddenDomainRepository, Depends(get_browsing_hidden_domain_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    settings: SettingsDep,
+) -> BrowsingPrivacyService:
+    return BrowsingPrivacyService(hidden, employees, audit, settings)
 
 
 def get_org_settings_service(
@@ -630,6 +646,7 @@ ActivityServiceDep = Annotated[ActivityService, Depends(get_activity_service)]
 DeviceServiceDep = Annotated[DeviceService, Depends(get_device_service)]
 AgentNudgeServiceDep = Annotated[AgentNudgeService, Depends(get_agent_nudge_service)]
 MonitoringServiceDep = Annotated[MonitoringService, Depends(get_monitoring_service)]
+BrowsingPrivacyServiceDep = Annotated[BrowsingPrivacyService, Depends(get_browsing_privacy_service)]
 AttendancePolicyServiceDep = Annotated[
     AttendancePolicyService, Depends(get_attendance_policy_service)
 ]

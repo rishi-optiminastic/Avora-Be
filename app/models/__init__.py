@@ -9,6 +9,7 @@ from app.models.attendance_policy import AttendancePolicy
 from app.models.attribution_correction import AttributionCorrection, CorrectionStatus
 from app.models.audit import AuditLog
 from app.models.base import Base
+from app.models.browsing_hidden_domain import BrowsingHiddenDomain
 from app.models.category_rule import CategoryRule
 from app.models.compensation import Compensation, PayPeriod
 from app.models.device import Device
@@ -46,6 +47,7 @@ __all__ = [
     "AttributionCorrection",
     "AuditLog",
     "Base",
+    "BrowsingHiddenDomain",
     "CategoryRule",
     "Compensation",
     "CorrectionStatus",

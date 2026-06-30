@@ -16,6 +16,7 @@ from app.core.exceptions import NotFoundError
 from app.models.activity import ActivitySample
 from app.models.employee import Employee
 from app.repositories.activity import IDLE_SAMPLE_SECONDS, ActivityRepository
+from app.repositories.browsing_hidden_domain import BrowsingHiddenDomainRepository
 from app.repositories.category_rule import CategoryRuleRepository
 from app.repositories.employee import EmployeeRepository
 from app.schemas.auth import CurrentUser
@@ -41,10 +42,19 @@ class MonitoringService:
         activity: ActivityRepository,
         employees: EmployeeRepository,
         rules: CategoryRuleRepository,
+        hidden: BrowsingHiddenDomainRepository,
     ) -> None:
         self._activity = activity
         self._employees = employees
         self._rules = rules
+        self._hidden = hidden
+
+    @staticmethod
+    def _is_hidden(domain: str, hidden: set[str]) -> bool:
+        # Suffix match (label boundary), so hiding "facebook.com" also hides
+        # "adsmanager.facebook.com". Stored domains are already lowercased.
+        d = domain.lower()
+        return any(d == h or d.endswith("." + h) for h in hidden)
 
     @staticmethod
     def _day_bounds(day: datetime) -> tuple[datetime, datetime]:
@@ -132,9 +142,21 @@ class MonitoringService:
         ids = [e.id for e in employees]
         start, end = self._day_bounds(day)
         by_domain = await self._activity.browsing_by_domain(ids, start, end)
+        # An employee's own hidden domains are dropped from EVERY viewer's read —
+        # the domain and its time vanish entirely (no chip, no count, no tell).
+        hidden = await self._hidden.domains_for_employees(ids)
         resolver = await self._resolver()
         return [
-            self._browsing_row(e.id, by_domain.get(e.id, []), resolver, e.department)
+            self._browsing_row(
+                e.id,
+                [
+                    (d, c)
+                    for d, c in by_domain.get(e.id, [])
+                    if not self._is_hidden(d, hidden.get(e.id, set()))
+                ],
+                resolver,
+                e.department,
+            )
             for e in employees
         ]
 

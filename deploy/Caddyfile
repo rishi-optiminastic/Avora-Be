@@ -12,8 +12,11 @@
 {$DOMAIN} {
 	encode gzip
 
-	# Forward everything to the API container on the internal network.
-	reverse_proxy api:8000
+	# Forward to the API by its UNAMBIGUOUS container name, not the `api` network
+	# alias — another stack (circle-be-api) is attached to this Docker network with
+	# the same `api` alias, so `api:8000` round-robins onto the wrong app. The
+	# explicit container name only ever resolves to our PMS api.
+	reverse_proxy deploy-api-1:8000
 
 	# Caddy already sets sensible defaults; the app also emits its own security
 	# headers (HSTS, X-Frame-Options, ...) via SecurityHeadersMiddleware.
