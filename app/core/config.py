@@ -165,6 +165,27 @@ class Settings(BaseSettings):
     eod_ocr_char_budget: int = 12000  # cap concatenated OCR text fed to the LLM
     eod_concurrency: int = 5  # max simultaneous LLM calls when generating drafts
 
+    # EOD vision — opt-in. When on, a few representative screenshots per employee
+    # per day are sent to a vision-capable model to extract on-screen work context
+    # (apps, projects, what they're doing), which is merged with OCR text into the
+    # EOD draft. This is a deliberate change from text-only: screenshot *images*
+    # now leave to the model for these sampled frames. Off by default; the per-frame
+    # result is cached on the row so a re-run never re-bills vision.
+    eod_vision_enabled: bool = False
+    eod_vision_model: str = ""  # vision-capable OpenRouter id; falls back to eod_model
+    eod_vision_sample_max: int = 8  # representative frames analyzed per employee/day
+
+    @property
+    def effective_eod_vision_model(self) -> str:
+        return self.eod_vision_model or self.eod_model
+
+    @property
+    def eod_vision_active(self) -> bool:
+        """Vision can run: the switch is on, plus an API key and a (vision) model."""
+        return bool(
+            self.eod_vision_enabled and self.openrouter_api_key and self.effective_eod_vision_model
+        )
+
     # Auto-checkout: a worker closes work sessions left open past the office
     # window (someone forgot to check out), stamping the time their PC last showed
     # activity (≈ when it turned off) and emailing them. "PC is off" = no activity

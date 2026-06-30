@@ -19,6 +19,7 @@ Env:
 from __future__ import annotations
 
 import io
+import json
 import logging
 import os
 import time
@@ -35,7 +36,14 @@ log = logging.getLogger("ocr_worker")
 BATCH = int(os.getenv("OCR_BATCH", "3"))
 IDLE_SLEEP = float(os.getenv("OCR_IDLE_SLEEP", "2"))
 MAX_CHARS = int(os.getenv("OCR_MAX_CHARS", "20000"))
-MIN_DIMENSION = 1600  # upscale smaller captures so text is legible to Tesseract
+# Upscale each region (a single monitor, not the whole multi-monitor strip) so
+# small code/UI text crosses Tesseract's legibility floor. Keyed off the region's
+# longest side after cropping, so a wide-but-short ultrawide panel still gets help.
+MIN_DIMENSION = int(os.getenv("OCR_MIN_DIMENSION", "2200"))
+# LSTM engine (--oem 1), automatic page segmentation (--psm 3), keep word spacing.
+TESS_CONFIG = os.getenv("OCR_TESSERACT_CONFIG", "--oem 1 --psm 3 -c preserve_interword_spaces=1")
+# Pillow ≥9.1 moved resampling filters under Image.Resampling; fall back for older.
+_LANCZOS = getattr(Image, "Resampling", Image).LANCZOS
 # Liveness heartbeat — this loop spins every ~2s, so throttle the ping. Self-
 # contained (the OCR image bundles only this file), so it's inlined, not shared
 # with worker/heartbeat.py. Pinged only on a healthy cycle, so a DB outage alerts.
@@ -96,32 +104,78 @@ def _dsn() -> str:
     return url.replace("ssl=require", "sslmode=require")
 
 
-def _preprocess(data: bytes) -> Image.Image:
-    """Grayscale + upscale to improve OCR accuracy on UI text."""
-    img = ImageOps.exif_transpose(Image.open(io.BytesIO(data))).convert("L")
-    longest = max(img.size)
+def _coerce_monitors(value: Any) -> list[list[int]] | None:
+    """Per-monitor rects [[x,y,w,h], …] from the JSON column (psycopg2 usually hands
+    back a list already; tolerate a raw string too). None ⇒ OCR the whole image."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return None
+    return value if isinstance(value, list) and value else None
+
+
+def _regions(img: Image.Image, monitors: list[list[int]] | None) -> list[Image.Image]:
+    """Split the combined capture into one crop per monitor (clamped to the image
+    bounds; slivers ignored), or the whole image when there's no usable metadata.
+    Per-monitor crops let Tesseract segment one coherent layout at a time instead of
+    two unrelated side-by-side desktops, which it handles much better."""
+    if monitors:
+        crops: list[Image.Image] = []
+        for rect in monitors:
+            if not (isinstance(rect, (list, tuple)) and len(rect) == 4):
+                continue
+            try:
+                x, y, w, h = (int(v) for v in rect)
+            except (TypeError, ValueError):
+                continue
+            x0, y0 = max(0, x), max(0, y)
+            x1, y1 = min(img.width, x + w), min(img.height, y + h)
+            if x1 - x0 >= 200 and y1 - y0 >= 120:  # ignore slivers / bad rects
+                crops.append(img.crop((x0, y0, x1, y1)))
+        if crops:
+            return crops
+    return [img]
+
+
+def _preprocess(region: Image.Image) -> Image.Image:
+    """Grayscale + contrast-stretch + upscale ONE region so Tesseract reads small
+    text. Upscaling keys off the region's longest side (post-crop), so a single
+    monitor is enlarged even when the combined strip was already wide."""
+    out = ImageOps.autocontrast(region.convert("L"), cutoff=1)
+    longest = max(out.size)
     if longest and longest < MIN_DIMENSION:
         scale = MIN_DIMENSION / longest
-        img = img.resize((round(img.width * scale), round(img.height * scale)))
-    return img
+        out = out.resize((round(out.width * scale), round(out.height * scale)), _LANCZOS)
+    return out
 
 
-def _ocr(image: bytes) -> str:
-    text = pytesseract.image_to_string(_preprocess(image))
-    return " ".join(text.split())[:MAX_CHARS]
+def _ocr(image: bytes, monitors: list[list[int]] | None) -> str:
+    """OCR each monitor region and join with blank lines so per-screen context stays
+    grouped. Whitespace within a region is collapsed; the whole result is capped."""
+    base = ImageOps.exif_transpose(Image.open(io.BytesIO(image)))
+    chunks: list[str] = []
+    for region in _regions(base, monitors):
+        text = pytesseract.image_to_string(_preprocess(region), config=TESS_CONFIG)
+        cleaned = " ".join(text.split())
+        if cleaned:
+            chunks.append(cleaned)
+    return "\n".join(chunks)[:MAX_CHARS]
 
 
 def _process_batch(conn: psycopg2.extensions.connection) -> int:
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id, object_key, image FROM screenshots "
+            "SELECT id, object_key, image, monitors FROM screenshots "
             "WHERE ocr_status = 'PENDING' ORDER BY received_at ASC LIMIT %s",
             (BATCH,),
         )
         rows = cur.fetchall()
-        for row_id, object_key, image in rows:
+        for row_id, object_key, image, monitors in rows:
             try:
-                text = _ocr(_load_image(object_key, image))
+                text = _ocr(_load_image(object_key, image), _coerce_monitors(monitors))
                 cur.execute(
                     "UPDATE screenshots SET ocr_text = %s, ocr_status = 'DONE' WHERE id = %s",
                     (text, row_id),

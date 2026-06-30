@@ -22,6 +22,7 @@ from app.repositories.device import DeviceRepository
 from app.repositories.employee import EmployeeRepository
 from app.schemas.activity import ActivityIngest
 from app.schemas.auth import CurrentDevice
+from app.services.monitoring_gate import MonitoringGateService
 
 
 class ActivityService:
@@ -32,12 +33,22 @@ class ActivityService:
         activity: ActivityRepository,
         employees: EmployeeRepository,
         audit: AuditRepository,
+        gate: MonitoringGateService,
     ) -> None:
         self._settings = settings
         self._devices = devices
         self._activity = activity
         self._employees = employees
         self._audit = audit
+        self._gate = gate
+
+    async def _advance_device(self, device: CurrentDevice, seq: int, at: datetime) -> None:
+        """Keep the per-device sequence monotonic + mark it alive (also after a
+        dropped sample, so replay protection holds and the device still looks up)."""
+        db_device = await self._devices.get(device.device_id)
+        if db_device is not None:
+            await self._devices.advance_sequence(db_device, seq)
+            await self._devices.touch_last_seen(db_device, at)
 
     def _flags(self, payload: ActivityIngest, received_at: datetime) -> list[str]:
         flags: list[str] = []
@@ -62,8 +73,16 @@ class ActivityService:
             raise ReplayError()
 
         received_at = datetime.now(UTC)
-        flags = self._flags(payload, received_at)
 
+        # Privacy: stop storing activity once the employee has deliberately checked
+        # out for the day (until they clock back in). The device may keep sending;
+        # we advance its sequence + mark it alive, but store nothing. WFH/agent-only
+        # employees (no formal checkout) are never suppressed. See MonitoringGate.
+        if await self._gate.is_checked_out(device.employee_id):
+            await self._advance_device(device, payload.sequence, received_at)
+            return None
+
+        flags = self._flags(payload, received_at)
         sample = await self._activity.add_sample(
             device_id=device.device_id,
             employee_id=device.employee_id,
@@ -79,9 +98,5 @@ class ActivityService:
         )
 
         # Advance the high-water mark + mark the device seen, only after insert.
-        db_device = await self._devices.get(device.device_id)
-        if db_device is not None:
-            await self._devices.advance_sequence(db_device, payload.sequence)
-            await self._devices.touch_last_seen(db_device, received_at)
-
+        await self._advance_device(device, payload.sequence, received_at)
         return sample

@@ -17,6 +17,7 @@ from app.repositories.attendance_policy import AttendancePolicyRepository
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.eod_report import EodReportRepository
+from app.repositories.eod_settings import EodSettingsRepository
 from app.repositories.notification import NotificationRepository
 from app.repositories.regularization import RegularizationRepository
 from app.repositories.screenshot import ScreenshotRepository
@@ -24,8 +25,9 @@ from app.repositories.task import TaskRepository
 from app.repositories.work_session import WorkSessionRepository
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.attendance_service import AttendanceService
-from app.services.eod_service import SYSTEM_CALLER, EodService
 from app.services.email_service import EmailService
+from app.services.eod_service import SYSTEM_CALLER, EodService
+from app.services.eod_settings_service import EodSettingsService
 from app.services.llm_service import LlmService
 from app.services.notification_service import NotificationService
 
@@ -33,7 +35,8 @@ from app.services.notification_service import NotificationService
 async def main() -> None:
     settings = get_settings()
     async with SessionFactory() as s:
-        policy = AttendancePolicyService(AttendancePolicyRepository(s), AuditRepository(s))
+        audit = AuditRepository(s)
+        policy = AttendancePolicyService(AttendancePolicyRepository(s), audit)
         attendance = AttendanceService(
             EmployeeRepository(s),
             ActivityRepository(s),
@@ -52,19 +55,23 @@ async def main() -> None:
             LlmService(settings),
             EmailService(settings),
             NotificationService(NotificationRepository(s)),
-            AuditRepository(s),
+            audit,
+            EodSettingsService(EodSettingsRepository(s), audit, settings),
             settings,
         )
 
         now = datetime.now(UTC)
-        start, end = await eod._day_bounds(now)  # noqa: SLF001
+        start, end = await eod._day_bounds(now)
         statuses = {
             a.employee_id: a.status for a in await eod._attendance.daily(SYSTEM_CALLER, now)
-        }  # noqa: SLF001
+        }
         employees = await EmployeeRepository(s).all_in_scope(SYSTEM_CALLER)
 
+        # Vision is skipped in preview (keeps it cheap); pass an empty screen block.
         for e in employees:
-            ctx = await eod._build_context(SYSTEM_CALLER, e, start, end)  # noqa: SLF001
+            ctx, _metrics, _has_signal = await eod._build_context(
+                SYSTEM_CALLER, e, start, end, ""
+            )
             print("\n" + "=" * 78)
             print(f"{e.full_name}  ·  attendance={statuses.get(e.id)}")
             print("=" * 78)
@@ -72,9 +79,9 @@ async def main() -> None:
             print(ctx.strip() or "(empty)")
             print("\n---- EOD DRAFT (model output) ----")
             try:
-                draft = await eod._llm.generate_eod(ctx)  # noqa: SLF001
+                draft = await eod._llm.generate_eod(ctx)
                 print(draft.model_dump_json(indent=2))
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 print(f"(LLM error: {exc})")
     await engine.dispose()
 

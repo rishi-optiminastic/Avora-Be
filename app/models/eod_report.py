@@ -46,6 +46,9 @@ class EodReport(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     summary: Mapped[str] = mapped_column(Text, default="")
     edited_summary: Mapped[str | None] = mapped_column(Text, default=None)
     highlights: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    # Day metrics shown on the email's stat card (worked_minutes, active_minutes,
+    # tasks_done) — captured at generation so the send path never recomputes.
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     model: Mapped[str | None] = mapped_column(String(128), default=None)
     error: Mapped[str | None] = mapped_column(String(512), default=None)
 

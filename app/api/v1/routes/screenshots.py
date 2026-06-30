@@ -33,6 +33,24 @@ def _parse_captured_at(value: str | None) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
 
 
+def _parse_monitors(value: str | None) -> list[list[int]]:
+    """Parse the agent's `X-Monitors` header — `x,y,w,h;x,y,w,h;…` — into rects.
+    Best-effort: malformed entries are skipped; the service re-validates against the
+    image bounds. Absent/blank ⇒ [] (the whole image is treated as one screen)."""
+    if not value:
+        return []
+    rects: list[list[int]] = []
+    for part in value.split(";"):
+        nums = part.split(",")
+        if len(nums) != 4:
+            continue
+        try:
+            rects.append([int(n) for n in nums])
+        except ValueError:
+            continue
+    return rects
+
+
 @router.post("", response_model=ScreenshotRead, status_code=status.HTTP_202_ACCEPTED)
 async def upload_screenshot(
     request: Request,
@@ -42,6 +60,7 @@ async def upload_screenshot(
     x_captured_at: Annotated[str | None, Header()] = None,
     x_width: Annotated[int, Header()] = 0,
     x_height: Annotated[int, Header()] = 0,
+    x_monitors: Annotated[str | None, Header()] = None,
 ) -> ScreenshotRead | JSONResponse:
     image = await request.body()  # same bytes get_current_device already HMAC-verified
     shot = await service.ingest(
@@ -51,6 +70,7 @@ async def upload_screenshot(
         width=x_width,
         height=x_height,
         image=image,
+        monitors=_parse_monitors(x_monitors),
     )
     if shot is None:  # employee is in PERSONAL mode — accepted but not stored
         return JSONResponse(

@@ -22,6 +22,7 @@ from app.models.screenshot import Screenshot
 from app.repositories.employee import EmployeeRepository
 from app.repositories.screenshot import ScreenshotRepository
 from app.schemas.auth import CurrentDevice, CurrentUser
+from app.services.monitoring_gate import MonitoringGateService
 
 logger = get_logger("app.screenshot")
 
@@ -39,10 +40,12 @@ class ScreenshotService:
         screenshots: ScreenshotRepository,
         employees: EmployeeRepository,
         settings: Settings,
+        gate: MonitoringGateService,
     ) -> None:
         self._screenshots = screenshots
         self._employees = employees
         self._settings = settings
+        self._gate = gate
 
     async def ingest(
         self,
@@ -53,7 +56,14 @@ class ScreenshotService:
         width: int,
         height: int,
         image: bytes,
+        monitors: list[list[int]] | None = None,
     ) -> Screenshot | None:
+        # Privacy: drop screenshots once the employee has deliberately checked out
+        # for the day (until they clock back in) — before any S3 upload. WFH /
+        # agent-only employees are never suppressed. See MonitoringGate.
+        if await self._gate.is_checked_out(device.employee_id):
+            return None
+
         # Capture is always on (work mode) — the personal-mode pause was removed.
         if content_type not in ALLOWED_TYPES:
             raise ValidationError("Unsupported image type.")
@@ -91,6 +101,7 @@ class ScreenshotService:
             byte_size=len(image),
             object_key=object_key,
             image=stored_image,
+            monitors=_sanitize_monitors(monitors, width, height),
             flags=flags,
         )
 
@@ -111,3 +122,38 @@ class ScreenshotService:
         if self._settings.s3_enabled:
             await storage.delete_objects(await self._screenshots.object_keys_before(cutoff))
         return await self._screenshots.purge_before(cutoff)
+
+
+# Agent-reported, therefore untrusted (rule 5.1): keep only well-formed rectangles
+# that fit inside the claimed image, cap the count, and drop everything otherwise.
+# Used by the OCR worker to crop per-monitor; a bad rect there just means we skip
+# the crop, never a crash — but validate at the edge regardless.
+_MAX_MONITORS = 16
+
+
+def _sanitize_monitors(
+    monitors: list[list[int]] | None, width: int, height: int
+) -> list[list[int]]:
+    if not monitors:
+        return []
+    clean: list[list[int]] = []
+    for rect in monitors:
+        if not isinstance(rect, (list, tuple)) or len(rect) != 4:
+            continue
+        try:
+            x, y, w, h = (int(v) for v in rect)
+        except (TypeError, ValueError):
+            continue
+        if x < 0 or y < 0 or w <= 0 or h <= 0:
+            continue
+        # Clamp (don't drop) rects that overshoot by rounding so a monitor is never
+        # silently lost; an origin fully outside the image is unusable, so skip it.
+        if width > 0 and height > 0:
+            if x >= width or y >= height:
+                continue
+            w = min(w, width - x)
+            h = min(h, height - y)
+        clean.append([x, y, w, h])
+        if len(clean) >= _MAX_MONITORS:
+            break
+    return clean
