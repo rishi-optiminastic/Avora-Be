@@ -24,33 +24,40 @@ from app.core.payroll import (
     prorate_net,
     weekdays_in_month,
 )
+from app.core.payslip_pdf import PayslipPdfData, render_payslip_pdf
 from app.models.compensation import Compensation, PayPeriod
 from app.models.employee import Employee, Role
 from app.models.leave import LeaveType
 from app.models.payroll_run import PayrollRun, PayrollRunSource
 from app.models.payroll_settings import PayrollSettings
+from app.models.payslip import Payslip
 from app.repositories.audit import AuditRepository
 from app.repositories.compensation import CompensationRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.holiday import HolidayRepository
 from app.repositories.leave import LeaveRepository
+from app.repositories.org_settings import OrgSettingsRepository
 from app.repositories.payroll_run import PayrollRunRepository
 from app.repositories.payroll_settings import PayrollSettingsRepository
+from app.repositories.payslip import PayslipRepository
 from app.schemas.attendance_report import AttendanceMonthSummary
 from app.schemas.auth import CurrentUser
 from app.schemas.payroll import (
     PayrollEstimateRead,
+    PayrollFinalizeResult,
     PayrollLineRead,
     PayrollRunRead,
     PayrollSettingsRead,
     PayrollSettingsUpdate,
     PayslipRead,
+    PayslipSummaryRead,
+    ReleasedPayslipRead,
     SalaryBreakdownRead,
     parse_recipients,
 )
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.attendance_service import AttendanceService
-from app.services.email_service import EmailService
+from app.services.email_service import EmailError, EmailService
 from app.services.email_templates import payroll_digest_email
 
 # A non-human caller for the scheduler. Admin scope = whole active org; the
@@ -97,23 +104,27 @@ class PayrollService:
         self,
         settings_repo: PayrollSettingsRepository,
         runs: PayrollRunRepository,
+        payslips: PayslipRepository,
         compensation: CompensationRepository,
         employees: EmployeeRepository,
         attendance: AttendanceService,
         policy: AttendancePolicyService,
         leaves: LeaveRepository,
         holidays: HolidayRepository,
+        orgs: OrgSettingsRepository,
         email: EmailService,
         audit: AuditRepository,
     ) -> None:
         self._settings_repo = settings_repo
         self._runs = runs
+        self._payslips = payslips
         self._compensation = compensation
         self._employees = employees
         self._attendance = attendance
         self._policy = policy
         self._leaves = leaves
         self._holidays = holidays
+        self._orgs = orgs
         self._email = email
         self._audit = audit
 
@@ -300,6 +311,171 @@ class PayrollService:
             missing_compensation=line.missing_compensation,
         )
 
+    # ---- finalize + released payslips (self-service) ----------------------- #
+    def _authorize_self_or_manage(
+        self, caller: CurrentUser, employee_id: uuid.UUID | None
+    ) -> uuid.UUID:
+        """Resolve the target employee and enforce self-or-HR access (mirrors
+        compensation): an employee may read their own payslips; HR/Admin may read
+        anyone's. Anything else is a 403 — pay is need-to-know, no manager carve-out."""
+        target = employee_id or caller.employee_id
+        if not _can_manage(caller) and caller.employee_id != target:
+            raise AuthorizationError()
+        return target
+
+    async def finalize(self, caller: CurrentUser, month: str | None) -> PayrollFinalizeResult:
+        """HR/Admin releases a month: freeze each employee's slip into a `Payslip`
+        snapshot and email everyone their PDF. Once released, employees can see and
+        re-download that month. Re-running refreshes the snapshots (e.g. after an
+        attendance fix). Employees with no compensation on file are skipped."""
+        if not _can_manage(caller):
+            raise AuthorizationError()
+        est = await self.estimate(caller, month)
+        released, emailed, skipped = await self._release_from_estimate(est, actor=caller)
+        total_net = sum(line.net_minor for line in est.lines if not line.missing_compensation)
+        await self._runs.upsert(
+            period_month=est.month,
+            currency=est.currency,
+            total_net_minor=total_net,
+            employee_count=released,
+            recipients="",
+            source=PayrollRunSource.MANUAL,
+            triggered_by=caller.employee_id,
+        )
+        await self._audit.append(
+            actor=str(caller.employee_id), action="payroll.finalize", target=f"month:{est.month}"
+        )
+        return PayrollFinalizeResult(
+            month=est.month,
+            currency=est.currency,
+            released_count=released,
+            emailed_count=emailed,
+            skipped_count=skipped,
+            total_net_minor=total_net,
+        )
+
+    async def list_payslips(
+        self, caller: CurrentUser, employee_id: uuid.UUID | None
+    ) -> list[PayslipSummaryRead]:
+        """An employee's released-payslip history (self-or-HR). Default = self."""
+        target = self._authorize_self_or_manage(caller, employee_id)
+        records = await self._payslips.list_for_employee(target)
+        return [PayslipSummaryRead.from_model(r) for r in records]
+
+    async def get_released_payslip(
+        self, caller: CurrentUser, employee_id: uuid.UUID | None, month: str | None
+    ) -> ReleasedPayslipRead:
+        """One released payslip from its frozen snapshot (self-or-HR). 404 until HR
+        has finalized that month."""
+        target = self._authorize_self_or_manage(caller, employee_id)
+        spec = await self._policy.spec()
+        period = month or self.current_month(spec.timezone)
+        record = await self._payslips.get(target, period)
+        if record is None:
+            raise NotFoundError()
+        return ReleasedPayslipRead.from_model(record)
+
+    async def payslip_pdf(
+        self, caller: CurrentUser, employee_id: uuid.UUID | None, month: str | None
+    ) -> tuple[bytes, str]:
+        """Render a released payslip to PDF bytes (self-or-HR). The download is
+        audited (rule 5.7). 404 until HR has finalized that month."""
+        target = self._authorize_self_or_manage(caller, employee_id)
+        spec = await self._policy.spec()
+        period = month or self.current_month(spec.timezone)
+        record = await self._payslips.get(target, period)
+        if record is None:
+            raise NotFoundError()
+        pdf = render_payslip_pdf(self._pdf_data_from_snapshot(record, await self._org_name()))
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="payroll.payslip.download",
+            target=f"employee:{target}:{period}",
+        )
+        return pdf, f"payslip-{period}.pdf"
+
+    async def _release_from_estimate(
+        self, est: PayrollEstimateRead, *, actor: CurrentUser | None
+    ) -> tuple[int, int, int]:
+        """Snapshot + email each employee with compensation. Returns
+        (released, emailed, skipped). Email failures don't block release — the
+        employee can still download from My Pay."""
+        org_name = await self._org_name()
+        year, m = _parse_month(est.month)
+        label = _month_label(year, m)
+        finalized_by = actor.employee_id if actor is not None else None
+        released = emailed = skipped = 0
+        for line in est.lines:
+            if line.missing_compensation:
+                skipped += 1
+                continue
+            snapshot = await self._payslips.upsert(
+                employee_id=line.employee_id,
+                period_month=est.month,
+                employee_name=line.name,
+                department=line.department,
+                currency=line.currency,
+                monthly_ctc_minor=line.monthly_ctc_minor,
+                gross_minor=line.breakdown.gross_minor,
+                net_minor=line.net_minor,
+                breakdown=line.breakdown.model_dump(),
+                working_days=line.working_days,
+                present_days=line.present_days,
+                paid_leave_days=line.paid_leave_days,
+                payable_days=line.payable_days,
+                finalized_by=finalized_by,
+            )
+            released += 1
+            employee = await self._employees.get(line.employee_id)
+            if employee is None or not employee.work_email:
+                continue
+            pdf = render_payslip_pdf(self._pdf_data_from_snapshot(snapshot, org_name))
+            try:
+                await self._email.send_payslip(
+                    to=employee.work_email,
+                    employee_name=line.name,
+                    month_label=label,
+                    currency=line.currency,
+                    net_payable_minor=line.net_minor,
+                    pdf=pdf,
+                    pdf_filename=f"payslip-{est.month}.pdf",
+                )
+            except EmailError:
+                continue
+            await self._payslips.mark_emailed(snapshot)
+            emailed += 1
+        return released, emailed, skipped
+
+    async def _org_name(self) -> str:
+        org = await self._orgs.get()
+        return org.name if org is not None else "Avora"
+
+    def _pdf_data_from_snapshot(self, m: Payslip, org_name: str) -> PayslipPdfData:
+        year, month = _parse_month(m.period_month)
+        b = m.breakdown
+        return PayslipPdfData(
+            org_name=org_name,
+            employee_name=m.employee_name,
+            department=m.department,
+            month_label=_month_label(year, month),
+            currency=m.currency,
+            monthly_ctc_minor=m.monthly_ctc_minor,
+            basic_minor=b.get("basic_minor", 0),
+            hra_minor=b.get("hra_minor", 0),
+            special_allowance_minor=b.get("special_allowance_minor", 0),
+            gross_minor=b.get("gross_minor", 0),
+            employee_pf_minor=b.get("employee_pf_minor", 0),
+            professional_tax_minor=b.get("professional_tax_minor", 0),
+            total_deduction_minor=b.get("total_deduction_minor", 0),
+            net_minor=b.get("net_minor", 0),
+            net_payable_minor=m.net_minor,
+            working_days=m.working_days,
+            present_days=m.present_days,
+            paid_leave_days=m.paid_leave_days,
+            payable_days=m.payable_days,
+            generated_label=datetime.now(UTC).strftime("%d %b %Y"),
+        )
+
     # ---- send -------------------------------------------------------------- #
     async def send_digest(self, caller: CurrentUser, month: str | None) -> PayrollRunRead:
         if not _can_manage(caller):
@@ -319,11 +495,14 @@ class PayrollService:
         return now_local.day == s.pay_day_of_month
 
     async def run_for_system(self, month: str | None = None) -> PayrollRun | None:
-        """Scheduler entry point: send this month's digest once (idempotent)."""
+        """Scheduler entry point, once per month on pay day (idempotent): release
+        every employee's payslip (snapshot + PDF email) AND send the HR digest."""
         spec = await self._policy.spec()
         period = month or self.current_month(spec.timezone)
         if await self._runs.get_for_month(period) is not None:
-            return None  # already sent this month
+            return None  # already run this month
+        est = await self.estimate(SYSTEM_CALLER, period)
+        await self._release_from_estimate(est, actor=None)  # release + email employees
         return await self._send(SYSTEM_CALLER, period, source=PayrollRunSource.AUTO, actor=None)
 
     async def list_runs(self, caller: CurrentUser) -> list[PayrollRunRead]:

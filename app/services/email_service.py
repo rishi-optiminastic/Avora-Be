@@ -7,6 +7,9 @@ body (Security rule 5.6) — only a generic failure with the HTTP status.
 
 from __future__ import annotations
 
+import base64
+from dataclasses import dataclass
+
 import httpx
 
 from app.core.config import Settings
@@ -15,10 +18,21 @@ from app.services.email_templates import (
     forgot_checkout_email,
     invite_email,
     leave_decision_email,
+    payslip_email,
     task_assigned_email,
 )
 
 _SENDGRID_URL = "https://api.sendgrid.com/v3/mail/send"
+
+
+@dataclass(frozen=True)
+class EmailAttachment:
+    """One file to attach. `content` is the raw bytes; it is base64-encoded for
+    the SendGrid payload here so callers never deal with the transport encoding."""
+
+    filename: str
+    content: bytes
+    content_type: str = "application/octet-stream"
 
 
 class EmailError(Exception):
@@ -29,8 +43,15 @@ class EmailService:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
-    async def send(self, *, to: str, subject: str, html: str) -> None:
-        payload = {
+    async def send(
+        self,
+        *,
+        to: str,
+        subject: str,
+        html: str,
+        attachments: list[EmailAttachment] | None = None,
+    ) -> None:
+        payload: dict[str, object] = {
             "personalizations": [{"to": [{"email": to}]}],
             "from": {
                 "email": self._settings.email_from,
@@ -39,6 +60,16 @@ class EmailService:
             "subject": subject,
             "content": [{"type": "text/html", "value": html}],
         }
+        if attachments:
+            payload["attachments"] = [
+                {
+                    "content": base64.b64encode(a.content).decode("ascii"),
+                    "type": a.content_type,
+                    "filename": a.filename,
+                    "disposition": "attachment",
+                }
+                for a in attachments
+            ]
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(
@@ -70,6 +101,34 @@ class EmailService:
             expires_label=expires_label,
         )
         await self.send(to=to, subject=subject, html=html)
+
+    async def send_payslip(
+        self,
+        *,
+        to: str,
+        employee_name: str,
+        month_label: str,
+        currency: str,
+        net_payable_minor: int,
+        pdf: bytes,
+        pdf_filename: str,
+    ) -> None:
+        """Email an employee their released payslip with the PDF attached."""
+        subject, html = payslip_email(
+            employee_name=employee_name,
+            month_label=month_label,
+            currency=currency,
+            net_payable_minor=net_payable_minor,
+            pay_url=self._absolute("/dashboard/me/pay"),
+        )
+        await self.send(
+            to=to,
+            subject=subject,
+            html=html,
+            attachments=[
+                EmailAttachment(filename=pdf_filename, content=pdf, content_type="application/pdf")
+            ],
+        )
 
     def _absolute(self, link_path: str) -> str:
         """Turn a relative dashboard link into an absolute URL for the email."""

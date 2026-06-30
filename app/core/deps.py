@@ -51,6 +51,7 @@ from app.repositories.onboarding_config import OnboardingConfigRepository
 from app.repositories.org_settings import OrgSettingsRepository
 from app.repositories.payroll_run import PayrollRunRepository
 from app.repositories.payroll_settings import PayrollSettingsRepository
+from app.repositories.payslip import PayslipRepository
 from app.repositories.ping import PingRepository
 from app.repositories.quick_meet import QuickMeetRepository
 from app.repositories.regularization import RegularizationRepository
@@ -244,6 +245,10 @@ def get_org_settings_repo(db: DbDep) -> OrgSettingsRepository:
 
 def get_payroll_run_repo(db: DbDep) -> PayrollRunRepository:
     return PayrollRunRepository(db)
+
+
+def get_payslip_repo(db: DbDep) -> PayslipRepository:
+    return PayslipRepository(db)
 
 
 def get_document_repo(db: DbDep) -> DocumentRepository:
@@ -619,24 +624,28 @@ def get_compensation_service(
 def get_payroll_service(
     settings_repo: Annotated[PayrollSettingsRepository, Depends(get_payroll_settings_repo)],
     runs: Annotated[PayrollRunRepository, Depends(get_payroll_run_repo)],
+    payslips: Annotated[PayslipRepository, Depends(get_payslip_repo)],
     compensation: Annotated[CompensationRepository, Depends(get_compensation_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     attendance: Annotated[AttendanceService, Depends(get_attendance_service)],
     policy: Annotated[AttendancePolicyService, Depends(get_attendance_policy_service)],
     leaves: Annotated[LeaveRepository, Depends(get_leave_repo)],
     holidays: Annotated[HolidayRepository, Depends(get_holiday_repo)],
+    orgs: Annotated[OrgSettingsRepository, Depends(get_org_settings_repo)],
     email: Annotated[EmailService, Depends(get_email_service)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
 ) -> PayrollService:
     return PayrollService(
         settings_repo,
         runs,
+        payslips,
         compensation,
         employees,
         attendance,
         policy,
         leaves,
         holidays,
+        orgs,
         email,
         audit,
     )

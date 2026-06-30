@@ -84,6 +84,9 @@ class _FakeEmailService:
     async def send_task_assigned(self, **kwargs: object) -> None:
         return None
 
+    async def send_payslip(self, **kwargs: object) -> None:
+        return None
+
 
 @pytest.fixture(scope="session")
 def settings() -> Settings:

@@ -183,6 +183,43 @@ def _note_block(note: str) -> str:
     )
 
 
+def payslip_email(
+    *,
+    employee_name: str,
+    month_label: str,
+    currency: str,
+    net_payable_minor: int,
+    pay_url: str,
+) -> tuple[str, str]:
+    """Render the (subject, html) telling an employee their payslip is released.
+
+    The PDF rides along as an attachment; this body is the cover note plus a link
+    to download it again from My Pay.
+    """
+    first = employee_name.split()[0] if employee_name.strip() else "there"
+    subject = f"Your payslip for {month_label}"
+    content = f"""\
+<div style="font-size:11px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:{_MUTED};">
+  Payslip · {month_label}
+</div>
+<h1 style="margin:8px 0 4px;font-family:{_SERIF};font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
+  {_money(net_payable_minor, currency)}
+</h1>
+<p style="margin:0 0 18px;font-size:13px;line-height:1.6;color:{_MUTED};">
+  Net payable for {month_label}, prorated by your attendance.
+</p>
+<p style="margin:0 0 18px;font-size:15px;line-height:1.6;color:{_INK};">
+  Hi {first}, your payslip for <strong>{month_label}</strong> is ready. The PDF is attached to
+  this email, and you can download it any time from My Pay.
+</p>
+<p style="margin:0 0 4px;">{_button("View My Pay", pay_url)}</p>"""
+    return subject, _layout(
+        preheader=f"Your {month_label} payslip — {_money(net_payable_minor, currency)} net payable",
+        content_html=content,
+        footer=_ACTIVITY_FOOTER,
+    )
+
+
 def leave_decision_email(
     *,
     employee_name: str,
