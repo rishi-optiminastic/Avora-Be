@@ -94,12 +94,19 @@ class AttendanceService:
         now: datetime,
         is_today: bool,
         day_end: datetime,
+        prefer: str = "biometric",
     ) -> tuple[datetime | None, datetime | None, int, str | None, str | None, str | None]:
-        # The biometric punch is the source of truth for attendance times. With no
-        # punch (WFH / not enrolled / forgot), fall back to a manual clock-in, then
-        # to the agent's activity, so active people aren't marked absent. The
-        # agent-vs-punch gap itself is shown only on the Reconciliation page.
-        span = bio or other
+        # Source preference (toggle on the Attendance page):
+        #   "biometric" (default) — the office punch is the source of truth; with no
+        #     punch (WFH / not enrolled / forgot) fall back to a manual clock-in,
+        #     then the agent's activity, so active people aren't marked absent.
+        #   "agent" — the laptop agent's activity is the source of truth; a punch /
+        #     manual session is only the fallback when the agent saw nothing.
+        # The agent-vs-punch gap itself is shown only on the Reconciliation page.
+        if prefer == "agent" and agg is not None:
+            worked = _minutes(agg.login_at, agg.logout_at)
+            return agg.login_at, agg.logout_at, worked, None, "agent", "agent"
+        span = (other or bio) if prefer == "agent" else (bio or other)
         if span is not None:
             logout = span.logout_at
             if logout is not None:
@@ -123,6 +130,8 @@ class AttendanceService:
         caller: CurrentUser,
         day: datetime,
         employees: Sequence[Employee] | None = None,
+        *,
+        source: str = "biometric",
     ) -> list[AttendanceRead]:
         spec = await self._policy.spec()
         # Callers with the scope already resolved (dashboard overview) pass it in.
@@ -158,6 +167,7 @@ class AttendanceService:
                 now=now,
                 is_today=is_today,
                 day_end=day_end,
+                prefer=source,
             )
             regd = local_date in approved.get(e.id, set())
             # Hours are "final" — and can downgrade the day to half / flag early-out

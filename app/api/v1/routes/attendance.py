@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, date, datetime, time
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Query, Request, status
 
@@ -42,10 +42,16 @@ async def list_attendance(
     caller: CurrentUserDep,
     service: AttendanceServiceDep,
     day: Annotated[date | None, Query(alias="date")] = None,
+    source: Annotated[Literal["biometric", "agent"], Query()] = "biometric",
 ) -> list[AttendanceRead]:
-    """Per-employee attendance for a day (defaults to today)."""
+    """Per-employee attendance for a day (defaults to today).
+
+    `source` selects which signal drives the times: `biometric` (default — the
+    office punch) or `agent` (the laptop agent's activity). See
+    AttendanceService._resolve.
+    """
     when = datetime.combine(day, time.min, tzinfo=UTC) if day else datetime.now(UTC)
-    return await service.daily(caller, when)
+    return await service.daily(caller, when, source=source)
 
 
 @router.get("/range", response_model=list[AttendanceDayRow])

@@ -36,7 +36,7 @@ import urllib.request
 from datetime import datetime, timedelta
 
 # ======================== EDIT THESE TWO LINES ============================== #
-AVORA_API_URL = "https://avora-be.onrender.com"   # your deployed backend URL
+AVORA_API_URL = "https://api.avora.optiminastic.com"   # your deployed backend URL
 BIOMETRIC_WEBHOOK_SECRET = "qQ0KJIbFwS6F92Z6rwY9iAdamTQhaoMK82gO7PNC+Ro="  # noqa: S105 (placeholder)
 # =========================================================================== #
 
