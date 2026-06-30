@@ -295,10 +295,11 @@ async def test_auto_send_respects_the_6pm_window(
 
     service = _build_service(db, settings, llm=_StubLlm(), email=_CapturingEmail())
 
-    # Before 6 PM only the earlier day's draft is overdue; today's waits.
-    assert await service.auto_send_due(now, before) == 1
-    # After 6 PM today's draft is sent too.
-    assert await service.auto_send_due(now, after) == 1
+    # Before 6 PM NOTHING goes out — not even the prior-day leftover. EOD reports
+    # never leave outside the send window (so a stray draft can't fire at 3:40 PM).
+    assert await service.auto_send_due(now, before) == 0
+    # At/after 6 PM both the leftover prior-day draft and today's are flushed.
+    assert await service.auto_send_due(now, after) == 2
     rows = (
         (await db.execute(select(EodReport).where(EodReport.employee_id == seed.report.id)))
         .scalars()

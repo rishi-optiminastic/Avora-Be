@@ -275,21 +275,22 @@ class EodService:
     ) -> int:
         """Send drafts that are due to managers+admins, as-is. Returns count sent.
 
-        Today's drafts are sent only once the local SEND time has passed — the
-        draft→send gap is the employee's review window. Drafts from earlier days are
-        always overdue and sent regardless of the current time. The send time comes
-        from the DB schedule (fetched here when not supplied by `run_due`).
+        Hard window gate: EOD reports only ever leave at/after the local SEND time.
+        Before it we send NOTHING — not even "overdue" prior-day drafts — so a draft
+        left unsent (e.g. the worker was down across yesterday's window, or restarted
+        mid-day) goes out at the NEXT send time, never at some arbitrary hour like
+        15:40. At/after the send time we flush every pending draft through today
+        (today's plus any earlier-day leftovers). The send time comes from the DB
+        schedule (fetched here when not supplied by `run_due`).
 
         Recipients are resolved in bulk up front (admins once, all report owners +
         their managers in two batched lookups) — no per-report DB calls."""
         if sched is None:
             sched = await self._eod_settings.spec()
         minutes = local_dt.hour * 60 + local_dt.minute
-        send_at = sched.send_minutes
-        today = local_dt.date()
-        # Past the send time → include today; otherwise only earlier days.
-        through = today if minutes >= send_at else today - timedelta(days=1)
-        overdue = await self._reports.list_drafts_through(through.isoformat())
+        if minutes < sched.send_minutes:
+            return 0
+        overdue = await self._reports.list_drafts_through(local_dt.date().isoformat())
         if not overdue:
             return 0
         admins = await self._employees.list_by_role(Role.ADMIN)
