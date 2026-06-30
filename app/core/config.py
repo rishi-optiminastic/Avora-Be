@@ -199,6 +199,13 @@ class Settings(BaseSettings):
     def eod_configured(self) -> bool:
         return bool(self.eod_enabled and self.openrouter_api_key and self.eod_model)
 
+    @property
+    def eod_secrets_present(self) -> bool:
+        """The env half of "can EOD run": LLM key + model. The on/off switch and
+        the schedule now live in the DB (`eod_settings`, editable in Settings), so
+        the worker/cron gate on this plus the DB `enabled` flag, not `eod_enabled`."""
+        return bool(self.openrouter_api_key and self.eod_model)
+
     # Task paste-import parsing (OpenRouter LLM) -----------------------------
     # Turns a pasted blob ("Tushar -\n  do X\n  do Y\nGeneral -\n  do Z") into
     # structured tasks with assignees matched to the caller's visible roster.

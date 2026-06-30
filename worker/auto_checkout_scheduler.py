@@ -22,6 +22,7 @@ import os
 from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from worker.heartbeat import beat
 
 from app.core.config import get_settings
 from app.db.session import SessionFactory, engine
@@ -37,6 +38,7 @@ from app.services.email_service import EmailService
 log = logging.getLogger("auto_checkout_scheduler")
 
 TICK_SECONDS = float(os.getenv("AUTO_CHECKOUT_TICK_SECONDS", "900"))
+HEARTBEAT_ENV = "HEARTBEAT_URL_AUTOCHECKOUT"
 
 
 def _build_service(session: AsyncSession) -> AutoCheckoutService:
@@ -78,6 +80,7 @@ async def _main() -> None:
         while True:
             try:
                 await _tick()
+                await beat(HEARTBEAT_ENV)  # tick succeeded → report liveness
             except Exception as exc:  # keep the loop alive across transient failures
                 log.warning("tick failed: %s", exc)
             await asyncio.sleep(TICK_SECONDS)

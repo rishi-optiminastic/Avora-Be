@@ -23,6 +23,7 @@ from app.repositories.attendance_policy import AttendancePolicyRepository
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.eod_report import EodReportRepository
+from app.repositories.eod_settings import EodSettingsRepository
 from app.repositories.notification import NotificationRepository
 from app.repositories.regularization import RegularizationRepository
 from app.repositories.screenshot import ScreenshotRepository
@@ -32,6 +33,7 @@ from app.schemas.eod import EodDraftContent
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.attendance_service import AttendanceService
 from app.services.eod_service import EodService
+from app.services.eod_settings_service import EodSettingsService
 from app.services.llm_service import LlmError
 from app.services.notification_service import NotificationService
 from tests.conftest import _Seed, auth_headers
@@ -70,11 +72,14 @@ def _admin_caller(seed: _Seed) -> CurrentUser:
 def _build_service(
     db: AsyncSession, settings: Settings, *, llm: object, email: object
 ) -> EodService:
-    eod_settings = settings.model_copy(
+    env = settings.model_copy(
         update={"eod_enabled": True, "openrouter_api_key": "x", "eod_model": "test/model"}
     )
     audit = AuditRepository(db)
     employees = EmployeeRepository(db)
+    # The DB schedule seeds from env on first read, so this row comes up enabled
+    # with the default 16:30 draft / 18:00 send used by the window tests.
+    eod_settings = EodSettingsService(EodSettingsRepository(db), audit, env)
     policy = AttendancePolicyService(AttendancePolicyRepository(db), audit)
     attendance = AttendanceService(
         employees,
@@ -97,6 +102,7 @@ def _build_service(
         NotificationService(NotificationRepository(db)),
         audit,
         eod_settings,
+        env,
     )
 
 
@@ -327,6 +333,46 @@ async def _seed_draft(db: AsyncSession, seed: _Seed) -> uuid.UUID:
     db.add(draft)
     await db.commit()
     return draft.id
+
+
+async def test_eod_settings_seed_guards_against_an_inverted_env(
+    db: AsyncSession, settings: Settings
+) -> None:
+    # A bare EOD_REPORT_HOUR=18 with the default 18:00 send would put the draft
+    # after the send (no review window) — the seed must fall back to sane defaults.
+    env = settings.model_copy(update={"eod_report_hour": 18, "eod_report_minute": 30})
+    service = EodSettingsService(EodSettingsRepository(db), AuditRepository(db), env)
+    sched = await service.spec()
+    assert (sched.draft_hour, sched.draft_minute) == (16, 30)
+    assert (sched.send_hour, sched.send_minute) == (18, 0)
+
+
+async def test_eod_settings_read_open_write_admin_only(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    # Anyone authenticated can read the schedule (they see when their report sends).
+    read = await client.get("/api/v1/eod/settings", headers=auth_headers(settings, seed.report))
+    assert read.status_code == 200
+    assert read.json()["send_time"] == "18:00"  # seeded from env defaults
+    # …but only admin/HR may change it.
+    body = {"enabled": True, "draft_time": "17:00", "send_time": "19:30"}
+    assert (
+        await client.put(
+            "/api/v1/eod/settings", json=body, headers=auth_headers(settings, seed.report)
+        )
+    ).status_code == 403
+    ok = await client.put(
+        "/api/v1/eod/settings", json=body, headers=auth_headers(settings, seed.admin)
+    )
+    assert ok.status_code == 200
+    assert ok.json() == {"enabled": True, "draft_time": "17:00", "send_time": "19:30"}
+    # A send time at or before the draft time is rejected (no review window).
+    bad = await client.put(
+        "/api/v1/eod/settings",
+        json={"send_time": "16:00"},
+        headers=auth_headers(settings, seed.admin),
+    )
+    assert bad.status_code == 409
 
 
 async def test_read_is_scoped(

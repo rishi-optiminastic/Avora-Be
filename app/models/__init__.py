@@ -18,6 +18,7 @@ from app.models.employee import Employee, EmployeeStatus, Role, TrackingMode
 from app.models.env_access_token import EnvAccessToken
 from app.models.env_project import EnvMemberRole, EnvProject, EnvProjectMember, EnvVersion
 from app.models.eod_report import EodReport, EodStatus
+from app.models.eod_settings import EodSettings
 from app.models.holiday import Holiday, HolidayType
 from app.models.idempotency_key import IdempotencyKey, IdempotencyStatus
 from app.models.invitation import Invitation, InvitationStatus
@@ -62,6 +63,7 @@ __all__ = [
     "EnvProjectMember",
     "EnvVersion",
     "EodReport",
+    "EodSettings",
     "EodStatus",
     "Holiday",
     "HolidayType",

@@ -18,12 +18,14 @@ from pydantic import BaseModel
 from app.core.deps import (
     CurrentUserDep,
     EodServiceDep,
+    EodSettingsServiceDep,
     IdempotencyKeyHeader,
     IdempotencyServiceDep,
     SettingsDep,
 )
 from app.core.exceptions import NotFoundError
 from app.schemas.eod import EodReportRead, EodReportUpdate
+from app.schemas.eod_settings import EodSettingsRead, EodSettingsUpdate
 
 router = APIRouter(prefix="/eod", tags=["eod"])
 
@@ -49,6 +51,23 @@ async def list_reports(
 ) -> list[EodReportRead]:
     """Reports for people in the caller's scope, for a day (defaults to today)."""
     return await service.list_for_scope(caller, datetime.now(UTC), report_date)
+
+
+@router.get("/settings", response_model=EodSettingsRead)
+async def get_eod_settings(
+    caller: CurrentUserDep, service: EodSettingsServiceDep
+) -> EodSettingsRead:
+    """The org's EOD schedule (toggle + draft/send times). Everyone may read it so
+    people see when their report drafts and sends."""
+    return EodSettingsRead.from_model(await service.get_or_create())
+
+
+@router.put("/settings", response_model=EodSettingsRead)
+async def update_eod_settings(
+    payload: EodSettingsUpdate, caller: CurrentUserDep, service: EodSettingsServiceDep
+) -> EodSettingsRead:
+    """Change the EOD schedule (Admin/HR only — enforced in the service)."""
+    return EodSettingsRead.from_model(await service.update(caller, payload))
 
 
 @router.get("/{report_id}", response_model=EodReportRead)
@@ -111,7 +130,9 @@ async def cron_tick(
     expected = settings.eod_cron_secret
     if not expected or not x_cron_secret or not secrets.compare_digest(x_cron_secret, expected):
         raise NotFoundError()
-    if not settings.eod_configured:
+    # Secrets (LLM key/model) gate here; the on/off switch + schedule are in the DB
+    # and applied inside run_due (so toggling EOD never needs a redeploy).
+    if not settings.eod_secrets_present:
         return EodTickResult(generated=0, sent=0, purged_activity=0, purged_screenshots=0)
     generated, sent, purged_activity, purged_shots = await service.run_due(datetime.now(UTC))
     return EodTickResult(

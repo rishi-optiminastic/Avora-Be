@@ -35,6 +35,7 @@ from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.attendance_service import AttendanceService
 from app.services.email_service import EmailService
 from app.services.email_templates import eod_report_email
+from app.services.eod_settings_service import EodSchedule, EodSettingsService
 from app.services.llm_service import LlmError, LlmService
 from app.services.notification_service import NotificationService
 
@@ -62,6 +63,7 @@ class EodService:
         email: EmailService,
         notifications: NotificationService,
         audit: AuditRepository,
+        eod_settings: EodSettingsService,
         settings: Settings,
     ) -> None:
         self._reports = reports
@@ -75,6 +77,7 @@ class EodService:
         self._email = email
         self._notifications = notifications
         self._audit = audit
+        self._eod_settings = eod_settings
         self._settings = settings
 
     # ---- reads (scoped) ---------------------------------------------------- #
@@ -231,18 +234,21 @@ class EodService:
         return 1
 
     async def run_due(self, now: datetime) -> tuple[int, int, int, int]:
-        """One scheduler tick (local-tz gated): generate drafts once we're past the
-        DRAFT time (16:30), auto-send drafts to manager+admins once past the SEND
-        time (18:00), and once a day prune old monitoring data. Returns
+        """One scheduler tick (local-tz gated): when EOD is enabled, generate drafts
+        once we're past the DRAFT time, auto-send drafts to manager+admins once past
+        the SEND time; and once a day prune old monitoring data. The schedule + the
+        on/off switch are read from the DB (`eod_settings`, editable in Settings), so
+        changes take effect on the next tick with no redeploy. Returns
         (drafts_created, drafts_sent, activity_rows_purged, screenshots_purged).
         Shared by the worker loop and the free-tier cron endpoint."""
         local_dt = await self._local_dt(now)
         minutes = local_dt.hour * 60 + local_dt.minute
-        generated = 0
-        draft_at = self._settings.eod_report_hour * 60 + self._settings.eod_report_minute
-        if minutes >= draft_at:
-            generated = await self.generate_for_day(SYSTEM_CALLER, now)
-        sent = await self.auto_send_due(now, local_dt)
+        sched = await self._eod_settings.spec()
+        generated = sent = 0
+        if sched.enabled:
+            if minutes >= sched.draft_minutes:
+                generated = await self.generate_for_day(SYSTEM_CALLER, now)
+            sent = await self.auto_send_due(now, local_dt, sched)
         purged_activity = purged_shots = 0
         if local_dt.hour == self._settings.activity_purge_hour:
             purged_activity = await self.purge_old_activity(now)
@@ -264,17 +270,22 @@ class EodService:
             await storage.delete_objects(await self._screenshots.object_keys_before(cutoff))
         return await self._screenshots.purge_before(cutoff)
 
-    async def auto_send_due(self, now: datetime, local_dt: datetime) -> int:
+    async def auto_send_due(
+        self, now: datetime, local_dt: datetime, sched: EodSchedule | None = None
+    ) -> int:
         """Send drafts that are due to managers+admins, as-is. Returns count sent.
 
-        Today's drafts are sent only once the local SEND time (18:00) has passed —
-        that 16:30→18:00 gap is the employee's review window. Drafts from earlier
-        days are always overdue and sent regardless of the current time.
+        Today's drafts are sent only once the local SEND time has passed — the
+        draft→send gap is the employee's review window. Drafts from earlier days are
+        always overdue and sent regardless of the current time. The send time comes
+        from the DB schedule (fetched here when not supplied by `run_due`).
 
         Recipients are resolved in bulk up front (admins once, all report owners +
         their managers in two batched lookups) — no per-report DB calls."""
+        if sched is None:
+            sched = await self._eod_settings.spec()
         minutes = local_dt.hour * 60 + local_dt.minute
-        send_at = self._settings.eod_send_hour * 60 + self._settings.eod_send_minute
+        send_at = sched.send_minutes
         today = local_dt.date()
         # Past the send time → include today; otherwise only earlier days.
         through = today if minutes >= send_at else today - timedelta(days=1)
@@ -386,12 +397,11 @@ class EodService:
 
     async def _send_time_label(self) -> str:
         """Human label for the auto-send time, e.g. '6:00 PM IST' — shown to the
-        employee so they know their review deadline."""
+        employee so they know their review deadline. Read from the DB schedule."""
         spec = await self._policy.spec()
+        sched = await self._eod_settings.spec()
         tz = ZoneInfo(spec.timezone)
-        when = datetime(
-            2000, 1, 1, self._settings.eod_send_hour, self._settings.eod_send_minute, tzinfo=tz
-        )
+        when = datetime(2000, 1, 1, sched.send_hour, sched.send_minute, tzinfo=tz)
         return when.strftime("%-I:%M %p %Z")
 
     async def _local_date(self, now: datetime) -> str:

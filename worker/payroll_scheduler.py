@@ -21,6 +21,7 @@ import logging
 import os
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from worker.heartbeat import beat
 
 from app.core.config import get_settings
 from app.db.session import SessionFactory, engine
@@ -43,6 +44,7 @@ from app.services.payroll_service import PayrollService
 log = logging.getLogger("payroll_scheduler")
 
 TICK_SECONDS = float(os.getenv("PAYROLL_TICK_SECONDS", "3600"))
+HEARTBEAT_ENV = "HEARTBEAT_URL_PAYROLL"
 
 
 def _build_service(session: AsyncSession) -> PayrollService:
@@ -98,6 +100,7 @@ async def _main() -> None:
         while True:
             try:
                 await _tick()
+                await beat(HEARTBEAT_ENV)  # tick succeeded → report liveness
             except Exception as exc:  # keep the loop alive across transient failures
                 log.warning("tick failed: %s", exc)
             await asyncio.sleep(TICK_SECONDS)

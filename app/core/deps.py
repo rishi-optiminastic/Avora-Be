@@ -39,6 +39,7 @@ from app.repositories.document import DocumentRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.envsync import EnvSyncRepository
 from app.repositories.eod_report import EodReportRepository
+from app.repositories.eod_settings import EodSettingsRepository
 from app.repositories.holiday import HolidayRepository
 from app.repositories.idempotency import IdempotencyRepository
 from app.repositories.invitation import InvitationRepository
@@ -78,6 +79,7 @@ from app.services.email_service import EmailService
 from app.services.employee_service import EmployeeService
 from app.services.envsync_service import EnvSyncService
 from app.services.eod_service import EodService
+from app.services.eod_settings_service import EodSettingsService
 from app.services.holiday_service import HolidayService
 from app.services.hr_service import HRService
 from app.services.idempotency import IdempotencyService
@@ -367,6 +369,21 @@ def get_eod_report_repo(db: DbDep) -> EodReportRepository:
     return EodReportRepository(db)
 
 
+def get_eod_settings_repo(db: DbDep) -> EodSettingsRepository:
+    return EodSettingsRepository(db)
+
+
+def get_eod_settings_service(
+    repo: Annotated[EodSettingsRepository, Depends(get_eod_settings_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    settings: SettingsDep,
+) -> EodSettingsService:
+    return EodSettingsService(repo, audit, settings)
+
+
+EodSettingsServiceDep = Annotated[EodSettingsService, Depends(get_eod_settings_service)]
+
+
 def get_llm_service(settings: SettingsDep) -> LlmService:
     return LlmService(settings)
 
@@ -383,6 +400,7 @@ def get_eod_service(
     email: Annotated[EmailService, Depends(get_email_service)],
     notifications: Annotated[NotificationService, Depends(get_notification_service)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    eod_settings: Annotated[EodSettingsService, Depends(get_eod_settings_service)],
     settings: SettingsDep,
 ) -> EodService:
     return EodService(
@@ -397,6 +415,7 @@ def get_eod_service(
         email,
         notifications,
         audit,
+        eod_settings,
         settings,
     )
 

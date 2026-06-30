@@ -13,6 +13,7 @@ Env:
   OCR_BATCH             rows per cycle (default 3) — raise to use more CPU cores.
   OCR_IDLE_SLEEP        seconds to sleep when the queue is empty (default 2).
   OCR_MAX_CHARS         cap stored text length (default 20000).
+  HEARTBEAT_URL_OCR     optional: liveness ping after a healthy cycle (Better Stack).
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ import io
 import logging
 import os
 import time
+import urllib.request
 from typing import Any
 
 import boto3
@@ -34,8 +36,29 @@ BATCH = int(os.getenv("OCR_BATCH", "3"))
 IDLE_SLEEP = float(os.getenv("OCR_IDLE_SLEEP", "2"))
 MAX_CHARS = int(os.getenv("OCR_MAX_CHARS", "20000"))
 MIN_DIMENSION = 1600  # upscale smaller captures so text is legible to Tesseract
+# Liveness heartbeat — this loop spins every ~2s, so throttle the ping. Self-
+# contained (the OCR image bundles only this file), so it's inlined, not shared
+# with worker/heartbeat.py. Pinged only on a healthy cycle, so a DB outage alerts.
+HEARTBEAT_URL = os.getenv("HEARTBEAT_URL_OCR", "").strip()
+HEARTBEAT_INTERVAL = float(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "60"))
 
 _s3: Any = None
+
+
+def _heartbeat(last_beat: float) -> float:
+    """Best-effort liveness ping, throttled to HEARTBEAT_INTERVAL. Returns the new
+    last-beat time. Never raises — monitoring must not take the worker down."""
+    if not HEARTBEAT_URL:
+        return last_beat
+    now = time.monotonic()
+    if now - last_beat < HEARTBEAT_INTERVAL:
+        return last_beat
+    try:
+        with urllib.request.urlopen(HEARTBEAT_URL, timeout=5) as resp:  # noqa: S310
+            resp.read(64)
+    except Exception as exc:  # never let monitoring break the worker
+        log.warning("heartbeat ping failed: %s", exc)
+    return now
 
 
 def _s3_client() -> Any:
@@ -113,6 +136,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     log.info("Avora OCR worker starting (batch=%d)", BATCH)
     conn: psycopg2.extensions.connection | None = None
+    last_beat = 0.0
     while True:
         try:
             if conn is None or conn.closed:
@@ -124,6 +148,7 @@ def main() -> None:
                 log.info("processed %d screenshot(s)", processed)
             else:
                 time.sleep(IDLE_SLEEP)
+            last_beat = _heartbeat(last_beat)  # healthy cycle → report liveness
         except psycopg2.Error as exc:
             log.warning("db error, reconnecting: %s", exc)
             conn = None
