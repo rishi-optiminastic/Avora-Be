@@ -25,9 +25,7 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     op.create_index("ix_leaves_reviewer_id", "leaves", ["reviewer_id"])
     op.create_index("ix_tasks_depends_on_id", "tasks", ["depends_on_id"])
-    op.create_index(
-        "ix_eod_reports_status_created", "eod_reports", ["status", "created_at"]
-    )
+    op.create_index("ix_eod_reports_status_created", "eod_reports", ["status", "created_at"])
     op.drop_index("ix_eod_reports_status", table_name="eod_reports")
 
 

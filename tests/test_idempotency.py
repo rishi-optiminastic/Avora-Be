@@ -58,12 +58,8 @@ async def test_run_without_key_executes_every_time(db: AsyncSession) -> None:
         calls += 1
         return calls
 
-    await service.run(
-        principal_id=uuid.uuid4(), scope="t.op", key=None, request={}, operation=op
-    )
-    await service.run(
-        principal_id=uuid.uuid4(), scope="t.op", key=None, request={}, operation=op
-    )
+    await service.run(principal_id=uuid.uuid4(), scope="t.op", key=None, request={}, operation=op)
+    await service.run(principal_id=uuid.uuid4(), scope="t.op", key=None, request={}, operation=op)
     assert calls == 2  # no key => no protection (existing clients unaffected)
 
 

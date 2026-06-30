@@ -63,15 +63,11 @@ class IdempotencyService:
 
         if not is_new:
             if record.request_hash != fingerprint:
-                raise ValidationError(
-                    "Idempotency-Key was already used with a different request."
-                )
+                raise ValidationError("Idempotency-Key was already used with a different request.")
             if record.status != IdempotencyStatus.COMPLETED:
                 # The owner is still mid-flight (only observable across separate
                 # transactions). Tell the client to retry rather than racing.
-                raise ConflictError(
-                    "A request with this Idempotency-Key is still being processed."
-                )
+                raise ConflictError("A request with this Idempotency-Key is still being processed.")
             return (record.response_json or {}).get("data")
 
         result = await operation()
@@ -84,8 +80,10 @@ class IdempotencyService:
     @staticmethod
     def _fingerprint(request: Any) -> str:
         """sha256 of the canonical request body — stable across key orderings."""
-        data = request.model_dump(mode="json") if isinstance(request, BaseModel) else (
-            jsonable_encoder(request)
+        data = (
+            request.model_dump(mode="json")
+            if isinstance(request, BaseModel)
+            else (jsonable_encoder(request))
         )
         canonical = json.dumps(data, sort_keys=True, separators=(",", ":"), default=str)
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

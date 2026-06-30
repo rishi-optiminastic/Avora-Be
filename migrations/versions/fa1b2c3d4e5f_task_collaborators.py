@@ -32,9 +32,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["employee_id"], ["employees.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("task_id", "employee_id"),
     )
-    op.create_index(
-        "ix_task_collaborators_employee_id", "task_collaborators", ["employee_id"]
-    )
+    op.create_index("ix_task_collaborators_employee_id", "task_collaborators", ["employee_id"])
 
 
 def downgrade() -> None:

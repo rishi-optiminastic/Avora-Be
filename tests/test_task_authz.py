@@ -279,9 +279,7 @@ async def test_bulk_create_is_atomic_on_out_of_scope_assignee(
 # -- Free-text parse -------------------------------------------------------- #
 
 
-async def test_parse_requires_manager(
-    client: AsyncClient, settings: Settings, seed: _Seed
-) -> None:
+async def test_parse_requires_manager(client: AsyncClient, settings: Settings, seed: _Seed) -> None:
     resp = await client.post(
         "/api/v1/tasks/parse",
         json={"text": "Remy -\n  do a thing"},

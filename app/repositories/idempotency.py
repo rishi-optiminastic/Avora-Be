@@ -24,9 +24,7 @@ class IdempotencyRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def get(
-        self, *, principal_id: uuid.UUID, scope: str, key: str
-    ) -> IdempotencyKey | None:
+    async def get(self, *, principal_id: uuid.UUID, scope: str, key: str) -> IdempotencyKey | None:
         row = await self._session.execute(
             select(IdempotencyKey).where(
                 IdempotencyKey.principal_id == principal_id,

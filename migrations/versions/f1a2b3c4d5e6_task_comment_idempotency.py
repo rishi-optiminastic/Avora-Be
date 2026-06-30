@@ -36,7 +36,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint(
-        "uq_task_comments_author_idempotency", "task_comments", type_="unique"
-    )
+    op.drop_constraint("uq_task_comments_author_idempotency", "task_comments", type_="unique")
     op.drop_column("task_comments", "idempotency_key")
