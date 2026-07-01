@@ -21,7 +21,6 @@ import logging
 import os
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from worker.heartbeat import beat
 
 from app.core.config import get_settings
 from app.db.session import SessionFactory, engine
@@ -32,14 +31,17 @@ from app.repositories.compensation import CompensationRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.holiday import HolidayRepository
 from app.repositories.leave import LeaveRepository
+from app.repositories.org_settings import OrgSettingsRepository
 from app.repositories.payroll_run import PayrollRunRepository
 from app.repositories.payroll_settings import PayrollSettingsRepository
+from app.repositories.payslip import PayslipRepository
 from app.repositories.regularization import RegularizationRepository
 from app.repositories.work_session import WorkSessionRepository
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.attendance_service import AttendanceService
 from app.services.email_service import EmailService
 from app.services.payroll_service import PayrollService
+from worker.heartbeat import beat
 
 log = logging.getLogger("payroll_scheduler")
 
@@ -62,12 +64,14 @@ def _build_service(session: AsyncSession) -> PayrollService:
     return PayrollService(
         PayrollSettingsRepository(session),
         PayrollRunRepository(session),
+        PayslipRepository(session),
         CompensationRepository(session),
         employees,
         attendance,
         policy,
         LeaveRepository(session),
         HolidayRepository(session),
+        OrgSettingsRepository(session),
         EmailService(get_settings()),
         audit,
     )

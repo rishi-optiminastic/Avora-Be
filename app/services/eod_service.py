@@ -9,10 +9,14 @@ No FastAPI objects here (Layering §4); the screenshot signal is OCR *text* only
 from __future__ import annotations
 
 import asyncio
+import base64
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime, time, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
+
+from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core import storage
 from app.core.config import Settings
@@ -21,6 +25,7 @@ from app.core.logging import get_logger
 from app.models.employee import Employee, Role
 from app.models.eod_report import EodReport, EodStatus
 from app.models.notification import NotificationKind
+from app.models.screenshot import Screenshot
 from app.models.task import Task, TaskStatus
 from app.repositories.activity import ActivityRepository, DailyAgg, idle_minutes
 from app.repositories.audit import AuditRepository
@@ -169,23 +174,42 @@ class EodService:
         if not present:
             return 0
 
+        # Phase 0 — vision (optional): analyse a few sampled screenshots per
+        # employee into a screen-context block. DB access stays sequential; the
+        # model/S3 calls fan out concurrently inside.
+        vision_blocks = await self._vision_blocks(present, start, end)
         # Phase 1 — build each person's context (DB; sequential on the shared session).
-        contexts = [await self._build_context(caller, e, start, end) for e in present]
-        # Phase 2 — summarise concurrently; the LLM is network-bound, so bound the fan-out.
-        drafts = await self._summarise_all(contexts)
+        built = [
+            await self._build_context(caller, e, start, end, vision_blocks.get(e.id, ""))
+            for e in present
+        ]
+        # Phase 2 — summarise concurrently; the LLM is network-bound, so bound the
+        # fan-out. An empty-signal day skips the model and gets a fixed draft.
+        drafts = await self._summarise_all(
+            [
+                (ctx, has_signal, e.full_name)
+                for e, (ctx, _, has_signal) in zip(present, built, strict=True)
+            ]
+        )
         # Phase 3 — persist (DB; sequential).
         send_label = await self._send_time_label()
         created = 0
-        for employee, draft in zip(present, drafts, strict=True):
-            created += await self._persist_draft(employee, report_date, draft, send_label)
+        for employee, (_, metrics, _), draft in zip(present, built, drafts, strict=True):
+            created += await self._persist_draft(employee, report_date, draft, send_label, metrics)
         return created
 
-    async def _summarise_all(self, contexts: list[str]) -> list[EodDraftContent | None]:
+    async def _summarise_all(
+        self, items: list[tuple[str, bool, str]]
+    ) -> list[EodDraftContent | None]:
         """Run the per-employee LLM calls concurrently, capped at `eod_concurrency`
-        so we don't hammer the provider. A failed call yields None (→ FAILED row)."""
+        so we don't hammer the provider. A day with no signal at all skips the model
+        and gets a fixed empty-state draft; a failed call yields None (→ FAILED row)."""
         limit = asyncio.Semaphore(self._settings.eod_concurrency)
 
-        async def summarise(context: str) -> EodDraftContent | None:
+        async def summarise(item: tuple[str, bool, str]) -> EodDraftContent | None:
+            context, has_signal, name = item
+            if not has_signal:
+                return _empty_draft(name)
             async with limit:
                 try:
                     return await self._llm.generate_eod(context)
@@ -193,7 +217,7 @@ class EodService:
                     logger.warning("eod generation failed: %s", exc)
                     return None
 
-        return await asyncio.gather(*(summarise(c) for c in contexts))
+        return await asyncio.gather(*(summarise(i) for i in items))
 
     async def _persist_draft(
         self,
@@ -201,12 +225,14 @@ class EodService:
         report_date: str,
         draft: EodDraftContent | None,
         send_label: str,
+        metrics: dict[str, object],
     ) -> int:
         if draft is None:
             await self._reports.create(
                 employee_id=employee.id,
                 report_date=report_date,
                 status=EodStatus.FAILED,
+                metrics=metrics,
                 error="llm generation failed",
                 model=self._settings.eod_model,
             )
@@ -217,6 +243,7 @@ class EodService:
             status=EodStatus.DRAFT,
             summary=draft.summary,
             highlights=draft.model_dump(),
+            metrics=metrics,
             model=self._settings.eod_model,
         )
         await self._notifications.notify(
@@ -319,11 +346,16 @@ class EodService:
         self, report: EodReport, employee: Employee | None, recipients: list[str]
     ) -> None:
         if employee is not None and recipients:
+            highlights = EodDraftContent.model_validate(report.highlights or {})
+            metrics = report.metrics or {}
             subject, html = eod_report_email(
                 employee_name=employee.full_name,
                 date_label=report.report_date,
                 summary=report.edited_summary or report.summary,
-                highlights=EodDraftContent.model_validate(report.highlights or {}),
+                highlights=highlights,
+                worked_minutes=int(metrics.get("worked_minutes", 0) or 0),
+                active_minutes=int(metrics.get("active_minutes", 0) or 0),
+                tasks_done=int(metrics.get("tasks_done", len(highlights.tasks_completed)) or 0),
             )
             for recipient in recipients:
                 await self._email.send(to=recipient, subject=subject, html=html)
@@ -359,10 +391,81 @@ class EodService:
         emails.extend(admin.work_email for admin in admins)
         return [e for e in dict.fromkeys(emails) if e and e != employee.work_email]
 
+    # ---- vision (sampled screenshot analysis) ----------------------------- #
+    async def _vision_blocks(
+        self, employees: list[Employee], start: datetime, end: datetime
+    ) -> dict[uuid.UUID, str]:
+        """Per-employee screen-context block from a few sampled screenshots (empty
+        dict when vision is off). DB work — sampling the frames and caching results —
+        stays sequential on the shared session; the model + S3 calls in between fan
+        out concurrently. Cached `vision_json` is reused so a re-run never re-bills."""
+        if not self._settings.eod_vision_active:
+            return {}
+        sampled: dict[uuid.UUID, list[Screenshot]] = {}
+        for employee in employees:
+            sampled[employee.id] = await self._screenshots.sample_for_day(
+                employee.id, start, end, self._settings.eod_vision_sample_max
+            )
+        frames = [shot for shots in sampled.values() for shot in shots]
+        if not frames:
+            return {}
+        limit = asyncio.Semaphore(self._settings.eod_concurrency)
+
+        async def analyse(shot: Screenshot) -> tuple[uuid.UUID, dict[str, Any] | None]:
+            if shot.vision_json:
+                return shot.id, dict(shot.vision_json)
+            data = await self._screenshot_bytes(shot)
+            if data is None:
+                return shot.id, None
+            b64 = base64.b64encode(data).decode("ascii")
+            async with limit:
+                try:
+                    result = await self._llm.describe_screen(
+                        image_b64=b64, content_type=shot.content_type
+                    )
+                except LlmError as exc:
+                    logger.warning("eod vision failed: %s", exc)
+                    return shot.id, None
+            return shot.id, result
+
+        analysed = dict(await asyncio.gather(*(analyse(shot) for shot in frames)))
+        dirty = False
+        for shot in frames:
+            result = analysed.get(shot.id)
+            if result is not None and not shot.vision_json:
+                shot.vision_json = result
+                dirty = True
+        if dirty:
+            await self._screenshots.flush()
+        return {
+            emp_id: _format_vision([analysed.get(s.id) for s in shots])
+            for emp_id, shots in sampled.items()
+        }
+
+    async def _screenshot_bytes(self, shot: Screenshot) -> bytes | None:
+        """Image bytes for one sampled frame — the DB column (already loaded) or S3."""
+        if shot.image is not None:
+            return bytes(shot.image)
+        if shot.object_key and self._settings.s3_enabled:
+            try:
+                return await storage.get_object(shot.object_key)
+            except (ClientError, BotoCoreError):
+                logger.warning("eod vision: s3 fetch failed")
+                return None
+        return None
+
     # ---- context + time helpers ------------------------------------------- #
     async def _build_context(
-        self, caller: CurrentUser, employee: Employee, start: datetime, end: datetime
-    ) -> str:
+        self,
+        caller: CurrentUser,
+        employee: Employee,
+        start: datetime,
+        end: datetime,
+        vision_block: str,
+    ) -> tuple[str, dict[str, object], bool]:
+        """Returns (LLM context text, day metrics for the email card, has-signal).
+        `has_signal` is False only when nothing at all was observed — those days
+        skip the model and render a fixed empty-state draft."""
         tasks, _ = await self._tasks.list_for_scope(
             caller, offset=0, limit=200, assignee_id=employee.id
         )
@@ -375,21 +478,38 @@ class EodService:
             t.title for t in tasks if t.status in _ACTIVE_STATUSES and _is_today_task(t, start, end)
         ]
         aggs = await self._activity.daily_aggregates([employee.id], start, end)
+        agg = aggs.get(employee.id)
         ocr = await self._screenshots.ocr_text_for_day(employee.id, start, end)
         ocr_text = "\n".join(ocr)[: self._settings.eod_ocr_char_budget]
+
+        worked_minutes, active_minutes = _worked_metrics(agg)
+        metrics: dict[str, object] = {
+            "worked_minutes": worked_minutes,
+            "active_minutes": active_minutes,
+            "tasks_done": len(completed),
+        }
+        has_signal = bool(completed or active or agg or ocr_text or vision_block)
 
         lines = [
             f"Employee: {employee.full_name}"
             + (f" ({employee.job_title})" if employee.job_title else ""),
             f"Department: {employee.department or 'n/a'}",
-            f"Time worked today: {_worked_summary(aggs.get(employee.id))}",
+            f"Time worked today: {_worked_summary(agg)}",
             f"Tasks completed today: {_join(completed)}",
             f"Tasks in progress / due today: {_join(active)}",
+        ]
+        if vision_block:
+            lines += [
+                "",
+                "Screen context (from visual analysis of representative screenshots):",
+                vision_block,
+            ]
+        lines += [
             "",
             "Screen activity (OCR text from screenshots, may be noisy):",
             ocr_text or "(none captured)",
         ]
-        return "\n".join(lines)
+        return "\n".join(lines), metrics, has_signal
 
     async def _local_dt(self, now: datetime) -> datetime:
         """`now` in the org's attendance-policy timezone (the scheduler clock)."""
@@ -431,9 +551,64 @@ def _join(items: list[str]) -> str:
     return "; ".join(items) if items else "none"
 
 
+def _worked_metrics(agg: DailyAgg | None) -> tuple[int, int]:
+    """(worked_minutes, active_minutes) from a day's rollup. Server-stamped times
+    only; active = worked minus the idle share (see `idle_minutes`)."""
+    if agg is None:
+        return 0, 0
+    worked = max(0, int((agg.logout_at - agg.login_at).total_seconds() // 60))
+    active = max(0, worked - idle_minutes(agg, worked))
+    return worked, active
+
+
 def _worked_summary(agg: DailyAgg | None) -> str:
     if agg is None:
         return "no activity captured"
-    worked = max(0, int((agg.logout_at - agg.login_at).total_seconds() // 60))
-    active = max(0, worked - idle_minutes(agg, worked))
+    worked, active = _worked_metrics(agg)
     return f"{worked} min on machine, ~{active} min active"
+
+
+def _empty_draft(name: str) -> EodDraftContent:
+    """Deterministic draft for a day with no signal at all — avoids spending an LLM
+    call and keeps the wording consistent (vs. the model improvising each time)."""
+    return EodDraftContent(
+        summary=(
+            f"No tracked activity was captured for {name} today — the Avora agent "
+            "may not have been running, or the day was spent off the tracked device. "
+            "No tasks were completed and no screen activity was recorded."
+        ),
+        confidence=0,
+    )
+
+
+def _format_vision(results: list[dict[str, Any] | None]) -> str:
+    """Aggregate per-frame vision JSON into one compact context block: deduped apps
+    and projects (insertion order preserved) plus per-frame observations. Empty when
+    nothing was extracted (the EOD context then omits the visual section)."""
+    apps: dict[str, None] = {}
+    projects: dict[str, None] = {}
+    observations: list[str] = []
+    for result in results:
+        if not result:
+            continue
+        for app in result.get("apps") or []:
+            if isinstance(app, str) and app.strip():
+                apps.setdefault(app.strip(), None)
+        for project in result.get("projects") or []:
+            if isinstance(project, str) and project.strip():
+                projects.setdefault(project.strip(), None)
+        working = (result.get("working_on") or "").strip()
+        detail = (result.get("detail") or "").strip()
+        if working:
+            observations.append(f"{working} — {detail}" if detail else working)
+    if not (apps or projects or observations):
+        return ""
+    parts: list[str] = []
+    if apps:
+        parts.append("Apps in use: " + ", ".join(apps))
+    if projects:
+        parts.append("Projects/areas on screen: " + ", ".join(projects))
+    if observations:
+        parts.append("Observed across the day:")
+        parts.extend(f"- {observation}" for observation in observations[:12])
+    return "\n".join(parts)

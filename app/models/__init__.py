@@ -30,6 +30,7 @@ from app.models.onboarding_config import OnboardingConfig
 from app.models.org_settings import OrgSettings
 from app.models.payroll_run import PayrollRun, PayrollRunSource
 from app.models.payroll_settings import PayCycle, PayrollSettings
+from app.models.payslip import Payslip, PayslipStatus
 from app.models.ping import Ping
 from app.models.quick_meet_default import QuickMeetDefault
 from app.models.regularization import Regularization, RegularizationStatus
@@ -87,6 +88,8 @@ __all__ = [
     "PayrollRun",
     "PayrollRunSource",
     "PayrollSettings",
+    "Payslip",
+    "PayslipStatus",
     "Ping",
     "QuickMeetDefault",
     "Regularization",

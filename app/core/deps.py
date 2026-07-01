@@ -51,6 +51,7 @@ from app.repositories.onboarding_config import OnboardingConfigRepository
 from app.repositories.org_settings import OrgSettingsRepository
 from app.repositories.payroll_run import PayrollRunRepository
 from app.repositories.payroll_settings import PayrollSettingsRepository
+from app.repositories.payslip import PayslipRepository
 from app.repositories.ping import PingRepository
 from app.repositories.quick_meet import QuickMeetRepository
 from app.repositories.regularization import RegularizationRepository
@@ -88,6 +89,7 @@ from app.services.leave_policy_service import LeavePolicyService
 from app.services.leave_service import LeaveService
 from app.services.llm_service import LlmService
 from app.services.meeting_service import MeetingService
+from app.services.monitoring_gate import MonitoringGateService
 from app.services.monitoring_service import MonitoringService
 from app.services.notification_service import NotificationService
 from app.services.onboarding_service import OnboardingService
@@ -244,6 +246,10 @@ def get_org_settings_repo(db: DbDep) -> OrgSettingsRepository:
 
 def get_payroll_run_repo(db: DbDep) -> PayrollRunRepository:
     return PayrollRunRepository(db)
+
+
+def get_payslip_repo(db: DbDep) -> PayslipRepository:
+    return PayslipRepository(db)
 
 
 def get_document_repo(db: DbDep) -> DocumentRepository:
@@ -479,12 +485,20 @@ def get_work_session_service(
     return WorkSessionService(sessions, audit)
 
 
+def get_monitoring_gate(
+    work_sessions: Annotated[WorkSessionRepository, Depends(get_work_session_repo)],
+    policy: Annotated[AttendancePolicyService, Depends(get_attendance_policy_service)],
+) -> MonitoringGateService:
+    return MonitoringGateService(work_sessions, policy)
+
+
 def get_screenshot_service(
     screenshots: Annotated[ScreenshotRepository, Depends(get_screenshot_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     settings: SettingsDep,
+    gate: Annotated[MonitoringGateService, Depends(get_monitoring_gate)],
 ) -> ScreenshotService:
-    return ScreenshotService(screenshots, employees, settings)
+    return ScreenshotService(screenshots, employees, settings, gate)
 
 
 def get_ping_service(
@@ -517,8 +531,9 @@ def get_activity_service(
     activity: Annotated[ActivityRepository, Depends(get_activity_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    gate: Annotated[MonitoringGateService, Depends(get_monitoring_gate)],
 ) -> ActivityService:
-    return ActivityService(settings, devices, activity, employees, audit)
+    return ActivityService(settings, devices, activity, employees, audit, gate)
 
 
 def get_invitation_service(
@@ -619,24 +634,28 @@ def get_compensation_service(
 def get_payroll_service(
     settings_repo: Annotated[PayrollSettingsRepository, Depends(get_payroll_settings_repo)],
     runs: Annotated[PayrollRunRepository, Depends(get_payroll_run_repo)],
+    payslips: Annotated[PayslipRepository, Depends(get_payslip_repo)],
     compensation: Annotated[CompensationRepository, Depends(get_compensation_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     attendance: Annotated[AttendanceService, Depends(get_attendance_service)],
     policy: Annotated[AttendancePolicyService, Depends(get_attendance_policy_service)],
     leaves: Annotated[LeaveRepository, Depends(get_leave_repo)],
     holidays: Annotated[HolidayRepository, Depends(get_holiday_repo)],
+    orgs: Annotated[OrgSettingsRepository, Depends(get_org_settings_repo)],
     email: Annotated[EmailService, Depends(get_email_service)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
 ) -> PayrollService:
     return PayrollService(
         settings_repo,
         runs,
+        payslips,
         compensation,
         employees,
         attendance,
         policy,
         leaves,
         holidays,
+        orgs,
         email,
         audit,
     )

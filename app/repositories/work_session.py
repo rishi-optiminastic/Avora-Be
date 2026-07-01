@@ -59,6 +59,24 @@ class WorkSessionRepository:
         )
         return rows.scalar_one_or_none()
 
+    # Sources that mean a *deliberate* end-of-day checkout (vs a biometric out-punch
+    # that may just be a lunch break). Drives "stop monitoring after checkout".
+    _DELIBERATE_OUT = ("dashboard", "auto")
+
+    async def has_deliberate_checkout_since(self, employee_id: uuid.UUID, since: datetime) -> bool:
+        """Did the employee deliberately clock out (dashboard / auto) on/after
+        `since`? Used to suppress monitoring ingest after an end-of-day checkout."""
+        row = await self._session.execute(
+            select(WorkSession.id)
+            .where(
+                WorkSession.employee_id == employee_id,
+                WorkSession.clock_out_source.in_(self._DELIBERATE_OUT),
+                WorkSession.clock_out_at >= since,
+            )
+            .limit(1)
+        )
+        return row.first() is not None
+
     async def create(
         self,
         *,

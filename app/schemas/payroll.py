@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.models.payroll_run import PayrollRun, PayrollRunSource
 from app.models.payroll_settings import PayCycle, PayrollSettings
+from app.models.payslip import Payslip
 from app.schemas.common import ORMModel
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -149,6 +150,81 @@ class PayslipRead(BaseModel):
     payable_days: float
     net_minor: int  # the prorated take-home for the month
     missing_compensation: bool
+
+
+class PayslipSummaryRead(BaseModel):
+    """One line in an employee's released-payslip history (the download list)."""
+
+    month: str  # YYYY-MM
+    currency: str
+    net_payable_minor: int  # prorated take-home that was released
+    gross_minor: int
+    released_at: datetime
+    emailed: bool
+
+    @classmethod
+    def from_model(cls, m: Payslip) -> PayslipSummaryRead:
+        return cls(
+            month=m.period_month,
+            currency=m.currency,
+            net_payable_minor=m.net_minor,
+            gross_minor=m.gross_minor,
+            released_at=m.released_at,
+            emailed=m.emailed_at is not None,
+        )
+
+
+class ReleasedPayslipRead(BaseModel):
+    """A finalized, HR-released payslip read back from its frozen snapshot.
+
+    Distinct from the live `PayslipRead` (which recomputes): these numbers are
+    locked, which is why employees only ever see months HR has released.
+    """
+
+    month: str  # YYYY-MM
+    employee_id: uuid.UUID
+    employee_name: str
+    department: str | None
+    currency: str
+    monthly_ctc_minor: int
+    breakdown: SalaryBreakdownRead
+    working_days: int
+    present_days: float
+    paid_leave_days: float
+    payable_days: float
+    net_payable_minor: int  # prorated take-home
+    released_at: datetime
+    emailed: bool
+
+    @classmethod
+    def from_model(cls, m: Payslip) -> ReleasedPayslipRead:
+        return cls(
+            month=m.period_month,
+            employee_id=m.employee_id,
+            employee_name=m.employee_name,
+            department=m.department,
+            currency=m.currency,
+            monthly_ctc_minor=m.monthly_ctc_minor,
+            breakdown=SalaryBreakdownRead(**m.breakdown),
+            working_days=m.working_days,
+            present_days=m.present_days,
+            paid_leave_days=m.paid_leave_days,
+            payable_days=m.payable_days,
+            net_payable_minor=m.net_minor,
+            released_at=m.released_at,
+            emailed=m.emailed_at is not None,
+        )
+
+
+class PayrollFinalizeResult(BaseModel):
+    """Outcome of HR finalizing (releasing) a month's payroll."""
+
+    month: str  # YYYY-MM
+    currency: str
+    released_count: int
+    emailed_count: int
+    skipped_count: int  # employees skipped for missing compensation
+    total_net_minor: int
 
 
 class PayrollRunRead(ORMModel):
