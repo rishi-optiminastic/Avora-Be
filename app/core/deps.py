@@ -28,6 +28,7 @@ from app.core.security import (
 from app.db.session import get_session
 from app.models.employee import Role
 from app.repositories.activity import ActivityRepository
+from app.repositories.announcement import AnnouncementRepository
 from app.repositories.attendance_policy import AttendancePolicyRepository
 from app.repositories.attribution_correction import AttributionCorrectionRepository
 from app.repositories.audit import AuditRepository
@@ -65,6 +66,7 @@ from app.repositories.workspace_file import WorkspaceFileRepository
 from app.schemas.auth import AuthIdentity, CurrentDevice, CurrentUser, EnvPrincipal
 from app.services.activity_service import ActivityService
 from app.services.agent_nudge_service import AgentNudgeService
+from app.services.announcement_service import AnnouncementService
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.attendance_service import AttendanceService
 from app.services.attribution_correction_service import AttributionCorrectionService
@@ -202,6 +204,10 @@ def get_leave_comment_repo(db: DbDep) -> LeaveCommentRepository:
 
 def get_holiday_repo(db: DbDep) -> HolidayRepository:
     return HolidayRepository(db)
+
+
+def get_announcement_repo(db: DbDep) -> AnnouncementRepository:
+    return AnnouncementRepository(db)
 
 
 def get_work_session_repo(db: DbDep) -> WorkSessionRepository:
@@ -623,6 +629,15 @@ def get_holiday_service(
     return HolidayService(holidays, audit)
 
 
+def get_announcement_service(
+    announcements: Annotated[AnnouncementRepository, Depends(get_announcement_repo)],
+    holidays: Annotated[HolidayRepository, Depends(get_holiday_repo)],
+    policy: Annotated[AttendancePolicyService, Depends(get_attendance_policy_service)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> AnnouncementService:
+    return AnnouncementService(announcements, holidays, policy, audit)
+
+
 def get_compensation_service(
     compensation: Annotated[CompensationRepository, Depends(get_compensation_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
@@ -705,6 +720,7 @@ LeavePolicyServiceDep = Annotated[LeavePolicyService, Depends(get_leave_policy_s
 MeetingServiceDep = Annotated[MeetingService, Depends(get_meeting_service)]
 NotificationServiceDep = Annotated[NotificationService, Depends(get_notification_service)]
 HolidayServiceDep = Annotated[HolidayService, Depends(get_holiday_service)]
+AnnouncementServiceDep = Annotated[AnnouncementService, Depends(get_announcement_service)]
 CompensationServiceDep = Annotated[CompensationService, Depends(get_compensation_service)]
 PayrollServiceDep = Annotated[PayrollService, Depends(get_payroll_service)]
 DocumentServiceDep = Annotated[DocumentService, Depends(get_document_service)]

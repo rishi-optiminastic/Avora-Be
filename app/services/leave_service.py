@@ -1,7 +1,9 @@
 """Leave business rules.
 
-Reads are scoped in the repository. An employee applies for their own leave; only
-a manager/HR/admin (never the requester) may decide it; only the requester may
+Reads are scoped in the repository so the requester's manager, HR and admin can
+all *see* a request. But **only an admin may approve/reject** it (never the
+requester) — approval is a segregation-of-duties action reserved to admins; a
+manager or HR can view a request but not decide it. Only the requester may
 withdraw their own pending request. No FastAPI objects here (Layering §4).
 """
 
@@ -14,6 +16,7 @@ from datetime import UTC, date, datetime, timedelta
 from app.core.exceptions import AuthorizationError, ConflictError, NotFoundError
 from app.core.logging import get_logger
 from app.core.payroll import working_days_between
+from app.models.employee import Role
 from app.models.leave import Leave, LeaveStatus, LeaveType
 from app.models.leave_comment import LeaveComment
 from app.models.notification import NotificationKind, NotificationLevel
@@ -87,14 +90,32 @@ class LeaveService:
             action="leave.apply",
             target=f"leave:{leave.id}:{payload.leave_type.value}",
         )
-        # Tell the reviewing manager there's a request waiting on them.
-        if caller.manager_id is not None:
+        # Approval is admin-only → tell every admin there's a request to approve.
+        # The reporting manager can see it too (repo scope), so notify them as an
+        # FYI — unless they're already an admin (avoid a duplicate).
+        body = (
+            f"{payload.leave_type.value.replace('_', ' ').title()} · "
+            f"{payload.start_date:%d %b} - {payload.end_date:%d %b}"
+        )
+        admins = await self._employees.list_by_role(Role.ADMIN)
+        admin_ids = {admin.id for admin in admins}
+        for admin in admins:
+            await self._notifications.notify(
+                recipient_id=admin.id,
+                kind=NotificationKind.LEAVE_REQUEST,
+                title="Leave request to approve",
+                body=body,
+                link=_LEAVES_LINK,
+                entity_type="leave",
+                entity_id=leave.id,
+                actor_id=caller.employee_id,
+            )
+        if caller.manager_id is not None and caller.manager_id not in admin_ids:
             await self._notifications.notify(
                 recipient_id=caller.manager_id,
                 kind=NotificationKind.LEAVE_REQUEST,
-                title="New leave request to review",
-                body=f"{payload.leave_type.value.replace('_', ' ').title()} · "
-                f"{payload.start_date:%d %b} - {payload.end_date:%d %b}",
+                title="Leave request from your team",
+                body=body,
                 link=_LEAVES_LINK,
                 entity_type="leave",
                 entity_id=leave.id,
@@ -108,8 +129,9 @@ class LeaveService:
         leave = await self._leaves.get_in_scope(caller, leave_id)
         if leave is None:
             raise NotFoundError()
-        # Only a manager/HR/admin may decide, and never your own request.
-        if not caller.is_manager or caller.employee_id == leave.employee_id:
+        # Approval is admin-only, and never your own request. Managers/HR can see
+        # the request (repo scope) but cannot decide it.
+        if not caller.is_admin or caller.employee_id == leave.employee_id:
             raise AuthorizationError()
         if leave.status is not LeaveStatus.SUBMITTED:
             raise ConflictError("This request can no longer be decided.")
