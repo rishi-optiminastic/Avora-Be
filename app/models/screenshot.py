@@ -65,8 +65,19 @@ class Screenshot(UUIDPrimaryKeyMixin, Base):
     object_key: Mapped[str | None] = mapped_column(String(512), default=None)
     image: Mapped[bytes | None] = mapped_column(LargeBinary, default=None)
 
+    # Per-monitor rectangles within the combined capture, as [x, y, w, h] in the
+    # stored image's pixels (agent-reported; multi-monitor desktops are captured
+    # as one image). Empty/absent ⇒ treat the whole image as one screen. Lets the
+    # OCR worker crop and OCR each monitor separately for far better accuracy.
+    monitors: Mapped[list[list[int]]] = mapped_column(JSON, default=list)
+
     # OCR (filled by the standalone worker; used for work attribution).
     ocr_status: Mapped[OcrStatus] = mapped_column(default=OcrStatus.PENDING, index=True)
     ocr_text: Mapped[str | None] = mapped_column(Text, default=None)
+
+    # Structured visual context for sampled frames, cached by the EOD vision pass
+    # ({apps, projects, working_on, detail}). Null until a frame is analyzed; only
+    # a sampled subset is ever filled. Reused so a re-run never re-bills vision.
+    vision_json: Mapped[dict[str, object] | None] = mapped_column(JSON, default=None)
 
     flags: Mapped[list[str]] = mapped_column(JSON, default=list)

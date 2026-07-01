@@ -21,6 +21,12 @@ _INK = "#1a1530"
 _MUTED = "#6b6485"
 _PAPER = "#f6f4ff"
 _LINE = "#e6e2f0"
+_CARD = "#ffffff"
+# Amber accent — used to make EOD blockers stand out from the violet brand.
+_AMBER = "#9a6207"
+_AMBER_INK = "#5c3d05"
+_AMBER_SOFT = "#fcf3e3"
+_AMBER_LINE = "#f0dcb8"
 _SERIF = "'Reckless Neue', Georgia, 'Times New Roman', serif"
 _SANS = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
 
@@ -341,18 +347,117 @@ def agent_reinstall_email(*, employee_name: str, install_url: str) -> tuple[str,
     )
 
 
-def _bullets(label: str, items: list[str]) -> str:
+def _eyebrow(text: str) -> str:
+    return (
+        f'<div style="font-size:11px;font-weight:600;letter-spacing:0.14em;'
+        f'text-transform:uppercase;color:{_MUTED};">{text}</div>'
+    )
+
+
+def _section_label(text: str, color: str = _MUTED) -> str:
+    return (
+        f'<div style="font-size:11px;font-weight:600;letter-spacing:0.14em;'
+        f'text-transform:uppercase;color:{color};margin:0 0 8px;">{text}</div>'
+    )
+
+
+def _fmt_hours(minutes: int) -> str:
+    """Compact worked-time label: '45m' under an hour, else '6.7h'."""
+    if minutes < 60:
+        return f"{max(0, minutes)}m"
+    return f"{minutes / 60:.1f}h"
+
+
+def _stat_cell(value: str, label: str, *, accent: bool = False) -> str:
+    """One stat tile in the three-up report-card row."""
+    bg = _VIOLET_SOFT if accent else _CARD
+    value_color = _VIOLET if accent else _INK
+    return (
+        f'<td width="33.33%" valign="top" style="padding:0 4px;">'
+        f'<div style="background:{bg};border:1px solid {_LINE};border-radius:10px;'
+        f'padding:14px 8px;text-align:center;">'
+        f'<div style="font-family:{_SERIF};font-size:24px;font-weight:600;line-height:1;'
+        f'color:{value_color};font-variant-numeric:tabular-nums;">{value}</div>'
+        f'<div style="font-size:10px;font-weight:600;letter-spacing:0.1em;'
+        f'text-transform:uppercase;color:{_MUTED};margin-top:7px;">{label}</div>'
+        f"</div></td>"
+    )
+
+
+def _stat_row(worked_minutes: int, active_pct: int, tasks_done: int) -> str:
+    return (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        'style="margin:18px 0 4px;"><tr>'
+        f"{_stat_cell(_fmt_hours(worked_minutes), 'Worked')}"
+        f"{_stat_cell(f'{active_pct}%', 'Active', accent=True)}"
+        f"{_stat_cell(str(tasks_done), 'Done')}"
+        "</tr></table>"
+    )
+
+
+def _active_bar(active_pct: int, worked_minutes: int, active_minutes: int) -> str:
+    """A slim violet progress bar for active share — email-safe (table cells)."""
+    pct = max(0, min(100, active_pct))
+    rest = max(0, 100 - pct)
+    fill = (
+        f'<td style="width:{pct}%;background:{_VIOLET};height:8px;'
+        f'border-radius:6px;font-size:0;line-height:0;">&nbsp;</td>'
+    )
+    gap = f'<td style="width:{rest}%;font-size:0;line-height:0;">&nbsp;</td>' if rest else ""
+    return (
+        '<div style="margin:8px 0 18px;">'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        f'style="background:{_VIOLET_SOFT};border-radius:6px;"><tr>{fill}{gap}</tr></table>'
+        f'<div style="font-size:11px;color:{_MUTED};margin-top:6px;">'
+        f"{active_minutes} min actively engaged of {worked_minutes} min on the machine"
+        "</div></div>"
+    )
+
+
+def _pill(text: str) -> str:
+    """A spaced, wrapping pill — like `_chip` but with margin for chip rows."""
+    return (
+        f'<span style="display:inline-block;background:{_VIOLET_SOFT};color:{_VIOLET};'
+        f"font-size:12px;font-weight:600;padding:4px 11px;border-radius:8px;"
+        f'margin:0 6px 6px 0;">{text}</span>'
+    )
+
+
+def _pill_row(label: str, items: list[str]) -> str:
     if not items:
         return ""
-    lis = "".join(
-        f'<li style="margin:0 0 4px;font-size:14px;line-height:1.5;color:{_INK};">{i}</li>'
+    pills = "".join(_pill(i) for i in items)
+    return f'<div style="margin:0 0 16px;">{_section_label(label)}<div>{pills}</div></div>'
+
+
+def _check_list(label: str, items: list[str]) -> str:
+    if not items:
+        return ""
+    rows = "".join(
+        f'<tr><td valign="top" style="color:{_VIOLET};font-size:14px;font-weight:700;'
+        f'padding:0 9px 7px 0;line-height:1.5;">&#10003;</td>'
+        f'<td style="font-size:14px;line-height:1.5;color:{_INK};padding:0 0 7px;">{i}</td></tr>'
         for i in items
     )
     return (
-        f'<div style="margin:0 0 14px;"><div style="font-size:11px;font-weight:600;'
-        f'letter-spacing:0.14em;text-transform:uppercase;color:{_MUTED};margin:0 0 6px;">'
-        f"{label}</div>"
-        f'<ul style="margin:0;padding-left:18px;">{lis}</ul></div>'
+        f'<div style="margin:0 0 16px;">{_section_label(label)}'
+        f'<table role="presentation" cellpadding="0" cellspacing="0">{rows}</table></div>'
+    )
+
+
+def _blocker_block(items: list[str]) -> str:
+    if not items:
+        return ""
+    lis = "".join(
+        f'<li style="margin:0 0 4px;font-size:13.5px;line-height:1.5;color:{_AMBER_INK};">{i}</li>'
+        for i in items
+    )
+    return (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        'style="margin:2px 0 16px;"><tr><td style="background:'
+        f'{_AMBER_SOFT};border:1px solid {_AMBER_LINE};border-radius:10px;padding:12px 16px;">'
+        f"{_section_label('&#9888; Blockers', _AMBER)}"
+        f'<ul style="margin:0;padding-left:18px;">{lis}</ul></td></tr></table>'
     )
 
 
@@ -362,25 +467,44 @@ def eod_report_email(
     date_label: str,
     summary: str,
     highlights: EodDraftContent,
+    worked_minutes: int = 0,
+    active_minutes: int = 0,
+    tasks_done: int = 0,
 ) -> tuple[str, str]:
-    """Render the (subject, html) End-of-Day report sent to manager + admins."""
+    """Render the (subject, html) End-of-Day report sent to manager + admins.
+
+    Report-card layout: a three-up stat row (worked / active / done), an active-
+    share bar, the narrative, then Worked-on pills, a Completed checklist, and any
+    Blockers in an amber callout. Stats fall back to 0 cleanly when a signal is
+    missing, so a quiet day still renders a clean card."""
     subject = f"End of day · {employee_name} · {date_label}"
+    active_pct = round(active_minutes / worked_minutes * 100) if worked_minutes > 0 else 0
     summary_html = "".join(
         f'<p style="margin:0 0 12px;font-size:15px;line-height:1.6;color:{_INK};">{para}</p>'
         for para in summary.split("\n\n")
         if para.strip()
     )
+    bar_html = _active_bar(active_pct, worked_minutes, active_minutes) if worked_minutes > 0 else ""
+    confidence = max(0, min(100, highlights.confidence or 0))
+    confidence_html = (
+        f'<div style="margin:20px 0 0;padding-top:14px;border-top:1px solid {_LINE};'
+        f'font-size:11px;color:{_MUTED};">Signal confidence {confidence}% — '
+        "inferred from tasks, activity, and on-screen context.</div>"
+        if confidence
+        else ""
+    )
     content = f"""\
-<div style="font-size:11px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:{_MUTED};">
-  End of day · {date_label}
-</div>
-<h1 style="margin:8px 0 16px;font-family:{_SERIF};font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
+{_eyebrow(f"End of day · {date_label}")}
+<h1 style="margin:8px 0 0;font-family:{_SERIF};font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
   {employee_name}
 </h1>
+{_stat_row(worked_minutes, active_pct, tasks_done)}
+{bar_html}
 {summary_html}
-{_bullets("Worked on", highlights.worked_on)}
-{_bullets("Completed", highlights.tasks_completed)}
-{_bullets("Blockers", highlights.blockers)}"""
+{_pill_row("Worked on", highlights.worked_on)}
+{_check_list("Completed", highlights.tasks_completed)}
+{_blocker_block(highlights.blockers)}
+{confidence_html}"""
     return subject, _layout(
         preheader=f"{employee_name}'s end-of-day summary for {date_label}",
         content_html=content,

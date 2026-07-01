@@ -33,6 +33,7 @@ class ScreenshotRepository:
         byte_size: int,
         object_key: str | None,
         image: bytes | None,
+        monitors: list[list[int]],
         flags: list[str],
     ) -> Screenshot:
         shot = Screenshot(
@@ -45,11 +46,43 @@ class ScreenshotRepository:
             byte_size=byte_size,
             object_key=object_key,
             image=image,
+            monitors=monitors,
             flags=flags,
         )
         self._session.add(shot)
         await self._session.flush()
         return shot
+
+    async def sample_for_day(
+        self, employee_id: uuid.UUID, start: datetime, end: datetime, limit: int
+    ) -> list[Screenshot]:
+        """Up to `limit` representative screenshots across the day, evenly spaced in
+        time so the sample spans the whole day rather than clustering. Loads the full
+        rows (incl. any cached `vision_json` and DB-fallback bytes) only for the
+        chosen ids, so we never drag every frame's image bytes over the wire."""
+        if limit <= 0:
+            return []
+        ids_rows = await self._session.execute(
+            select(Screenshot.id)
+            .where(
+                Screenshot.employee_id == employee_id,
+                Screenshot.received_at >= start,
+                Screenshot.received_at < end,
+            )
+            .order_by(Screenshot.received_at.asc())
+        )
+        ids = list(ids_rows.scalars().all())
+        if not ids:
+            return []
+        if len(ids) <= limit:
+            chosen = ids
+        else:
+            step = len(ids) / limit
+            chosen = [ids[min(len(ids) - 1, int(i * step))] for i in range(limit)]
+        rows = await self._session.execute(select(Screenshot).where(Screenshot.id.in_(chosen)))
+        by_id = {s.id: s for s in rows.scalars().all()}
+        # Preserve chronological order of the chosen ids.
+        return [by_id[i] for i in chosen if i in by_id]
 
     async def list_recent(
         self, employee_ids: Sequence[uuid.UUID], limit: int
@@ -127,3 +160,7 @@ class ScreenshotRepository:
         )
         await self._session.commit()
         return cast("CursorResult[Any]", result).rowcount or 0
+
+    async def flush(self) -> None:
+        """Persist in-session mutations (e.g. cached `vision_json` write-backs)."""
+        await self._session.flush()

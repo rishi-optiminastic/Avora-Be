@@ -2,8 +2,12 @@
 
 External call → lives in the service layer (Layering §4), over the same `httpx`
 pattern as `EmailService`. The API key comes from Settings only; we never log the
-prompt, the response body, or the key (Security rule 5.6). Text-only — screenshot
-*images* are never sent; only their already-extracted OCR text reaches the model.
+prompt, the response body, or the key (Security rule 5.6).
+
+Mostly text (tasks, activity, OCR text). The opt-in EOD *vision* path
+(`describe_screen`) is the one exception: when enabled, a few sampled screenshot
+images per day are sent to a vision model to extract on-screen work context. It is
+off unless `eod_vision_active`, and the vision prompt forbids transcribing secrets.
 """
 
 from __future__ import annotations
@@ -53,11 +57,14 @@ def _strip_fences(text: str) -> str:
 
 _SYSTEM_PROMPT = (
     "You are an assistant that writes a concise, factual End-of-Day work summary "
-    "for one employee, from the structured signals provided (their tasks for the "
-    "day, time worked, and text read from their screen via OCR). Write in third "
-    "person, past tense, plain professional English. Do not invent work that the "
-    "signals do not support; if signal is thin, say so briefly and lower the "
-    "confidence. Never include raw OCR fragments, secrets, or personal data. "
+    "for one employee, from the structured signals provided: their tasks for the "
+    "day, time worked, text read from their screen via OCR, and (when present) a "
+    "visual screen-context section summarising what their screenshots show. Prefer "
+    "the visual screen-context and tasks over raw OCR, which is noisy. Write in "
+    "third person, past tense, plain professional English. Be specific about the "
+    "projects and tools the signals show, but do not invent work the signals do "
+    "not support; if signal is thin, say so briefly and lower the confidence. "
+    "Never include raw OCR fragments, secrets, or personal data. "
     "Respond with ONLY a JSON object matching exactly this shape: "
     '{"summary": string (2-5 sentence markdown narrative), '
     '"worked_on": string[] (areas/projects/tools), '
@@ -65,6 +72,21 @@ _SYSTEM_PROMPT = (
     '"blockers": string[] (anything stuck or at risk, may be empty), '
     '"confidence": integer 0-100 (how well the signals support the summary)}. '
     "Output the raw JSON object only — no markdown code fences, no prose around it."
+)
+
+
+_VISION_PROMPT = (
+    "You analyze ONE screenshot of an employee's screen (it may span multiple "
+    "monitors placed side by side) and report, factually, what work it shows. Read "
+    "code, editor tabs, terminals, browser tabs, document and ticket titles, and "
+    "app chrome. Respond with ONLY a JSON object of this exact shape: "
+    '{"apps": string[] (named apps/tools visible, e.g. "VS Code", "Chrome", "Slack"), '
+    '"projects": string[] (repo / project / client / product names visible), '
+    '"working_on": string (one concise, factual sentence on what they appear to be doing), '
+    '"detail": string (a few more specifics — files, features, tickets, pages)}. '
+    "NEVER transcribe secrets, tokens, passwords, API keys, or private messages. If "
+    "the screen is idle, empty, or ambiguous, return empty arrays and an empty "
+    "working_on. Output the raw JSON object only — no code fences, no prose."
 )
 
 
@@ -137,6 +159,31 @@ class LlmService:
         # Model didn't return usable JSON — keep readable prose as the summary.
         return EodDraftContent(summary=_strip_fences(content))
 
+    async def describe_screen(self, *, image_b64: str, content_type: str) -> dict[str, Any]:
+        """Vision: extract structured work context from ONE screenshot. Returns
+        {apps, projects, working_on, detail} (lists/strings), or empties if the
+        model didn't return usable JSON. Only the sampled EOD frames reach this."""
+        content = await self._complete_vision(
+            image_b64=image_b64,
+            content_type=content_type,
+            system_prompt=_VISION_PROMPT,
+            user_text="Describe what work this screen shows.",
+            model=self._settings.effective_eod_vision_model,
+        )
+        parsed = _loads_lenient(content)
+        if not isinstance(parsed, dict):
+            return {}
+        apps = [str(a) for a in parsed.get("apps", []) if isinstance(a, str)]
+        projects = [str(p) for p in parsed.get("projects", []) if isinstance(p, str)]
+        working_on = parsed.get("working_on")
+        detail = parsed.get("detail")
+        return {
+            "apps": apps,
+            "projects": projects,
+            "working_on": working_on if isinstance(working_on, str) else "",
+            "detail": detail if isinstance(detail, str) else "",
+        }
+
     async def parse_tasks(
         self, text: str, roster: Sequence[tuple[uuid.UUID, str]]
     ) -> list[ParsedTask]:
@@ -159,17 +206,52 @@ class LlmService:
         return [task for item in raw_tasks if (task := _to_parsed_task(item, by_id)) is not None]
 
     async def _complete(self, user_content: str, *, system_prompt: str, model: str) -> str:
-        s = self._settings
-        payload = {
-            "model": model,
-            "messages": [
+        return await self._post_chat(
+            model,
+            [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
             ],
+        )
+
+    async def _complete_vision(
+        self,
+        *,
+        image_b64: str,
+        content_type: str,
+        system_prompt: str,
+        user_text: str,
+        model: str,
+    ) -> str:
+        """Chat completion with one inline image (OpenAI-compatible image_url with a
+        base64 data URI). Used only by the opt-in EOD vision path."""
+        data_uri = f"data:{content_type};base64,{image_b64}"
+        return await self._post_chat(
+            model,
+            [
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": user_text},
+                        {"type": "image_url", "image_url": {"url": data_uri}},
+                    ],
+                },
+            ],
+            http_timeout=90.0,
+        )
+
+    async def _post_chat(
+        self, model: str, messages: list[dict[str, Any]], *, http_timeout: float = 60.0
+    ) -> str:
+        s = self._settings
+        payload = {
+            "model": model,
+            "messages": messages,
             "response_format": {"type": "json_object"},
         }
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with httpx.AsyncClient(timeout=http_timeout) as client:
                 response = await client.post(
                     f"{s.openrouter_base_url}/chat/completions",
                     headers={"Authorization": f"Bearer {s.openrouter_api_key}"},

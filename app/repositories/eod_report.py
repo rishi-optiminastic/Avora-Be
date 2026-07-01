@@ -37,6 +37,7 @@ class EodReportRepository:
         status: EodStatus,
         summary: str = "",
         highlights: dict[str, object] | None = None,
+        metrics: dict[str, object] | None = None,
         model: str | None = None,
         error: str | None = None,
     ) -> EodReport:
@@ -46,6 +47,7 @@ class EodReportRepository:
             status=status,
             summary=summary,
             highlights=highlights or {},
+            metrics=metrics or {},
             model=model,
             error=error,
         )

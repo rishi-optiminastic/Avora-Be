@@ -89,6 +89,7 @@ from app.services.leave_policy_service import LeavePolicyService
 from app.services.leave_service import LeaveService
 from app.services.llm_service import LlmService
 from app.services.meeting_service import MeetingService
+from app.services.monitoring_gate import MonitoringGateService
 from app.services.monitoring_service import MonitoringService
 from app.services.notification_service import NotificationService
 from app.services.onboarding_service import OnboardingService
@@ -484,12 +485,20 @@ def get_work_session_service(
     return WorkSessionService(sessions, audit)
 
 
+def get_monitoring_gate(
+    work_sessions: Annotated[WorkSessionRepository, Depends(get_work_session_repo)],
+    policy: Annotated[AttendancePolicyService, Depends(get_attendance_policy_service)],
+) -> MonitoringGateService:
+    return MonitoringGateService(work_sessions, policy)
+
+
 def get_screenshot_service(
     screenshots: Annotated[ScreenshotRepository, Depends(get_screenshot_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     settings: SettingsDep,
+    gate: Annotated[MonitoringGateService, Depends(get_monitoring_gate)],
 ) -> ScreenshotService:
-    return ScreenshotService(screenshots, employees, settings)
+    return ScreenshotService(screenshots, employees, settings, gate)
 
 
 def get_ping_service(
@@ -522,8 +531,9 @@ def get_activity_service(
     activity: Annotated[ActivityRepository, Depends(get_activity_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    gate: Annotated[MonitoringGateService, Depends(get_monitoring_gate)],
 ) -> ActivityService:
-    return ActivityService(settings, devices, activity, employees, audit)
+    return ActivityService(settings, devices, activity, employees, audit, gate)
 
 
 def get_invitation_service(
