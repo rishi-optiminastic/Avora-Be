@@ -2,7 +2,7 @@
 
 Creating an invite is an admin-only action; accepting one provisions an
 employee with the invited role. No FastAPI objects here (Layering §4); the
-route enforces admin auth via `AdminDep` and we re-check `is_admin` in-service.
+route enforces admin/HR auth via `AdminOrHrDep` and we re-check the role in-service.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ class InvitationService:
     ) -> tuple[Invitation, str]:
         # Privilege-granting action — admins only (rule 5.5). The route already
         # enforces this; we re-check so the rule can't be bypassed by reuse.
-        if not caller.is_admin:
+        if caller.role not in (Role.ADMIN, Role.HR):
             raise AuthorizationError()
 
         normalized = email.strip().lower()
@@ -78,7 +78,7 @@ class InvitationService:
         self, caller: CurrentUser, *, invitation_id: uuid.UUID
     ) -> tuple[Invitation, str]:
         """Admin-only: re-issue a fresh link for a pending invite (old one dies)."""
-        if not caller.is_admin:
+        if caller.role not in (Role.ADMIN, Role.HR):
             raise AuthorizationError()
         invitation = await self._invitations.get(invitation_id)
         if invitation is None:
@@ -102,7 +102,7 @@ class InvitationService:
         return invitation, accept_url
 
     async def list_pending(self, caller: CurrentUser) -> Sequence[Invitation]:
-        if not caller.is_admin:
+        if caller.role not in (Role.ADMIN, Role.HR):
             raise AuthorizationError()
         return await self._invitations.list_pending()
 

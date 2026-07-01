@@ -47,6 +47,16 @@ class HolidayRepository:
         )
         return set(rows.scalars().all())
 
+    async def list_between(self, start: date, end: date) -> Sequence[Holiday]:
+        """Holiday rows (with names) within [start, end] inclusive, earliest first
+        — for the 'holiday tomorrow' announcement."""
+        rows = await self._session.execute(
+            select(Holiday)
+            .where(Holiday.date >= start, Holiday.date <= end)
+            .order_by(Holiday.date.asc())
+        )
+        return rows.scalars().all()
+
     async def flush(self) -> None:
         await self._session.flush()
 

@@ -6,6 +6,7 @@ from fastapi import APIRouter
 
 from app.api.v1.routes import (
     activity,
+    announcements,
     attendance,
     attribution,
     biometric,
@@ -50,6 +51,7 @@ api_router.include_router(notifications.router)
 api_router.include_router(onboarding.router)
 api_router.include_router(org.router)
 api_router.include_router(holidays.router)
+api_router.include_router(announcements.router)
 api_router.include_router(devices.router)
 api_router.include_router(attendance.router)
 api_router.include_router(biometric.router)

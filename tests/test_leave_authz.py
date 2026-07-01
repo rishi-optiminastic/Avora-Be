@@ -51,17 +51,29 @@ async def test_manager_sees_report_request_outsider_does_not(
     assert out.json()["total"] == 0
 
 
-async def test_manager_can_approve(client: AsyncClient, settings: Settings, seed: _Seed) -> None:
+async def test_admin_approves_manager_cannot(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
     leave = await _apply_as(client, settings, seed.report)
-    resp = await client.post(
+    # A manager can SEE the request (repo scope) but MUST NOT approve it —
+    # approval is admin-only.
+    denied = await client.post(
         f"/api/v1/leaves/{leave['id']}/decision",
         json={"approve": True, "note": "ok"},
         headers=auth_headers(settings, seed.manager),
     )
+    assert denied.status_code == 403
+
+    # The admin approves.
+    resp = await client.post(
+        f"/api/v1/leaves/{leave['id']}/decision",
+        json={"approve": True, "note": "ok"},
+        headers=auth_headers(settings, seed.admin),
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "approved"
-    assert body["reviewer_id"] == str(seed.manager.id)
+    assert body["reviewer_id"] == str(seed.admin.id)
 
 
 async def test_requester_cannot_approve_own(

@@ -15,7 +15,6 @@ from typing import Any
 from fastapi import APIRouter
 
 from app.core.deps import (
-    AdminDep,
     AdminOrHrDep,
     AuthIdentityDep,
     IdempotencyKeyHeader,
@@ -38,16 +37,16 @@ router = APIRouter(prefix="/invitations", tags=["invitations"])
 @router.post("", response_model=InvitationCreated, status_code=201)
 async def create_invitation(
     payload: InvitationCreate,
-    admin: AdminDep,
+    caller: AdminOrHrDep,
     service: InvitationServiceDep,
     idem: IdempotencyServiceDep,
     idempotency_key: IdempotencyKeyHeader = None,
 ) -> Any:
-    """Admin-only: invite a person at a role and email them the link (rule 5.5)."""
+    """Admin/HR: invite a person at a role and email them the link (rule 5.5)."""
 
     async def _op() -> InvitationCreated:
         invitation, accept_url = await service.create(
-            admin, email=payload.email, role=payload.role, department=payload.department
+            caller, email=payload.email, role=payload.role, department=payload.department
         )
         return InvitationCreated(
             id=invitation.id,
@@ -59,7 +58,7 @@ async def create_invitation(
         )
 
     return await idem.run(
-        principal_id=admin.employee_id,
+        principal_id=caller.employee_id,
         scope="invitations.create",
         key=idempotency_key,
         request=payload,
@@ -69,24 +68,26 @@ async def create_invitation(
 
 
 @router.get("", response_model=list[InvitationRead])
-async def list_invitations(admin: AdminDep, service: InvitationServiceDep) -> list[InvitationRead]:
-    """Admin-only: pending invitations (for the team view)."""
-    invitations = await service.list_pending(admin)
+async def list_invitations(
+    caller: AdminOrHrDep, service: InvitationServiceDep
+) -> list[InvitationRead]:
+    """Admin/HR: pending invitations (for the team view)."""
+    invitations = await service.list_pending(caller)
     return [InvitationRead.model_validate(i) for i in invitations]
 
 
 @router.post("/{invitation_id}/resend", response_model=InvitationCreated)
 async def resend_invitation(
     invitation_id: uuid.UUID,
-    admin: AdminDep,
+    caller: AdminOrHrDep,
     service: InvitationServiceDep,
     idem: IdempotencyServiceDep,
     idempotency_key: IdempotencyKeyHeader = None,
 ) -> Any:
-    """Admin-only: re-issue and re-email a pending invite (old link is revoked)."""
+    """Admin/HR: re-issue and re-email a pending invite (old link is revoked)."""
 
     async def _op() -> InvitationCreated:
-        invitation, accept_url = await service.resend(admin, invitation_id=invitation_id)
+        invitation, accept_url = await service.resend(caller, invitation_id=invitation_id)
         return InvitationCreated(
             id=invitation.id,
             email=invitation.email,
@@ -97,7 +98,7 @@ async def resend_invitation(
         )
 
     return await idem.run(
-        principal_id=admin.employee_id,
+        principal_id=caller.employee_id,
         scope="invitations.resend",
         key=idempotency_key,
         request={"invitation_id": str(invitation_id)},

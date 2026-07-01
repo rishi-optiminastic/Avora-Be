@@ -193,3 +193,10 @@ uv run alembic upgrade head     # apply migrations
 ```
 
 Run `ruff`, `mypy`, and `pytest` before considering any change done.
+
+---
+
+## 12. Git & commits
+
+- **Never commit or push unless the user explicitly asks.** Make and verify changes in the working tree; leave them staged/unstaged for the user to review and commit themselves. "Do the work" is not permission to commit.
+- **Never add a `Co-Authored-By` trailer or credit Claude/any AI as a co-author** in commit messages. When the user does ask for a commit, write a plain message with no co-author line and no "Generated with" footer.

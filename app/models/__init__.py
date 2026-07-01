@@ -5,6 +5,7 @@ autogenerate can see them.
 """
 
 from app.models.activity import ActivitySample
+from app.models.announcement import Announcement, AnnouncementLevel
 from app.models.attendance_policy import AttendancePolicy
 from app.models.attribution_correction import AttributionCorrection, CorrectionStatus
 from app.models.audit import AuditLog
@@ -45,6 +46,8 @@ from app.models.workspace_file import WorkspaceFile, WorkspaceFileCategory
 
 __all__ = [
     "ActivitySample",
+    "Announcement",
+    "AnnouncementLevel",
     "AttendancePolicy",
     "AttributionCorrection",
     "AuditLog",
