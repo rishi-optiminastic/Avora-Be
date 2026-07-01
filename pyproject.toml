@@ -16,6 +16,7 @@ dependencies = [
     "cryptography>=43",
     "httpx>=0.28",
     "boto3>=1.34",
+    "reportlab>=5.0.0",
 ]
 
 [dependency-groups]
@@ -84,7 +85,7 @@ module = ["tests.*"]
 disallow_untyped_defs = false
 
 [[tool.mypy.overrides]]
-module = ["boto3.*", "botocore.*"]
+module = ["boto3.*", "botocore.*", "reportlab.*"]
 ignore_missing_imports = true
 
 # --------------------------------------------------------------------------- #

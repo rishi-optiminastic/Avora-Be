@@ -8,15 +8,21 @@ scoped. Money is returned in minor units; the client formats it.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+import uuid
+from typing import Annotated
+
+from fastapi import APIRouter, Query, Response
 
 from app.core.deps import CurrentUserDep, PayrollServiceDep
 from app.schemas.payroll import (
     PayrollEstimateRead,
+    PayrollFinalizeResult,
     PayrollRunRead,
     PayrollSettingsRead,
     PayrollSettingsUpdate,
     PayslipRead,
+    PayslipSummaryRead,
+    ReleasedPayslipRead,
 )
 
 router = APIRouter(prefix="/payroll", tags=["payroll"])
@@ -28,8 +34,59 @@ async def get_my_payslip(
     service: PayrollServiceDep,
     month: str | None = Query(default=None, description="YYYY-MM; defaults to the current month"),
 ) -> PayslipRead:
-    """The caller's own salary slip for a month (self-service 'My Pay')."""
+    """The caller's own LIVE slip for a month (recomputed; an HR preview before a
+    month is finalized). Released history lives under `/payroll/payslips`."""
     return await service.my_slip(caller, None, month)
+
+
+@router.get("/payslips", response_model=list[PayslipSummaryRead])
+async def list_payslips(
+    caller: CurrentUserDep,
+    service: PayrollServiceDep,
+    employee_id: Annotated[
+        uuid.UUID | None,
+        Query(description="Whose payslips (HR/Admin only); defaults to the caller"),
+    ] = None,
+) -> list[PayslipSummaryRead]:
+    """An employee's released-payslip history — self, or anyone's for HR/Admin."""
+    return await service.list_payslips(caller, employee_id)
+
+
+@router.get("/payslips/{month}", response_model=ReleasedPayslipRead)
+async def get_released_payslip(
+    month: str,
+    caller: CurrentUserDep,
+    service: PayrollServiceDep,
+    employee_id: Annotated[uuid.UUID | None, Query()] = None,
+) -> ReleasedPayslipRead:
+    """One released payslip (404 until HR finalizes the month). Self-or-HR."""
+    return await service.get_released_payslip(caller, employee_id, month)
+
+
+@router.get("/payslips/{month}/pdf")
+async def download_payslip_pdf(
+    month: str,
+    caller: CurrentUserDep,
+    service: PayrollServiceDep,
+    employee_id: Annotated[uuid.UUID | None, Query()] = None,
+) -> Response:
+    """Download a released payslip as a PDF (404 until finalized). Self-or-HR."""
+    pdf, filename = await service.payslip_pdf(caller, employee_id, month)
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/finalize", response_model=PayrollFinalizeResult)
+async def finalize_payroll(
+    caller: CurrentUserDep,
+    service: PayrollServiceDep,
+    month: str | None = Query(default=None, description="YYYY-MM; defaults to the current month"),
+) -> PayrollFinalizeResult:
+    """HR/Admin: freeze + release the month's payslips and email everyone their PDF."""
+    return await service.finalize(caller, month)
 
 
 @router.get("/settings", response_model=PayrollSettingsRead)

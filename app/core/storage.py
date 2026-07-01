@@ -100,6 +100,19 @@ async def put_object(key: str, data: bytes, content_type: str) -> None:
     await asyncio.to_thread(_put)
 
 
+async def get_object(key: str) -> bytes:
+    """Fetch an object's bytes (boto3 is sync → off-thread). Used by the EOD vision
+    pass to read sampled screenshot images back from S3 for visual analysis."""
+    s = get_settings()
+
+    def _get() -> bytes:
+        obj = _client().get_object(Bucket=s.aws_bucket_name, Key=key)
+        data: bytes = obj["Body"].read()
+        return data
+
+    return await asyncio.to_thread(_get)
+
+
 async def delete_objects(keys: list[str]) -> None:
     """Delete objects (used by retention so purged rows don't orphan their S3
     blobs). Batches in groups of 1000 (the S3 delete_objects limit)."""
