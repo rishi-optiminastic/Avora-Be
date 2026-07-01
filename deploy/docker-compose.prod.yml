@@ -42,6 +42,13 @@ services:
     # /var/lib/postgresql (not /data) — mount the parent per upstream guidance.
     volumes:
       - pgdata:/var/lib/postgresql
+    # Publish on host :5433 so the Next.js frontend (Vercel / Better Auth via
+    # Prisma) can reach this DB directly — external conns are forced through TLS +
+    # scram + the least-priv `fe_app` role (see pg_hba in the pgdata volume + ufw).
+    # DO NOT REMOVE: the FE's DATABASE_URL points here; dropping it 500s all auth.
+    # (Host 5433 because a separate native postgres owns 5432 on loopback.)
+    ports:
+      - "5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
@@ -54,7 +61,11 @@ services:
   migrate:
     image: avora-pms-api:latest
     env_file: .env.prod
-    command: ["alembic", "upgrade", "head"]
+    # `heads` (plural), not `head`: if two feature branches each add a migration
+    # off the same parent (a fork), `head` is ambiguous and aborts the whole
+    # deploy (exit 255). `heads` applies every branch tip, so a fork never takes
+    # prod down — merge migrations then collapse the DAG back to one head.
+    command: ["alembic", "upgrade", "heads"]
     restart: "no"
     depends_on:
       db:
