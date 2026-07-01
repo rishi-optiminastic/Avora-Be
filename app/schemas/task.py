@@ -8,9 +8,9 @@ client, so it is absent from Create.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.models.task import TaskCadence, TaskPriority, TaskStatus
 from app.schemas.common import ORMModel
@@ -48,6 +48,19 @@ class TaskCreate(BaseModel):
     attachments: list[Attachment] = Field(default_factory=list)
     parent_task_id: uuid.UUID | None = None
     depends_on_id: uuid.UUID | None = None
+
+    @field_validator("due_date")
+    @classmethod
+    def _due_not_in_past(cls, value: datetime | None) -> datetime | None:
+        """A new task can't already be overdue. One day of grace so a client's
+        local 'today' is never rejected across timezones; clearly-past dates are
+        refused (defense-in-depth — the picker also blocks them)."""
+        if value is None:
+            return value
+        due = value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
+        if due.date() < datetime.now(UTC).date() - timedelta(days=1):
+            raise ValueError("Due date can't be in the past.")
+        return value
 
 
 class TaskUpdate(BaseModel):

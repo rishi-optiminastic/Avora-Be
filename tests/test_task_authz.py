@@ -6,6 +6,8 @@ requirement for the tasks module.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from httpx import AsyncClient
 
 from app.core.config import Settings
@@ -14,6 +16,26 @@ from tests.conftest import _Seed, auth_headers
 
 def _new_task(assignee_id: str, title: str = "Ship it") -> dict[str, object]:
     return {"title": title, "assignee_id": assignee_id, "cadence": "daily"}
+
+
+async def test_due_date_cannot_be_in_the_past(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    past = (datetime.now(UTC) - timedelta(days=10)).isoformat()
+    resp = await client.post(
+        "/api/v1/tasks",
+        json={**_new_task(str(seed.report.id)), "due_date": past},
+        headers=auth_headers(settings, seed.admin),
+    )
+    assert resp.status_code == 422, "a task can't be created already overdue"
+
+    future = (datetime.now(UTC) + timedelta(days=5)).isoformat()
+    ok = await client.post(
+        "/api/v1/tasks",
+        json={**_new_task(str(seed.report.id)), "due_date": future},
+        headers=auth_headers(settings, seed.admin),
+    )
+    assert ok.status_code == 201
 
 
 async def _create_as(
@@ -38,17 +60,17 @@ async def test_manager_can_assign_to_report(
     assert task["assigned_by_id"] == str(seed.manager.id)
 
 
-async def test_employee_cannot_create_tasks(
+async def test_employee_can_create_own_task(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:
-    # Individual contributors receive tasks; they don't author them — even
-    # self-assignment is forbidden now (managers/HR/admin create).
+    # Individual contributors may plan their own work — self-assignment is allowed.
     resp = await client.post(
         "/api/v1/tasks",
         json=_new_task(str(seed.report.id)),
         headers=auth_headers(settings, seed.report),
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 201
+    assert resp.json()["assignee_id"] == str(seed.report.id)
 
 
 async def test_employee_cannot_assign_to_peer(

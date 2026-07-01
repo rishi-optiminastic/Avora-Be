@@ -16,17 +16,21 @@ async def test_rollups_require_auth(client: AsyncClient, seed: _Seed) -> None:
 async def test_delayed_tasks_lists_overdue(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:
-    # An overdue, not-done task shows up; a future-due one does not.
-    overdue = await client.post(
+    # An overdue, not-done task shows up; a future-due one does not. A task can't
+    # be *created* already overdue (past-due guard), so create it valid then push
+    # its due date into the past via update — as happens naturally over time.
+    created = await client.post(
         "/api/v1/tasks",
-        json={
-            "title": "Late one",
-            "assignee_id": str(seed.report.id),
-            "due_date": "2020-01-01T00:00:00Z",
-        },
+        json={"title": "Late one", "assignee_id": str(seed.report.id)},
         headers=auth_headers(settings, seed.manager),
     )
-    assert overdue.status_code == 201, overdue.text
+    assert created.status_code == 201, created.text
+    overdue = await client.patch(
+        f"/api/v1/tasks/{created.json()['id']}",
+        json={"due_date": "2020-01-01T00:00:00Z"},
+        headers=auth_headers(settings, seed.manager),
+    )
+    assert overdue.status_code == 200, overdue.text
     await client.post(
         "/api/v1/tasks",
         json={

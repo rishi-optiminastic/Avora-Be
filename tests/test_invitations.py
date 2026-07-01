@@ -1,22 +1,48 @@
-"""Invitation flow — admin-only creation and accept-provisions-employee."""
+"""Invitation flow — admin/HR creation and accept-provisions-employee."""
 
 from __future__ import annotations
 
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
+from app.models.employee import Employee, EmployeeStatus, Role
 from tests.conftest import _Seed, auth_headers, bearer_for_email
 
 
 async def test_non_admin_cannot_invite(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:
+    # A manager is not admin/HR — inviting is a people-ops function.
     resp = await client.post(
         "/api/v1/invitations",
         json={"email": "newhire@acme.com", "role": "manager"},
         headers=auth_headers(settings, seed.manager),
     )
     assert resp.status_code == 403
+
+
+async def test_hr_can_invite(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    hr = Employee(
+        hr_external_id="hr-inviter",
+        work_email="hr-invite@corp.test",
+        full_name="Holly HR",
+        role=Role.HR,
+        status=EmployeeStatus.ACTIVE,
+        is_active=True,
+    )
+    db.add(hr)
+    await db.commit()
+
+    resp = await client.post(
+        "/api/v1/invitations",
+        json={"email": "hrhire@acme.com", "role": "executive"},
+        headers=auth_headers(settings, hr),
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["email"] == "hrhire@acme.com"
 
 
 async def test_admin_can_invite(client: AsyncClient, settings: Settings, seed: _Seed) -> None:

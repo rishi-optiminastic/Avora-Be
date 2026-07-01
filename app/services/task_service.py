@@ -107,12 +107,13 @@ class TaskService:
         return task
 
     async def create(self, caller: CurrentUser, payload: TaskCreate) -> Task:
-        # Only managers/senior managers/HR/admin create & assign tasks; an
-        # individual contributor receives tasks, they don't author them.
-        if not caller.is_manager:
+        # Managers/senior managers/HR/admin assign work to anyone in their scope.
+        # Everyone else may still create a task, but only for THEMSELVES — an
+        # individual contributor can plan their own work, not assign others'.
+        if not caller.is_manager and payload.assignee_id != caller.employee_id:
             raise AuthorizationError()
         # You may only assign a task to someone you can see (reports, department,
-        # or anyone for admin/HR) — reuses the employee scope.
+        # anyone for admin/HR, or yourself) — reuses the employee scope.
         if not await self._employees.can_read(caller, payload.assignee_id):
             raise AuthorizationError()
         await self._validate_project(payload.project_id)
