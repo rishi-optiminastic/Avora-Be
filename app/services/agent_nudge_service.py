@@ -27,11 +27,15 @@ from app.repositories.employee import EmployeeRepository
 from app.repositories.ping import PingRepository
 from app.schemas.auth import CurrentUser
 from app.services.email_service import EmailError, EmailService
+from app.services.monitoring_service import ONLINE_WINDOW_SECONDS
 from app.services.notification_service import NotificationService
 
 logger = get_logger("app.agent_nudge")
 
-ONLINE_WINDOW = timedelta(minutes=15)
+# Shares monitoring_service's threshold so a device the dashboard shows as
+# "Reporting" always gets pinged on-screen here too, never an unnecessary
+# reinstall email (and vice versa).
+ONLINE_WINDOW = timedelta(seconds=ONLINE_WINDOW_SECONDS)
 REINSTALL_PATH = "/dashboard/download"
 _DEFAULT_PING = "Please keep the Avora agent running."
 _REINSTALL_BODY = "Your Avora agent isn't reporting. Please reinstall it to resume tracking."

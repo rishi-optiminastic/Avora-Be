@@ -29,7 +29,13 @@ from app.schemas.monitoring import (
 
 # Tunables (Phase 1 — move to settings/config-per-org later). IDLE_SAMPLE_SECONDS
 # lives in the repository so the daily rollup and this live view share one rule.
-ONLINE_WINDOW_MINUTES = 15  # last sample within 15 min ⇒ currently online
+# The agent posts an activity sample every ~30s while it's actually running
+# (agent/internal/runner: baseInterval=15s, activityEverySteps=2), so 90s already
+# tolerates one missed cycle without a false "offline" flip — a much tighter,
+# still-forgiving bound than treating a device as live for up to 15 minutes after
+# it's gone quiet. agent_nudge_service imports this so its on-screen-ping-vs-
+# reinstall-email decision agrees with what the dashboard shows.
+ONLINE_WINDOW_SECONDS = 90  # last sample within 90s ⇒ currently online
 TOP_DOMAINS = 6  # how many domains to surface per person on the browsing view
 INSIGHT_WINDOW_DAYS = 7  # productivity trend length
 FOCUS_AT_RISK_PCT = 50  # today's focus below this ⇒ at risk
@@ -72,7 +78,7 @@ class MonitoringService:
         if employees is None:
             employees = await self._employees.all_in_scope(caller)
         ids = [e.id for e in employees]
-        since = now - timedelta(minutes=ONLINE_WINDOW_MINUTES)
+        since = now - timedelta(seconds=ONLINE_WINDOW_SECONDS)
         latest = await self._activity.latest_since(ids, since)
         result: list[ActivityNowRead] = []
         for e in employees:
