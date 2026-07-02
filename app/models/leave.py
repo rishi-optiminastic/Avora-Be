@@ -24,6 +24,11 @@ class LeaveType(StrEnum):
     HALF_DAY = "half_day"
 
 
+class HalfDayPeriod(StrEnum):
+    FIRST_HALF = "first_half"
+    SECOND_HALF = "second_half"
+
+
 class LeaveStatus(StrEnum):
     DRAFT = "draft"
     SUBMITTED = "submitted"
@@ -41,6 +46,8 @@ class Leave(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ForeignKey("employees.id", ondelete="CASCADE"), index=True
     )
     leave_type: Mapped[LeaveType] = mapped_column(default=LeaveType.PLANNED, index=True)
+    # Only set (and meaningful) when leave_type is HALF_DAY — which half was taken.
+    half_day_period: Mapped[HalfDayPeriod | None] = mapped_column(default=None)
     start_date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     end_date: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     reason: Mapped[str | None] = mapped_column(String(1000), default=None)

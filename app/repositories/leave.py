@@ -60,6 +60,7 @@ class LeaveRepository:
         leave = Leave(
             employee_id=employee_id,
             leave_type=payload.leave_type,
+            half_day_period=payload.half_day_period,
             start_date=payload.start_date,
             end_date=payload.end_date,
             reason=payload.reason,

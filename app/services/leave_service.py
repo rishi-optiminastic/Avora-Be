@@ -17,13 +17,14 @@ from app.core.exceptions import AuthorizationError, ConflictError, NotFoundError
 from app.core.logging import get_logger
 from app.core.payroll import working_days_between
 from app.models.employee import Role
-from app.models.leave import Leave, LeaveStatus, LeaveType
+from app.models.leave import HalfDayPeriod, Leave, LeaveStatus, LeaveType
 from app.models.leave_comment import LeaveComment
 from app.models.notification import NotificationKind, NotificationLevel
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.holiday import HolidayRepository
 from app.repositories.leave import LeaveRepository
+from app.repositories.leave_allocation import LeaveAllocationRepository
 from app.repositories.leave_comment import LeaveCommentRepository
 from app.schemas.auth import CurrentUser
 from app.schemas.leave import (
@@ -58,6 +59,7 @@ class LeaveService:
         email: EmailService,
         policy: LeavePolicyService,
         holidays: HolidayRepository,
+        allocations: LeaveAllocationRepository,
     ) -> None:
         self._leaves = leaves
         self._comments = comments
@@ -67,6 +69,7 @@ class LeaveService:
         self._email = email
         self._policy = policy
         self._holidays = holidays
+        self._allocations = allocations
 
     async def list_for_caller(
         self, caller: CurrentUser, *, offset: int, limit: int, status: LeaveStatus | None = None
@@ -94,7 +97,7 @@ class LeaveService:
         # The reporting manager can see it too (repo scope), so notify them as an
         # FYI — unless they're already an admin (avoid a duplicate).
         body = (
-            f"{payload.leave_type.value.replace('_', ' ').title()} · "
+            f"{_leave_type_label(payload.leave_type, payload.half_day_period)} · "
             f"{payload.start_date:%d %b} - {payload.end_date:%d %b}"
         )
         admins = await self._employees.list_by_role(Role.ADMIN)
@@ -171,7 +174,7 @@ class LeaveService:
         if recipient is None:
             return
         decided_by = decider.full_name if decider is not None else "Your manager"
-        leave_type_label = leave.leave_type.value.replace("_", " ").title()
+        leave_type_label = _leave_type_label(leave.leave_type, leave.half_day_period)
         date_range = f"{leave.start_date:%d %b} - {leave.end_date:%d %b}"
         try:
             await self._email.send_leave_decision(
@@ -235,6 +238,17 @@ class LeaveService:
             target_id, start_dt, end_dt, [LeaveStatus.SUBMITTED]
         )
         policy = await self._policy.get_or_create()
+        allocation = await self._allocations.get_for_employee(target_id)
+        planned_days = (
+            allocation.planned_days
+            if allocation is not None and allocation.planned_days is not None
+            else policy.annual_planned_days
+        )
+        sick_days = (
+            allocation.sick_days
+            if allocation is not None and allocation.sick_days is not None
+            else policy.annual_sick_days
+        )
 
         def bucket(
             rows: list[tuple[datetime, datetime, LeaveType, LeaveStatus]],
@@ -252,8 +266,8 @@ class LeaveService:
 
         balances: list[LeaveTypeBalance] = []
         for leave_type, allocated, types in (
-            (LeaveType.PLANNED, float(policy.annual_planned_days), _PLANNED_TYPES),
-            (LeaveType.SICK, float(policy.annual_sick_days), (LeaveType.SICK,)),
+            (LeaveType.PLANNED, float(planned_days), _PLANNED_TYPES),
+            (LeaveType.SICK, float(sick_days), (LeaveType.SICK,)),
             (LeaveType.UNPAID, 0.0, (LeaveType.UNPAID,)),
         ):
             used = bucket(approved, types)
@@ -299,6 +313,13 @@ class LeaveService:
             target=f"leave:{leave_id}",
         )
         return comment
+
+
+def _leave_type_label(leave_type: LeaveType, half_day_period: HalfDayPeriod | None) -> str:
+    label = leave_type.value.replace("_", " ").title()
+    if leave_type is LeaveType.HALF_DAY and half_day_period is not None:
+        return f"{label} ({half_day_period.value.replace('_', ' ').title()})"
+    return label
 
 
 def _utc_date(value: datetime) -> date:

@@ -24,6 +24,7 @@ from app.api.v1.routes import (
     hr,
     insights,
     invitations,
+    leave_allocation,
     leaves,
     meetings,
     notifications,
@@ -47,6 +48,7 @@ api_router.include_router(invitations.router)
 api_router.include_router(tasks.router)
 api_router.include_router(targets.router)
 api_router.include_router(leaves.router)
+api_router.include_router(leave_allocation.router)
 api_router.include_router(notifications.router)
 api_router.include_router(onboarding.router)
 api_router.include_router(org.router)

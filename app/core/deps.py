@@ -45,6 +45,7 @@ from app.repositories.holiday import HolidayRepository
 from app.repositories.idempotency import IdempotencyRepository
 from app.repositories.invitation import InvitationRepository
 from app.repositories.leave import LeaveRepository
+from app.repositories.leave_allocation import LeaveAllocationRepository
 from app.repositories.leave_comment import LeaveCommentRepository
 from app.repositories.leave_policy import LeavePolicyRepository
 from app.repositories.notification import NotificationRepository
@@ -87,6 +88,7 @@ from app.services.holiday_service import HolidayService
 from app.services.hr_service import HRService
 from app.services.idempotency import IdempotencyService
 from app.services.invitation_service import InvitationService
+from app.services.leave_allocation_service import LeaveAllocationService
 from app.services.leave_policy_service import LeavePolicyService
 from app.services.leave_service import LeaveService
 from app.services.llm_service import LlmService
@@ -192,6 +194,10 @@ def get_leave_repo(db: DbDep) -> LeaveRepository:
 
 def get_leave_policy_repo(db: DbDep) -> LeavePolicyRepository:
     return LeavePolicyRepository(db)
+
+
+def get_leave_allocation_repo(db: DbDep) -> LeaveAllocationRepository:
+    return LeaveAllocationRepository(db)
 
 
 def get_notification_repo(db: DbDep) -> NotificationRepository:
@@ -618,8 +624,19 @@ def get_leave_service(
     email: Annotated[EmailService, Depends(get_email_service)],
     policy: Annotated[LeavePolicyService, Depends(get_leave_policy_service)],
     holidays: Annotated[HolidayRepository, Depends(get_holiday_repo)],
+    allocations: Annotated[LeaveAllocationRepository, Depends(get_leave_allocation_repo)],
 ) -> LeaveService:
-    return LeaveService(leaves, comments, employees, audit, notifications, email, policy, holidays)
+    return LeaveService(
+        leaves, comments, employees, audit, notifications, email, policy, holidays, allocations
+    )
+
+
+def get_leave_allocation_service(
+    allocations: Annotated[LeaveAllocationRepository, Depends(get_leave_allocation_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> LeaveAllocationService:
+    return LeaveAllocationService(allocations, employees, audit)
 
 
 def get_holiday_service(
@@ -717,6 +734,9 @@ TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
 TargetServiceDep = Annotated[TargetService, Depends(get_target_service)]
 LeaveServiceDep = Annotated[LeaveService, Depends(get_leave_service)]
 LeavePolicyServiceDep = Annotated[LeavePolicyService, Depends(get_leave_policy_service)]
+LeaveAllocationServiceDep = Annotated[
+    LeaveAllocationService, Depends(get_leave_allocation_service)
+]
 MeetingServiceDep = Annotated[MeetingService, Depends(get_meeting_service)]
 NotificationServiceDep = Annotated[NotificationService, Depends(get_notification_service)]
 HolidayServiceDep = Annotated[HolidayService, Depends(get_holiday_service)]

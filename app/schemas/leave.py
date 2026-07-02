@@ -7,7 +7,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.models.leave import LeaveStatus, LeaveType
+from app.models.leave import HalfDayPeriod, LeaveStatus, LeaveType
 from app.schemas.common import ORMModel
 
 
@@ -17,12 +17,20 @@ class LeaveCreate(BaseModel):
     leave_type: LeaveType
     start_date: datetime
     end_date: datetime
+    half_day_period: HalfDayPeriod | None = None
     reason: str | None = Field(default=None, max_length=1000)
 
     @model_validator(mode="after")
     def _check_range(self) -> LeaveCreate:
         if self.end_date < self.start_date:
             raise ValueError("end_date must be on or after start_date")
+        if self.leave_type is LeaveType.HALF_DAY:
+            if self.half_day_period is None:
+                raise ValueError("half_day_period is required for a half-day leave")
+            if self.start_date.date() != self.end_date.date():
+                raise ValueError("A half-day leave must start and end on the same day")
+        elif self.half_day_period is not None:
+            raise ValueError("half_day_period is only valid for a half-day leave")
         return self
 
 
@@ -37,6 +45,7 @@ class LeaveRead(ORMModel):
     id: uuid.UUID
     employee_id: uuid.UUID
     leave_type: LeaveType
+    half_day_period: HalfDayPeriod | None
     start_date: datetime
     end_date: datetime
     reason: str | None
