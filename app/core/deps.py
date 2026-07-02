@@ -48,6 +48,7 @@ from app.repositories.leave import LeaveRepository
 from app.repositories.leave_allocation import LeaveAllocationRepository
 from app.repositories.leave_comment import LeaveCommentRepository
 from app.repositories.leave_policy import LeavePolicyRepository
+from app.repositories.note import NoteRepository
 from app.repositories.notification import NotificationRepository
 from app.repositories.onboarding_config import OnboardingConfigRepository
 from app.repositories.org_settings import OrgSettingsRepository
@@ -95,6 +96,7 @@ from app.services.llm_service import LlmService
 from app.services.meeting_service import MeetingService
 from app.services.monitoring_gate import MonitoringGateService
 from app.services.monitoring_service import MonitoringService
+from app.services.note_service import NoteService
 from app.services.notification_service import NotificationService
 from app.services.onboarding_service import OnboardingService
 from app.services.org_settings_service import OrgSettingsService
@@ -198,6 +200,10 @@ def get_leave_policy_repo(db: DbDep) -> LeavePolicyRepository:
 
 def get_leave_allocation_repo(db: DbDep) -> LeaveAllocationRepository:
     return LeaveAllocationRepository(db)
+
+
+def get_note_repo(db: DbDep) -> NoteRepository:
+    return NoteRepository(db)
 
 
 def get_notification_repo(db: DbDep) -> NotificationRepository:
@@ -564,6 +570,12 @@ def get_notification_service(
     return NotificationService(notifications)
 
 
+def get_note_service(
+    notes: Annotated[NoteRepository, Depends(get_note_repo)],
+) -> NoteService:
+    return NoteService(notes)
+
+
 def get_agent_nudge_service(
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     devices: Annotated[DeviceRepository, Depends(get_device_repo)],
@@ -738,6 +750,7 @@ LeaveAllocationServiceDep = Annotated[
     LeaveAllocationService, Depends(get_leave_allocation_service)
 ]
 MeetingServiceDep = Annotated[MeetingService, Depends(get_meeting_service)]
+NoteServiceDep = Annotated[NoteService, Depends(get_note_service)]
 NotificationServiceDep = Annotated[NotificationService, Depends(get_notification_service)]
 HolidayServiceDep = Annotated[HolidayService, Depends(get_holiday_service)]
 AnnouncementServiceDep = Annotated[AnnouncementService, Depends(get_announcement_service)]

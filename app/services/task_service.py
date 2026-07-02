@@ -241,6 +241,15 @@ class TaskService:
             if "project_id" in fields:
                 await self._validate_project(payload.project_id)
 
+        # Defense in depth: the FE gates a move to Blocked behind a reason
+        # prompt, but any other client could still send status=blocked bare —
+        # reject it here too so a blocked task can never end up reason-less.
+        effective_status = fields.get("status", task.status)
+        if effective_status is TaskStatus.BLOCKED:
+            effective_reason = fields.get("blocked_reason", task.blocked_reason)
+            if not effective_reason or not effective_reason.strip():
+                raise ValidationError("A blocked task needs a reason.")
+
         for key, value in fields.items():
             setattr(task, key, value)
         if "status" in fields:
