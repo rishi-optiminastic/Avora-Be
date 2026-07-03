@@ -41,6 +41,10 @@ class PayrollSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     pf_pct: Mapped[int] = mapped_column(default=12)
     pf_cap_minor: Mapped[int] = mapped_column(BigInteger, default=180_000)
     professional_tax_minor: Mapped[int] = mapped_column(BigInteger, default=20_000)
+    # ₹300 in February, ₹200 the other eleven months — the common state PT slab.
+    professional_tax_feb_minor: Mapped[int] = mapped_column(BigInteger, default=30_000)
+    # Withhold estimated new-regime income tax (TDS) each month.
+    deduct_income_tax: Mapped[bool] = mapped_column(Boolean, default=True)
 
     updated_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("employees.id", ondelete="SET NULL"), default=None

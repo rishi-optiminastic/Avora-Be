@@ -64,6 +64,8 @@ _SETTINGS = {
     "pf_pct": 12,
     "pf_cap_minor": 1_800_00,
     "professional_tax_minor": 200_00,
+    "professional_tax_feb_minor": 300_00,
+    "deduct_income_tax": True,
 }
 
 

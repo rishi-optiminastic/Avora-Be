@@ -49,6 +49,7 @@ class PayslipPdfData:
     gross_minor: int
     employee_pf_minor: int
     professional_tax_minor: int
+    income_tax_minor: int
     total_deduction_minor: int
     net_minor: int  # full-month net (gross - deductions)
     net_payable_minor: int  # prorated take-home actually paid this month
@@ -90,7 +91,7 @@ def _amount_rows(data: PayslipPdfData) -> list[list[object]]:
     deductions = [
         ("Provident fund", data.employee_pf_minor),
         ("Professional tax", data.professional_tax_minor),
-        ("", -1),  # spacer to align with three earnings rows
+        ("Income tax (TDS)", data.income_tax_minor),
     ]
     label = _style("cell", size=9.5, color=_INK, leading=14)
     muted = _style("cellm", size=9.5, color=_MUTED, leading=14)

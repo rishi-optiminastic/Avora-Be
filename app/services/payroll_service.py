@@ -153,6 +153,8 @@ class PayrollService:
         s.pf_pct = payload.pf_pct
         s.pf_cap_minor = payload.pf_cap_minor
         s.professional_tax_minor = payload.professional_tax_minor
+        s.professional_tax_feb_minor = payload.professional_tax_feb_minor
+        s.deduct_income_tax = payload.deduct_income_tax
         s.updated_by = caller.employee_id
         await self._settings_repo.flush()
         await self._audit.append(
@@ -178,6 +180,8 @@ class PayrollService:
             pf_pct=s.pf_pct,
             pf_cap_minor=s.pf_cap_minor,
             professional_tax_minor=s.professional_tax_minor,
+            professional_tax_feb_minor=s.professional_tax_feb_minor,
+            deduct_income_tax=s.deduct_income_tax,
         )
 
         employees = await self._employees.all_in_scope(caller)
@@ -237,7 +241,7 @@ class PayrollService:
             if comp is not None
             else 0
         )
-        breakdown = compute_breakdown(mctc, cfg)
+        breakdown = compute_breakdown(mctc, cfg, month=cal.month)
         payable = min(float(cal.working_days), present + paid)
         net = prorate_net(breakdown.net_minor, payable, cal.working_days)
         return PayrollLineRead(
@@ -278,6 +282,8 @@ class PayrollService:
             pf_pct=s.pf_pct,
             pf_cap_minor=s.pf_cap_minor,
             professional_tax_minor=s.professional_tax_minor,
+            professional_tax_feb_minor=s.professional_tax_feb_minor,
+            deduct_income_tax=s.deduct_income_tax,
         )
         # Self-scoped reads: monthly_report/leave lookups for just this employee.
         summaries = {
@@ -466,6 +472,7 @@ class PayrollService:
             gross_minor=b.get("gross_minor", 0),
             employee_pf_minor=b.get("employee_pf_minor", 0),
             professional_tax_minor=b.get("professional_tax_minor", 0),
+            income_tax_minor=b.get("income_tax_minor", 0),
             total_deduction_minor=b.get("total_deduction_minor", 0),
             net_minor=b.get("net_minor", 0),
             net_payable_minor=m.net_minor,

@@ -56,6 +56,8 @@ class PayrollSettingsUpdate(BaseModel):
     pf_pct: int = Field(ge=0, le=100)
     pf_cap_minor: int = Field(ge=0, le=_MINOR_MAX)
     professional_tax_minor: int = Field(ge=0, le=_MINOR_MAX)
+    professional_tax_feb_minor: int = Field(ge=0, le=_MINOR_MAX)
+    deduct_income_tax: bool = True
 
     @field_validator("recipients")
     @classmethod
@@ -74,6 +76,8 @@ class PayrollSettingsRead(BaseModel):
     pf_pct: int
     pf_cap_minor: int
     professional_tax_minor: int
+    professional_tax_feb_minor: int
+    deduct_income_tax: bool
     updated_at: datetime
 
     @classmethod
@@ -89,6 +93,8 @@ class PayrollSettingsRead(BaseModel):
             pf_pct=model.pf_pct,
             pf_cap_minor=model.pf_cap_minor,
             professional_tax_minor=model.professional_tax_minor,
+            professional_tax_feb_minor=model.professional_tax_feb_minor,
+            deduct_income_tax=model.deduct_income_tax,
             updated_at=model.updated_at,
         )
 
@@ -102,6 +108,7 @@ class SalaryBreakdownRead(BaseModel):
     gross_minor: int
     employee_pf_minor: int
     professional_tax_minor: int
+    income_tax_minor: int
     total_deduction_minor: int
     net_minor: int
 
