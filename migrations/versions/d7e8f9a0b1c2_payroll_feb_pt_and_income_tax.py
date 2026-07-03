@@ -1,6 +1,6 @@
 """payroll_settings: February professional-tax amount + income-tax toggle
 
-Revision ID: b1c2d3e4f5a6
+Revision ID: d7e8f9a0b1c2
 Revises: f0a1b2c3d4e5
 Create Date: 2026-07-02
 
@@ -17,7 +17,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "b1c2d3e4f5a6"
+revision: str = "d7e8f9a0b1c2"
 down_revision: str | None = "f0a1b2c3d4e5"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
