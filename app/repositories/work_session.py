@@ -106,10 +106,12 @@ class WorkSessionRepository:
         last_at: datetime,
     ) -> tuple[WorkSession, bool]:
         """Create or merge the ONE biometric session for an employee on a local
-        day (`source="biometric"`). Keeps the earliest clock-in. `clock_out_at` is
-        the computed clock-out (None ⇒ the latest punch is an "in", day still open).
-        `last_at` is the latest punch time, used to RE-OPEN a previously-closed day
-        when a newer in-punch arrives (lunch return, or correcting a stale close).
+        day (`source="biometric"`). The FIRST check-in of the day is authoritative:
+        clock-in only ever moves to an *earlier* punch (out-of-order delivery), and
+        a later in-punch never resurrects a closed day — a second check-in on the
+        same day is ignored (business rule). `clock_out_at` is the computed
+        clock-out (None ⇒ the latest punch is an "in", day still open); out-punches
+        still extend it. `last_at` is unused here now, kept for the call signature.
         Returns (session, created). Re-pushing the same punches is idempotent."""
         existing = await self._session.scalar(
             select(WorkSession)
@@ -134,6 +136,9 @@ class WorkSessionRepository:
             await self._session.flush()
             return ws, True
 
+        # Keep the FIRST check-in: clock-in only moves earlier (never to a later
+        # second check-in). We deliberately do NOT re-open a closed day on a later
+        # in-punch — a repeat same-day check-in is ignored.
         if clock_in_at < _aware(existing.clock_in_at):
             existing.clock_in_at = clock_in_at
         existing_out = _aware(existing.clock_out_at) if existing.clock_out_at else None
@@ -142,11 +147,6 @@ class WorkSessionRepository:
             if existing_out is None or clock_out_at > existing_out:
                 existing.clock_out_at = clock_out_at
                 existing.clock_out_source = "biometric"
-        elif existing_out is not None and _aware(last_at) >= existing_out:
-            # Latest punch is an "in" at/after the recorded out → person is back in
-            # (or the prior close was stale): re-open so the timer resumes.
-            existing.clock_out_at = None
-            existing.clock_out_source = None
         await self._session.flush()
         return existing, False
 

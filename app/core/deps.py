@@ -637,9 +637,19 @@ def get_leave_service(
     policy: Annotated[LeavePolicyService, Depends(get_leave_policy_service)],
     holidays: Annotated[HolidayRepository, Depends(get_holiday_repo)],
     allocations: Annotated[LeaveAllocationRepository, Depends(get_leave_allocation_repo)],
+    attendance_policy: Annotated[AttendancePolicyService, Depends(get_attendance_policy_service)],
 ) -> LeaveService:
     return LeaveService(
-        leaves, comments, employees, audit, notifications, email, policy, holidays, allocations
+        leaves,
+        comments,
+        employees,
+        audit,
+        notifications,
+        email,
+        policy,
+        holidays,
+        allocations,
+        attendance_policy,
     )
 
 
@@ -746,9 +756,7 @@ TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
 TargetServiceDep = Annotated[TargetService, Depends(get_target_service)]
 LeaveServiceDep = Annotated[LeaveService, Depends(get_leave_service)]
 LeavePolicyServiceDep = Annotated[LeavePolicyService, Depends(get_leave_policy_service)]
-LeaveAllocationServiceDep = Annotated[
-    LeaveAllocationService, Depends(get_leave_allocation_service)
-]
+LeaveAllocationServiceDep = Annotated[LeaveAllocationService, Depends(get_leave_allocation_service)]
 MeetingServiceDep = Annotated[MeetingService, Depends(get_meeting_service)]
 NoteServiceDep = Annotated[NoteService, Depends(get_note_service)]
 NotificationServiceDep = Annotated[NotificationService, Depends(get_notification_service)]

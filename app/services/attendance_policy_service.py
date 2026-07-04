@@ -40,6 +40,7 @@ class AttendancePolicyService:
             full_day_min_minutes=p.full_day_min_minutes,
             half_day_min_minutes=p.half_day_min_minutes,
             monthly_regularizations=p.monthly_regularizations,
+            working_days_per_week=p.working_days_per_week,
             timezone=p.timezone,
         )
 

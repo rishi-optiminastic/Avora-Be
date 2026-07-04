@@ -7,15 +7,36 @@ no one outside HR/Admin can reach org-wide payroll.
 
 from __future__ import annotations
 
+from datetime import date, timedelta
+
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
-from app.core.payroll import CalcConfig, compute_breakdown, prorate_net
+from app.core.payroll import (
+    CalcConfig,
+    compute_breakdown,
+    prorate_net,
+    weekdays_in_month,
+    working_days_between,
+)
 from app.models.employee import Employee, EmployeeStatus, Role
 from tests.conftest import _Seed, auth_headers
 
 # ---- pure calculator (the reference ₹50,000 structure, in paise) ----------- #
+
+
+def test_working_days_per_week_counts_from_monday() -> None:
+    # Any 7 consecutive days contain each weekday exactly once, so the count in a
+    # full week equals the configured working-days-per-week (weekday-agnostic).
+    start = date(2026, 6, 1)
+    week = (start, start + timedelta(days=6))
+    assert working_days_between(*week, set()) == 5  # default (Mon-Fri)
+    assert working_days_between(*week, set(), 6) == 6  # Mon-Sat
+    assert working_days_between(*week, set(), 7) == 7  # every day
+    # June 2026 has 30 days; wdpw=7 counts them all, and Mon-Sat ≥ Mon-Fri.
+    assert len(weekdays_in_month(2026, 6, 7)) == 30
+    assert len(weekdays_in_month(2026, 6, 6)) >= len(weekdays_in_month(2026, 6, 5))
 
 
 def test_breakdown_matches_reference_slip() -> None:

@@ -32,6 +32,9 @@ class AttendancePolicy(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     half_day_min_minutes: Mapped[int] = mapped_column(default=240)
     # Regularization credits each employee gets per calendar month.
     monthly_regularizations: Mapped[int] = mapped_column(default=2)
+    # Office working days per week, counted from Monday (5 ⇒ Mon-Fri, 6 ⇒ Mon-Sat).
+    # The working-day baseline for payroll proration and leave-day counting.
+    working_days_per_week: Mapped[int] = mapped_column(default=5)
     # Office timezone for interpreting the times above (IANA name).
     timezone: Mapped[str] = mapped_column(String(64), default="Asia/Kolkata")
 

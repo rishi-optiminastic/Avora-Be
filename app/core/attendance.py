@@ -23,6 +23,7 @@ class PolicySpec:
     full_day_min_minutes: int
     half_day_min_minutes: int
     monthly_regularizations: int
+    working_days_per_week: int
     timezone: str
 
     @property

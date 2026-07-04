@@ -160,6 +160,55 @@ async def test_in_punches_keep_day_open_then_out_closes(
     assert await _clock_out() is not None  # closed at the out punch
 
 
+async def test_second_checkin_does_not_reopen_a_closed_day(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """Business rule: a second same-day check-in is ignored. Once the day is
+    closed by an out-punch, a later in-punch must NOT re-open it, and the first
+    check-in time stands."""
+    seed.report.biometric_id = "1042"
+    await db.commit()
+    rid = seed.report.id
+
+    async def _session() -> WorkSession:
+        db.expire_all()
+        return await db.scalar(  # type: ignore[return-value]
+            select(WorkSession).where(
+                WorkSession.employee_id == rid, WorkSession.source == "biometric"
+            )
+        )
+
+    # In 09:00 then out 13:00 → the day closes at 13:00, first check-in = 09:00.
+    day1 = {
+        "punches": [
+            {"external_id": "1042", "punched_at": "2026-06-15T09:00:00+05:30", "direction": "in"},
+            {"external_id": "1042", "punched_at": "2026-06-15T13:00:00+05:30", "direction": "out"},
+        ]
+    }
+    raw, headers = _signed(settings, day1)
+    assert (
+        await client.post("/api/v1/attendance/biometric", content=raw, headers=headers)
+    ).status_code == 200
+    closed = await _session()
+    first_in, first_out = closed.clock_in_at, closed.clock_out_at
+    assert first_out is not None  # closed
+
+    # A later lone IN punch (a second check-in) arrives → must be ignored: the day
+    # stays closed at 13:00 and the clock-in is unchanged.
+    day2 = {
+        "punches": [
+            {"external_id": "1042", "punched_at": "2026-06-15T14:00:00+05:30", "direction": "in"},
+        ]
+    }
+    raw2, headers2 = _signed(settings, day2)
+    assert (
+        await client.post("/api/v1/attendance/biometric", content=raw2, headers=headers2)
+    ).status_code == 200
+    after = await _session()
+    assert after.clock_in_at == first_in  # first check-in preserved
+    assert after.clock_out_at == first_out  # not re-opened
+
+
 async def test_me_today_reflects_biometric_checkin(
     client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
 ) -> None:

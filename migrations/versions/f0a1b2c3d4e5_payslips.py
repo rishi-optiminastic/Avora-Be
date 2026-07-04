@@ -25,7 +25,12 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    sa.Enum("RELEASED", name="payslipstatus").create(op.get_bind(), checkfirst=True)
+    bind = op.get_bind()
+    sa.Enum("RELEASED", name="payslipstatus").create(bind, checkfirst=True)
+    # Idempotent: the table may already exist (created out-of-band on some DBs) —
+    # skip creation so `upgrade head` reconciles cleanly instead of colliding.
+    if sa.inspect(bind).has_table("payslips"):
+        return
     status = postgresql.ENUM(name="payslipstatus", create_type=False)
 
     op.create_table(

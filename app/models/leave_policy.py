@@ -24,6 +24,10 @@ class LeavePolicy(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     annual_planned_days: Mapped[int] = mapped_column(default=12)
     annual_sick_days: Mapped[int] = mapped_column(default=8)
 
+    # Minimum days' notice required to apply for PLANNED leave (0 ⇒ any time).
+    # Sick / unpaid / half-day are always applicable any time.
+    planned_min_notice_days: Mapped[int] = mapped_column(default=2)
+
     updated_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("employees.id", ondelete="SET NULL"), default=None
     )

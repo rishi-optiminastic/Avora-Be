@@ -32,6 +32,40 @@ async def test_unauthenticated_is_rejected(client: AsyncClient, seed: _Seed) -> 
     assert (await client.get("/api/v1/leaves")).status_code == 401
 
 
+async def test_planned_leave_needs_advance_notice(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    # Planned leave starting tomorrow is under the 2-day default notice → rejected.
+    start = datetime.now(UTC) + timedelta(days=1)
+    body = {
+        "leave_type": "planned",
+        "start_date": start.isoformat(),
+        "end_date": start.isoformat(),
+        "reason": "Trip",
+    }
+    resp = await client.post(
+        "/api/v1/leaves", json=body, headers=auth_headers(settings, seed.report)
+    )
+    assert resp.status_code == 422
+
+
+async def test_sick_leave_can_be_applied_same_day(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    # Sick leave bypasses the notice rule — appliable for today.
+    today = datetime.now(UTC)
+    body = {
+        "leave_type": "sick",
+        "start_date": today.isoformat(),
+        "end_date": today.isoformat(),
+        "reason": "Unwell",
+    }
+    resp = await client.post(
+        "/api/v1/leaves", json=body, headers=auth_headers(settings, seed.report)
+    )
+    assert resp.status_code == 201, resp.text
+
+
 async def test_employee_applies_sets_manager_as_reviewer(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:

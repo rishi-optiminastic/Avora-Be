@@ -24,9 +24,13 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
     sa.Enum("INFO", "SUCCESS", "WARNING", "CRITICAL", name="announcementlevel").create(
-        op.get_bind(), checkfirst=True
+        bind, checkfirst=True
     )
+    # Idempotent: skip if the table already exists (created out-of-band on some DBs).
+    if sa.inspect(bind).has_table("announcements"):
+        return
     level = postgresql.ENUM(name="announcementlevel", create_type=False)
 
     op.create_table(

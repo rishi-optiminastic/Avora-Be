@@ -12,8 +12,14 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
-from app.core.exceptions import AuthorizationError, ConflictError, NotFoundError
+from app.core.exceptions import (
+    AuthorizationError,
+    ConflictError,
+    NotFoundError,
+    ValidationError,
+)
 from app.core.logging import get_logger
 from app.core.payroll import working_days_between
 from app.models.employee import Role
@@ -34,6 +40,7 @@ from app.schemas.leave import (
     LeaveDecision,
     LeaveTypeBalance,
 )
+from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.email_service import EmailError, EmailService
 from app.services.leave_policy_service import LeavePolicyService
 from app.services.notification_service import NotificationService
@@ -60,6 +67,7 @@ class LeaveService:
         policy: LeavePolicyService,
         holidays: HolidayRepository,
         allocations: LeaveAllocationRepository,
+        attendance_policy: AttendancePolicyService,
     ) -> None:
         self._leaves = leaves
         self._comments = comments
@@ -70,6 +78,7 @@ class LeaveService:
         self._policy = policy
         self._holidays = holidays
         self._allocations = allocations
+        self._attendance_policy = attendance_policy
 
     async def list_for_caller(
         self, caller: CurrentUser, *, offset: int, limit: int, status: LeaveStatus | None = None
@@ -83,7 +92,26 @@ class LeaveService:
             raise NotFoundError()
         return leave
 
+    async def _enforce_min_notice(self, payload: LeaveCreate) -> None:
+        """Planned leave must be applied at least `planned_min_notice_days` before
+        it starts (configurable in the leave policy). Sick, unpaid and half-day
+        leave can be applied any time. 'Today' is the org's policy-timezone date."""
+        if payload.leave_type is not LeaveType.PLANNED:
+            return
+        required = (await self._policy.get_or_create()).planned_min_notice_days
+        if required <= 0:
+            return
+        spec = await self._attendance_policy.spec()
+        today = datetime.now(UTC).astimezone(ZoneInfo(spec.timezone)).date()
+        if (_utc_date(payload.start_date) - today).days < required:
+            raise ValidationError(
+                f"Planned leave must be applied at least {required} "
+                f"day{'s' if required != 1 else ''} in advance. "
+                "Use sick leave if you need time off sooner."
+            )
+
     async def apply(self, caller: CurrentUser, payload: LeaveCreate) -> Leave:
+        await self._enforce_min_notice(payload)
         # Employees apply for themselves; their manager is the default reviewer.
         leave = await self._leaves.create(
             payload, employee_id=caller.employee_id, reviewer_id=caller.manager_id
@@ -226,6 +254,7 @@ class LeaveService:
         anchor = employee.hire_date or employee.created_at.date()
         year_start, year_end = _leave_year_window(anchor, datetime.now(UTC).date())
         holidays = await self._holidays.dates_in_range(year_start, year_end)
+        working_days_per_week = (await self._attendance_policy.spec()).working_days_per_week
         start_dt = datetime(year_start.year, year_start.month, year_start.day, tzinfo=UTC)
         end_dt = datetime(year_end.year, year_end.month, year_end.day, tzinfo=UTC) + timedelta(
             days=1
@@ -260,7 +289,7 @@ class LeaveService:
                     continue
                 ls = max(year_start, _utc_date(s))
                 le = min(year_end, _utc_date(e))
-                days = float(working_days_between(ls, le, holidays))
+                days = float(working_days_between(ls, le, holidays, working_days_per_week))
                 total += days * (_HALF_DAY_WEIGHT if kind is LeaveType.HALF_DAY else 1.0)
             return total
 

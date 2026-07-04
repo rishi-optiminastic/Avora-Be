@@ -12,6 +12,7 @@ from app.models.leave_policy import LeavePolicy
 class LeavePolicyRead(BaseModel):
     annual_planned_days: int
     annual_sick_days: int
+    planned_min_notice_days: int
     updated_at: datetime
 
     @classmethod
@@ -19,6 +20,7 @@ class LeavePolicyRead(BaseModel):
         return cls(
             annual_planned_days=m.annual_planned_days,
             annual_sick_days=m.annual_sick_days,
+            planned_min_notice_days=m.planned_min_notice_days,
             updated_at=m.updated_at,
         )
 
@@ -28,3 +30,4 @@ class LeavePolicyUpdate(BaseModel):
 
     annual_planned_days: int | None = Field(default=None, ge=0, le=365)
     annual_sick_days: int | None = Field(default=None, ge=0, le=365)
+    planned_min_notice_days: int | None = Field(default=None, ge=0, le=90)

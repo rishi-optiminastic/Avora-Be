@@ -21,8 +21,33 @@ _POLICY = PolicySpec(
     full_day_min_minutes=480,
     half_day_min_minutes=240,
     monthly_regularizations=2,
+    working_days_per_week=5,
     timezone="UTC",
 )
+
+
+async def test_working_days_per_week_round_trips(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    read = await client.get("/api/v1/attendance/policy", headers=auth_headers(settings, seed.admin))
+    assert read.status_code == 200
+    assert read.json()["working_days_per_week"] == 5  # default (Mon-Fri)
+
+    upd = await client.put(
+        "/api/v1/attendance/policy",
+        json={"working_days_per_week": 6},
+        headers=auth_headers(settings, seed.admin),
+    )
+    assert upd.status_code == 200
+    assert upd.json()["working_days_per_week"] == 6
+
+    # A non-manager may read the policy but never change it.
+    forbidden = await client.put(
+        "/api/v1/attendance/policy",
+        json={"working_days_per_week": 7},
+        headers=auth_headers(settings, seed.report),
+    )
+    assert forbidden.status_code == 403
 
 
 def _at(hour: int, minute: int) -> datetime:

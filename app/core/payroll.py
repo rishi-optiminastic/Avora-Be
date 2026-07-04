@@ -152,29 +152,37 @@ def prorate_net(net_minor: int, payable_days: float, working_days: int) -> int:
     return round(net_minor * ratio)
 
 
-def weekdays_in_month(year: int, month: int) -> list[date]:
-    """Every Mon-Fri date in the given month (the working-day baseline)."""
+def weekdays_in_month(year: int, month: int, working_days_per_week: int = 5) -> list[date]:
+    """Every working-day date in the given month (the working-day baseline).
+
+    `working_days_per_week` is counted from Monday: 5 ⇒ Mon-Fri, 6 ⇒ Mon-Sat,
+    7 ⇒ every day. `weekday()` is 0=Mon … 6=Sun, so `< working_days_per_week`
+    selects the first N days of the week.
+    """
     _, last = calendar.monthrange(year, month)
     return [
         d
         for day in range(1, last + 1)
-        if (d := date(year, month, day)).weekday() < 5  # 0=Mon … 4=Fri
+        if (d := date(year, month, day)).weekday() < working_days_per_week
     ]
 
 
-def working_days_between(start: date, end: date, holidays: set[date]) -> int:
-    """Count Mon-Fri dates in [start, end] inclusive, minus the given holidays.
+def working_days_between(
+    start: date, end: date, holidays: set[date], working_days_per_week: int = 5
+) -> int:
+    """Count working-day dates in [start, end] inclusive, minus the given holidays.
 
     The working-day baseline for leave accounting (mirrors payroll's
-    weekdays-minus-holidays rule), so a Fri-Mon leave over a weekend is 2 days,
-    not 4. Returns 0 when the range is inverted.
+    working-days-minus-holidays rule), so a Fri-Mon leave over a weekend is 2 days,
+    not 4. `working_days_per_week` is counted from Monday (5 ⇒ Mon-Fri). Returns 0
+    when the range is inverted.
     """
     if end < start:
         return 0
     total = 0
     current = start
     while current <= end:
-        if current.weekday() < 5 and current not in holidays:
+        if current.weekday() < working_days_per_week and current not in holidays:
             total += 1
         current += timedelta(days=1)
     return total

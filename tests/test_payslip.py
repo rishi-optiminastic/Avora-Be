@@ -32,6 +32,7 @@ def test_render_payslip_pdf_produces_a_pdf() -> None:
         gross_minor=48_200_00,
         employee_pf_minor=1_800_00,
         professional_tax_minor=200_00,
+        income_tax_minor=0,  # no TDS on the reference ₹50k slip (deductions = PF + PT)
         total_deduction_minor=2_000_00,
         net_minor=46_200_00,
         net_payable_minor=42_000_00,

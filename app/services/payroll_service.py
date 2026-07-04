@@ -173,7 +173,7 @@ class PayrollService:
         s = await self.get_settings_model()
         spec = await self._policy.spec()
         period = month or self.current_month(spec.timezone)
-        cal = await self._month_calendar(period, spec.timezone)
+        cal = await self._month_calendar(period, spec.timezone, spec.working_days_per_week)
         cfg = CalcConfig(
             basic_pct=s.basic_pct,
             hra_pct=s.hra_pct,
@@ -275,7 +275,7 @@ class PayrollService:
         s = await self.get_settings_model()
         spec = await self._policy.spec()
         period = month or self.current_month(spec.timezone)
-        cal = await self._month_calendar(period, spec.timezone)
+        cal = await self._month_calendar(period, spec.timezone, spec.working_days_per_week)
         cfg = CalcConfig(
             basic_pct=s.basic_pct,
             hra_pct=s.hra_pct,
@@ -559,9 +559,11 @@ class PayrollService:
         return run
 
     # ---- calendar + leave helpers ----------------------------------------- #
-    async def _month_calendar(self, month: str, tz: str) -> _MonthCalendar:
+    async def _month_calendar(
+        self, month: str, tz: str, working_days_per_week: int = 5
+    ) -> _MonthCalendar:
         year, m = _parse_month(month)
-        weekdays = weekdays_in_month(year, m)
+        weekdays = weekdays_in_month(year, m, working_days_per_week)
         last_day = calendar.monthrange(year, m)[1]
         holidays = await self._holidays.dates_in_range(date(year, m, 1), date(year, m, last_day))
         working = frozenset(d for d in weekdays if d not in holidays)
