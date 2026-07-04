@@ -24,7 +24,7 @@ from app.core.deps import (
     SettingsDep,
 )
 from app.core.exceptions import NotFoundError
-from app.schemas.eod import EodReportRead, EodReportUpdate
+from app.schemas.eod import EodCumulativeRead, EodReportRead, EodReportUpdate
 from app.schemas.eod_settings import EodSettingsRead, EodSettingsUpdate
 
 router = APIRouter(prefix="/eod", tags=["eod"])
@@ -51,6 +51,33 @@ async def list_reports(
 ) -> list[EodReportRead]:
     """Reports for people in the caller's scope, for a day (defaults to today)."""
     return await service.list_for_scope(caller, datetime.now(UTC), report_date)
+
+
+@router.get("/history", response_model=list[EodReportRead])
+async def eod_history(
+    caller: CurrentUserDep,
+    service: EodServiceDep,
+    employee_id: Annotated[uuid.UUID | None, Query()] = None,
+    from_date: Annotated[str | None, Query(alias="from", pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
+    to_date: Annotated[str | None, Query(alias="to", pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
+) -> list[EodReportRead]:
+    """One person's past reports, newest first. Defaults to the caller; a
+    manager/HR/admin may pass an in-scope `employee_id` (404 if out of scope)."""
+    return await service.history_for_employee(
+        caller, employee_id, from_date, to_date, datetime.now(UTC)
+    )
+
+
+@router.get("/cumulative", response_model=EodCumulativeRead)
+async def eod_cumulative(
+    caller: CurrentUserDep,
+    service: EodServiceDep,
+    from_date: Annotated[str | None, Query(alias="from", pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
+    to_date: Annotated[str | None, Query(alias="to", pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
+) -> EodCumulativeRead:
+    """Rolled-up team digest over a window (defaults to today): coverage, summed
+    effort, and every report with content. Scoped to the caller's team."""
+    return await service.cumulative_for_scope(caller, from_date, to_date, datetime.now(UTC))
 
 
 @router.get("/settings", response_model=EodSettingsRead)

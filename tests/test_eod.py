@@ -423,3 +423,92 @@ async def test_cron_requires_secret(client: AsyncClient, seed: _Seed) -> None:
     assert (await client.post("/api/v1/eod/cron")).status_code == 404
     wrong = await client.post("/api/v1/eod/cron", headers={"X-Cron-Secret": "nope"})
     assert wrong.status_code == 404
+
+
+def _local_today() -> str:
+    return datetime.now(ZoneInfo("Asia/Kolkata")).date().isoformat()
+
+
+async def _seed_history(db: AsyncSession, seed: _Seed) -> None:
+    """Two sent reports for the report employee on consecutive recent days."""
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    for offset in (0, 1):
+        day = (today - timedelta(days=offset)).isoformat()
+        db.add(
+            EodReport(
+                employee_id=seed.report.id,
+                report_date=day,
+                status=EodStatus.SENT,
+                summary=f"Day {day}.",
+                highlights={"tasks_completed": ["t1"], "blockers": ["b1"]},
+                metrics={"worked_minutes": 480, "active_minutes": 300, "tasks_done": 1},
+            )
+        )
+    await db.commit()
+
+
+async def test_history_is_scoped_and_newest_first(
+    client: AsyncClient, db: AsyncSession, seed: _Seed, settings: Settings
+) -> None:
+    await _seed_history(db, seed)
+
+    # The author's own history (defaults to the caller) — newest first.
+    own = await client.get("/api/v1/eod/history", headers=auth_headers(settings, seed.report))
+    assert own.status_code == 200
+    dates = [r["report_date"] for r in own.json()]
+    assert dates == sorted(dates, reverse=True) and len(dates) == 2
+
+    # The manager (report is a direct report) may read it by employee_id…
+    mgr = await client.get(
+        f"/api/v1/eod/history?employee_id={seed.report.id}",
+        headers=auth_headers(settings, seed.manager),
+    )
+    assert mgr.status_code == 200 and len(mgr.json()) == 2
+
+    # …the outsider may not — 404, never revealing the reports exist.
+    outsider = await client.get(
+        f"/api/v1/eod/history?employee_id={seed.report.id}",
+        headers=auth_headers(settings, seed.outsider),
+    )
+    assert outsider.status_code == 404
+
+
+async def test_cumulative_is_scoped_with_coverage_and_totals(
+    client: AsyncClient, db: AsyncSession, seed: _Seed, settings: Settings
+) -> None:
+    today = _local_today()
+    db.add(
+        EodReport(
+            employee_id=seed.report.id,
+            report_date=today,
+            status=EodStatus.SENT,
+            summary="Shipped.",
+            highlights={"tasks_completed": ["t1", "t2"], "blockers": ["b1"]},
+            metrics={"worked_minutes": 480, "active_minutes": 300, "tasks_done": 2},
+        )
+    )
+    await db.commit()
+
+    # The manager's digest covers self + direct report: one submitted, the rest
+    # missing, with the submitted report's effort summed into the totals.
+    mgr = await client.get("/api/v1/eod/cumulative", headers=auth_headers(settings, seed.manager))
+    assert mgr.status_code == 200
+    body = mgr.json()
+    assert body["from_date"] == today and body["to_date"] == today
+    assert body["submitted"] == 1
+    assert body["totals"] == {
+        "worked_minutes": 480,
+        "active_minutes": 300,
+        "tasks_done": 2,
+        "blockers": 1,
+    }
+    assert any(r["employee_id"] == str(seed.report.id) for r in body["reports"])
+    covered = {m["employee_id"]: m["coverage"] for m in body["members"]}
+    assert covered[str(seed.report.id)] == "submitted"
+
+    # The outsider's digest is scoped to themselves — the report never appears.
+    out = await client.get("/api/v1/eod/cumulative", headers=auth_headers(settings, seed.outsider))
+    assert out.status_code == 200
+    out_body = out.json()
+    assert out_body["submitted"] == 0 and out_body["reports"] == []
+    assert all(m["employee_id"] != str(seed.report.id) for m in out_body["members"])

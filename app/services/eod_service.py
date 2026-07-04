@@ -12,7 +12,7 @@ import asyncio
 import base64
 import uuid
 from collections.abc import Sequence
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -34,7 +34,13 @@ from app.repositories.eod_report import EodReportRepository
 from app.repositories.screenshot import ScreenshotRepository
 from app.repositories.task import TaskRepository
 from app.schemas.auth import CurrentUser
-from app.schemas.eod import EodDraftContent, EodReportRead
+from app.schemas.eod import (
+    EodCumulativeMember,
+    EodCumulativeRead,
+    EodCumulativeTotals,
+    EodDraftContent,
+    EodReportRead,
+)
 from app.schemas.monitoring import AttendanceStatus
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.attendance_service import AttendanceService
@@ -52,6 +58,21 @@ SYSTEM_CALLER = CurrentUser(employee_id=uuid.UUID(int=0), role=Role.ADMIN, manag
 
 _EOD_LINK = "/dashboard/me/eod"
 _ACTIVE_STATUSES = (TaskStatus.TODO, TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED)
+
+# Per-person history default window (calendar days back from today).
+_HISTORY_DEFAULT_SPAN = 30
+# Reports that carry real content (vs. absent/failed placeholders) — the digest
+# totals and content list are built from these only.
+_CONTENT_STATUSES = (EodStatus.DRAFT, EodStatus.APPROVED, EodStatus.SENT)
+# Coverage precedence when a member has several rows in the window: a submitted
+# day beats a pending draft beats a failed run beats an absence.
+_COVERAGE_RANK = {
+    EodStatus.SENT: 4,
+    EodStatus.APPROVED: 4,
+    EodStatus.DRAFT: 3,
+    EodStatus.FAILED: 2,
+    EodStatus.SKIPPED_ABSENT: 1,
+}
 
 
 class EodService:
@@ -105,6 +126,115 @@ class EodService:
         employees = await self._employees.all_in_scope(caller)
         reports = await self._reports.list_for_employees([e.id for e in employees], day)
         return [EodReportRead.from_model(r) for r in reports]
+
+    async def history_for_employee(
+        self,
+        caller: CurrentUser,
+        employee_id: uuid.UUID | None,
+        from_date: str | None,
+        to_date: str | None,
+        now: datetime,
+    ) -> list[EodReportRead]:
+        """A single person's past reports, newest first. Defaults to the caller;
+        a manager/HR/admin may pass another `employee_id` within their scope. Out
+        of scope → 404 (never reveal a report exists, §7)."""
+        target = employee_id or caller.employee_id
+        if not await self._employees.can_read(caller, target):
+            raise NotFoundError()
+        start, end = await self._resolve_range(now, from_date, to_date, _HISTORY_DEFAULT_SPAN)
+        reports = await self._reports.list_for_employee_between(target, start, end)
+        return [EodReportRead.from_model(r) for r in reports]
+
+    async def cumulative_for_scope(
+        self,
+        caller: CurrentUser,
+        from_date: str | None,
+        to_date: str | None,
+        now: datetime,
+    ) -> EodCumulativeRead:
+        """A rolled-up digest of the caller's team over a window (defaults to a
+        single day): per-person coverage, summed effort, and every report with
+        content. Scoped via the employee scope, so a manager sees only their
+        reports, a senior manager their department, HR/admin the org."""
+        start, end = await self._resolve_range(now, from_date, to_date, 0)
+        employees = await self._employees.all_in_scope(caller)
+        member_ids = [e.id for e in employees]
+        reports = await self._reports.list_for_employees_between(member_ids, start, end)
+
+        # Best (highest-precedence, then latest) row per member + summed totals.
+        best: dict[uuid.UUID, EodReport] = {}
+        totals = EodCumulativeTotals()
+        content: list[EodReport] = []
+        for report in reports:
+            current = best.get(report.employee_id)
+            if current is None or _outranks(report, current):
+                best[report.employee_id] = report
+            if report.status in _CONTENT_STATUSES:
+                content.append(report)
+                metrics = report.metrics or {}
+                highlights = EodDraftContent.model_validate(report.highlights or {})
+                totals.worked_minutes += int(metrics.get("worked_minutes", 0) or 0)
+                totals.active_minutes += int(metrics.get("active_minutes", 0) or 0)
+                totals.tasks_done += int(
+                    metrics.get("tasks_done", len(highlights.tasks_completed)) or 0
+                )
+                totals.blockers += len(highlights.blockers)
+
+        counts = {"submitted": 0, "pending": 0, "absent": 0, "failed": 0, "missing": 0}
+        members: list[EodCumulativeMember] = []
+        for employee in employees:
+            row = best.get(employee.id)
+            coverage = _coverage(row.status if row is not None else None)
+            counts[coverage] += 1
+            members.append(
+                EodCumulativeMember(
+                    employee_id=employee.id,
+                    name=employee.full_name,
+                    department=employee.department,
+                    job_title=employee.job_title,
+                    coverage=coverage,
+                    latest_report_id=row.id if row is not None else None,
+                    latest_report_date=row.report_date if row is not None else None,
+                )
+            )
+        members.sort(key=lambda m: m.name.lower())
+
+        name_of = {e.id: e.full_name for e in employees}
+        content.sort(key=lambda r: (r.report_date, name_of.get(r.employee_id, "")), reverse=True)
+        member_count = len(employees)
+        rate = counts["submitted"] / member_count if member_count else 0.0
+        return EodCumulativeRead(
+            from_date=start,
+            to_date=end,
+            member_count=member_count,
+            submitted=counts["submitted"],
+            pending=counts["pending"],
+            absent=counts["absent"],
+            failed=counts["failed"],
+            missing=counts["missing"],
+            submission_rate=round(rate, 4),
+            totals=totals,
+            reports=[EodReportRead.from_model(r) for r in content],
+            members=members,
+        )
+
+    async def _resolve_range(
+        self, now: datetime, from_date: str | None, to_date: str | None, default_span_days: int
+    ) -> tuple[str, str]:
+        """Resolve a [start, end] window of local YYYY-MM-DD strings. `to` defaults
+        to today; `from` defaults to `to` minus `default_span_days` (0 = single
+        day). Malformed or reversed inputs are clamped, never trusted (§1)."""
+        today = await self._local_date(now)
+        end = _valid_date(to_date) or today
+        if from_date:
+            start = _valid_date(from_date) or end
+        else:
+            start = (
+                date.fromisoformat(end) - timedelta(days=max(0, default_span_days))
+            ).isoformat()
+        if start > end:
+            start, end = end, start
+        return start, end
 
     # ---- employee edit + approve ------------------------------------------ #
     async def update_draft(
@@ -535,6 +665,38 @@ class EodService:
         local_date = now.astimezone(tz).date()
         start = datetime.combine(local_date, time.min, tzinfo=tz).astimezone(UTC)
         return start, start + timedelta(days=1)
+
+
+def _outranks(candidate: EodReport, current: EodReport) -> bool:
+    """True when `candidate` should replace `current` as a member's representative
+    row: higher coverage precedence wins; ties break to the more recent date."""
+    cand_rank = _COVERAGE_RANK.get(candidate.status, 0)
+    cur_rank = _COVERAGE_RANK.get(current.status, 0)
+    if cand_rank != cur_rank:
+        return cand_rank > cur_rank
+    return candidate.report_date > current.report_date
+
+
+def _coverage(status: EodStatus | None) -> str:
+    if status in (EodStatus.APPROVED, EodStatus.SENT):
+        return "submitted"
+    if status is EodStatus.DRAFT:
+        return "pending"
+    if status is EodStatus.FAILED:
+        return "failed"
+    if status is EodStatus.SKIPPED_ABSENT:
+        return "absent"
+    return "missing"
+
+
+def _valid_date(value: str | None) -> str | None:
+    """Normalise a client-supplied YYYY-MM-DD, or None if absent/malformed."""
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value).isoformat()
+    except ValueError:
+        return None
 
 
 def _in_range(when: datetime | None, start: datetime, end: datetime) -> bool:

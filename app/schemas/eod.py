@@ -57,3 +57,44 @@ class EodReportRead(BaseModel):
             created_at=report.created_at,
             sent_at=report.sent_at,
         )
+
+
+class EodCumulativeTotals(BaseModel):
+    """Summed effort across every content report in the digest window."""
+
+    worked_minutes: int = 0
+    active_minutes: int = 0
+    tasks_done: int = 0
+    blockers: int = 0
+
+
+class EodCumulativeMember(BaseModel):
+    """One person's coverage in the digest window — the roster row that shows who
+    submitted, who's still pending, who was absent, and who's missing entirely."""
+
+    employee_id: uuid.UUID
+    name: str
+    department: str | None = None
+    job_title: str | None = None
+    # submitted | pending | absent | failed | missing
+    coverage: str
+    latest_report_id: uuid.UUID | None = None
+    latest_report_date: str | None = None
+
+
+class EodCumulativeRead(BaseModel):
+    """A rolled-up team digest over [from_date, to_date]: coverage counts, summed
+    effort, the per-person roster, and every report that carries content."""
+
+    from_date: str
+    to_date: str
+    member_count: int
+    submitted: int
+    pending: int
+    absent: int
+    failed: int
+    missing: int
+    submission_rate: float  # submitted / member_count, 0..1
+    totals: EodCumulativeTotals
+    reports: list[EodReportRead]
+    members: list[EodCumulativeMember]

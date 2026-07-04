@@ -68,6 +68,41 @@ class EodReportRepository:
         )
         return rows.scalars().all()
 
+    async def list_for_employee_between(
+        self, employee_id: uuid.UUID, start_date: str, end_date: str
+    ) -> Sequence[EodReport]:
+        """One employee's reports within [start_date, end_date] (inclusive, local
+        YYYY-MM-DD). ISO dates sort lexicographically, so the string range is
+        chronological. Newest first — this is the per-person history feed."""
+        rows = await self._session.execute(
+            select(EodReport)
+            .where(
+                EodReport.employee_id == employee_id,
+                EodReport.report_date >= start_date,
+                EodReport.report_date <= end_date,
+            )
+            .order_by(EodReport.report_date.desc())
+        )
+        return rows.scalars().all()
+
+    async def list_for_employees_between(
+        self, employee_ids: Sequence[uuid.UUID], start_date: str, end_date: str
+    ) -> Sequence[EodReport]:
+        """Every report for a set of employees within [start_date, end_date]
+        (inclusive). Feeds the team cumulative digest; newest first."""
+        if not employee_ids:
+            return []
+        rows = await self._session.execute(
+            select(EodReport)
+            .where(
+                EodReport.employee_id.in_(employee_ids),
+                EodReport.report_date >= start_date,
+                EodReport.report_date <= end_date,
+            )
+            .order_by(EodReport.report_date.desc())
+        )
+        return rows.scalars().all()
+
     async def list_drafts_through(self, through_date: str) -> Sequence[EodReport]:
         """Drafts for `report_date` on or before `through_date` (local YYYY-MM-DD)
         still awaiting review — the auto-send set. ISO dates sort lexicographically,
