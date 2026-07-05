@@ -34,11 +34,11 @@ async def ingest_activity(
     service: ActivityServiceDep,
 ) -> ActivityIngestResult:
     sample = await service.ingest(device, payload)
-    if sample is None:  # employee is in PERSONAL mode — accepted but not stored
+    if sample is None:  # outside the capture window — accepted but not stored
         return ActivityIngestResult(
             accepted=False,
             sequence=payload.sequence,
-            flags=["tracking_paused"],
+            flags=["not_capturing"],
         )
     return ActivityIngestResult(
         accepted=True,

@@ -74,11 +74,11 @@ class ActivityService:
 
         received_at = datetime.now(UTC)
 
-        # Privacy: stop storing activity once the employee has deliberately checked
-        # out for the day (until they clock back in). The device may keep sending;
-        # we advance its sequence + mark it alive, but store nothing. WFH/agent-only
-        # employees (no formal checkout) are never suppressed. See MonitoringGate.
-        if await self._gate.is_checked_out(device.employee_id):
+        # Capture only during an open work session on a working day. Outside that
+        # window — before check-in, after checkout, or a non-working day (e.g.
+        # Sunday) — the device may keep sending, but we advance its sequence + mark
+        # it alive and store nothing. See MonitoringGateService.
+        if await self._gate.should_suppress(device.employee_id, received_at):
             await self._advance_device(device, payload.sequence, received_at)
             return None
 

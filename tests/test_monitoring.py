@@ -5,9 +5,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
-from tests.conftest import _Seed, agent_headers, auth_headers
+from tests.conftest import _Seed, agent_headers, allow_capture, auth_headers
 
 
 def _sample(sequence: int) -> dict[str, object]:
@@ -30,8 +31,9 @@ async def test_attendance_unauthenticated(client: AsyncClient, seed: _Seed) -> N
 
 
 async def test_attendance_marks_present_and_is_scoped(
-    client: AsyncClient, settings: Settings, seed: _Seed
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
 ) -> None:
+    await allow_capture(db, seed.report.id)
     await _ingest(client, seed, 1)
     resp = await client.get("/api/v1/attendance", headers=auth_headers(settings, seed.manager))
     assert resp.status_code == 200
@@ -39,14 +41,16 @@ async def test_attendance_marks_present_and_is_scoped(
     # Manager sees themselves + their report only.
     assert set(rows) == {str(seed.manager.id), str(seed.report.id)}
     report = rows[str(seed.report.id)]
-    assert report["status"] in ("full_day", "half_day", "late")
+    # An open session (in progress) marks them present, not absent, with a login.
+    assert report["status"] != "absent"
     assert report["login_at"] is not None
-    assert rows[str(seed.manager.id)]["status"] == "absent"  # no samples
+    assert rows[str(seed.manager.id)]["status"] == "absent"  # no session / samples
 
 
 async def test_activity_now_shows_online(
-    client: AsyncClient, settings: Settings, seed: _Seed
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
 ) -> None:
+    await allow_capture(db, seed.report.id)
     await _ingest(client, seed, 1)
     resp = await client.get("/api/v1/activity/now", headers=auth_headers(settings, seed.manager))
     assert resp.status_code == 200
@@ -55,7 +59,10 @@ async def test_activity_now_shows_online(
     assert rows[str(seed.report.id)]["active_window"] == "Code.app"
 
 
-async def test_timeline_is_scoped(client: AsyncClient, settings: Settings, seed: _Seed) -> None:
+async def test_timeline_is_scoped(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    await allow_capture(db, seed.report.id)
     await _ingest(client, seed, 1)
     mine = await client.get(
         f"/api/v1/activity/{seed.report.id}", headers=auth_headers(settings, seed.manager)

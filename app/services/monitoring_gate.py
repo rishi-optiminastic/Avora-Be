@@ -1,11 +1,12 @@
 """Monitoring gate — should we accept monitoring ingest for this employee now?
 
-Privacy: once an employee deliberately checks out for the day (the dashboard
-"I'm leaving" clock-out, or the auto-checkout worker), we stop STORING their
-activity samples and screenshots until they clock back in — even if their
-machine keeps sending. A biometric out-punch (which may just be a lunch break)
-does NOT count, and employees who never formally check in (WFH / agent-only)
-are never suppressed.
+We capture ONLY while the employee is actively checked in — i.e. there is an
+OPEN work session (clocked in, not yet clocked out) — and only on a working day
+(per the attendance policy's working-days-per-week). Everything outside that
+window is dropped and stored as nothing:
+  - before check-in (no session open yet),
+  - after checkout (session closed, by any source — dashboard, auto, biometric),
+  - non-working days (e.g. Sunday / the configured weekend).
 
 Enforcement is server-side on purpose (the agent is untrusted, Security rule
 5.4); the device may keep posting, but the trusted layer drops it.
@@ -28,21 +29,17 @@ class MonitoringGateService:
         self._sessions = work_sessions
         self._policy = policy
 
-    async def is_checked_out(self, employee_id: uuid.UUID) -> bool:
-        """True ⇒ the employee deliberately checked out today and has not clocked
-        back in, so their monitoring ingest should be dropped."""
-        # Currently clocked in (open session) → always monitor.
-        if await self._sessions.get_open(employee_id) is not None:
-            return False
-        # Otherwise only a *deliberate* checkout on the current LOCAL day suppresses
-        # monitoring — so yesterday's auto-checkout never bleeds into today, and a
-        # biometric lunch out-punch never counts.
+    async def should_suppress(self, employee_id: uuid.UUID, now: datetime | None = None) -> bool:
+        """True ⇒ drop this monitoring ingest (store nothing). Capture is allowed
+        only during an open work session on a working day; before check-in, after
+        checkout, and on non-working days (e.g. Sunday) we suppress. `now` is
+        injectable for tests; it defaults to the current time."""
         spec = await self._policy.spec()
-        day_start = self._local_day_start_utc(spec.timezone)
-        return await self._sessions.has_deliberate_checkout_since(employee_id, day_start)
-
-    @staticmethod
-    def _local_day_start_utc(tz: str) -> datetime:
-        now_local = datetime.now(UTC).astimezone(ZoneInfo(tz))
-        midnight = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-        return midnight.astimezone(UTC)
+        now_local = (now or datetime.now(UTC)).astimezone(ZoneInfo(spec.timezone))
+        # Non-working day: weekday() is 0=Mon … 6=Sun; indices ≥ working_days_per_week
+        # are off (5 ⇒ Sat & Sun off, 6 ⇒ Sun off).
+        if now_local.weekday() >= spec.working_days_per_week:
+            return True
+        # Only capture while clocked in. No open session ⇒ before check-in or after
+        # checkout ⇒ suppress.
+        return await self._sessions.get_open(employee_id) is None

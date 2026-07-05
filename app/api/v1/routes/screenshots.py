@@ -72,9 +72,9 @@ async def upload_screenshot(
         image=image,
         monitors=_parse_monitors(x_monitors),
     )
-    if shot is None:  # employee is in PERSONAL mode — accepted but not stored
+    if shot is None:  # outside the capture window — accepted but not stored
         return JSONResponse(
-            {"accepted": False, "reason": "tracking_paused"},
+            {"accepted": False, "reason": "not_capturing"},
             status_code=status.HTTP_202_ACCEPTED,
         )
     return ScreenshotRead.model_validate(shot)

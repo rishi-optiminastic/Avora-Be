@@ -5,10 +5,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.categories import ProductivityCategory, classify, extract_domain
 from app.core.config import Settings
-from tests.conftest import _Seed, agent_headers, auth_headers
+from tests.conftest import _Seed, agent_headers, allow_capture, auth_headers
 
 
 def test_extract_domain_and_classify() -> None:
@@ -43,8 +44,9 @@ async def test_browsing_unauthenticated(client: AsyncClient, seed: _Seed) -> Non
 
 
 async def test_browsing_categorises_and_is_scoped(
-    client: AsyncClient, settings: Settings, seed: _Seed
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
 ) -> None:
+    await allow_capture(db, seed.report.id)
     # The seed's device belongs to the report; one sample per domain ≈ one minute.
     await _ingest_url(client, seed, 1, "https://github.com/optiminastic/avora")
     await _ingest_url(client, seed, 2, "https://www.youtube.com/watch?v=demo")

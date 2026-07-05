@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.core.security import compute_hmac_sha256
 from app.models.screenshot import Screenshot
-from tests.conftest import _Seed, auth_headers
+from tests.conftest import _Seed, allow_capture, auth_headers
 
 IMG = b"\xff\xd8\xff\xe0fake-jpeg-bytes-for-test"
 
@@ -55,6 +55,7 @@ async def test_upload_stores_per_monitor_rects(
 ) -> None:
     """A dual-monitor capture's X-Monitors header is parsed, validated against the
     image bounds, and stored so the OCR worker can crop per screen."""
+    await allow_capture(db, seed.report.id)
     resp = await client.post(
         "/api/v1/screenshots",
         content=IMG,
@@ -78,6 +79,7 @@ async def test_upload_drops_malformed_monitors(
 ) -> None:
     """Garbage / out-of-bounds rects are dropped (agent is untrusted); a clean
     capture with no usable rects stores an empty list → whole-image OCR."""
+    await allow_capture(db, seed.report.id)
     resp = await client.post(
         "/api/v1/screenshots",
         content=IMG,
@@ -103,14 +105,16 @@ async def test_upload_bad_hmac_rejected(client: AsyncClient, seed: _Seed) -> Non
     assert resp.status_code == 401
 
 
-async def test_upload_rejects_bad_type(client: AsyncClient, seed: _Seed) -> None:
+async def test_upload_rejects_bad_type(client: AsyncClient, db: AsyncSession, seed: _Seed) -> None:
+    await allow_capture(db, seed.report.id)
     resp = await _upload(client, seed, content_type="text/html")
     assert resp.status_code == 422
 
 
 async def test_upload_list_and_fetch_are_scoped(
-    client: AsyncClient, settings: Settings, seed: _Seed
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
 ) -> None:
+    await allow_capture(db, seed.report.id)
     up = await _upload(client, seed)
     assert up.status_code == 202, up.text
     shot = up.json()

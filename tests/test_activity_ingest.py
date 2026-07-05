@@ -5,8 +5,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from tests.conftest import _Seed, agent_headers
+from tests.conftest import _Seed, agent_headers, allow_capture
 
 
 def _sample(sequence: int) -> dict[str, object]:
@@ -18,7 +19,8 @@ def _sample(sequence: int) -> dict[str, object]:
     }
 
 
-async def test_valid_sample_is_accepted(client: AsyncClient, seed: _Seed) -> None:
+async def test_valid_sample_is_accepted(client: AsyncClient, db: AsyncSession, seed: _Seed) -> None:
+    await allow_capture(db, seed.report.id)
     raw, headers = agent_headers(seed.device_raw_token, _sample(1))
     resp = await client.post("/api/v1/activity/ingest", content=raw, headers=headers)
     assert resp.status_code == 202

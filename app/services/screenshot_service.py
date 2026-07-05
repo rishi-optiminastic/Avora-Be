@@ -58,13 +58,12 @@ class ScreenshotService:
         image: bytes,
         monitors: list[list[int]] | None = None,
     ) -> Screenshot | None:
-        # Privacy: drop screenshots once the employee has deliberately checked out
-        # for the day (until they clock back in) — before any S3 upload. WFH /
-        # agent-only employees are never suppressed. See MonitoringGate.
-        if await self._gate.is_checked_out(device.employee_id):
+        # Capture only during an open work session on a working day — before any S3
+        # upload. Outside that window (before check-in, after checkout, non-working
+        # day like Sunday) the screenshot is dropped. See MonitoringGateService.
+        if await self._gate.should_suppress(device.employee_id):
             return None
 
-        # Capture is always on (work mode) — the personal-mode pause was removed.
         if content_type not in ALLOWED_TYPES:
             raise ValidationError("Unsupported image type.")
         if not image or len(image) > MAX_IMAGE_BYTES:

@@ -31,6 +31,8 @@ from app.core.security import (
 )
 from app.main import create_app
 from app.models import Base, Device, Employee, EmployeeStatus, Role
+from app.models.attendance_policy import AttendancePolicy
+from app.models.work_session import WorkSession
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
@@ -240,6 +242,21 @@ class _Seed:
         self.outsider: Employee = kw["outsider"]  # type: ignore[assignment]
         self.device: Device = kw["device"]  # type: ignore[assignment]
         self.device_raw_token: str = kw["device_raw_token"]  # type: ignore[assignment]
+
+
+async def allow_capture(db: AsyncSession, employee_id: object) -> None:
+    """Open the monitoring capture window for an employee so ingest is stored:
+    pin the org to an all-working-days week and open a work session. Monitoring is
+    captured only during an open session on a working day (MonitoringGateService)."""
+    db.add(AttendancePolicy(working_days_per_week=7))
+    db.add(
+        WorkSession(
+            employee_id=employee_id,
+            clock_in_at=datetime.now(UTC) - timedelta(hours=1),
+            source="dashboard",
+        )
+    )
+    await db.commit()
 
 
 def bearer_for_email(

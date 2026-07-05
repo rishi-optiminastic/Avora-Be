@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import Settings
 from app.core.security import generate_device_token, hash_device_token
 from app.models import Device, Employee, EmployeeStatus, Role
-from tests.conftest import _Seed, agent_headers, auth_headers
+from tests.conftest import _Seed, agent_headers, allow_capture, auth_headers
 
 
 async def _make_owner(db: AsyncSession, settings: Settings) -> tuple[Employee, str]:
@@ -114,6 +114,7 @@ async def test_hidden_domain_removed_from_browsing_for_everyone(
     client: AsyncClient, settings: Settings, db: AsyncSession, seed: _Seed
 ) -> None:
     owner, raw_token = await _make_owner(db, settings)
+    await allow_capture(db, owner.id)
     await _ingest_url(client, raw_token, 1, "https://github.com/optiminastic/avora")
     await _ingest_url(client, raw_token, 2, "https://www.youtube.com/watch?v=x")
     await _ingest_url(client, raw_token, 3, "https://adsmanager.facebook.com/manage")

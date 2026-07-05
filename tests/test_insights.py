@@ -5,9 +5,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
-from tests.conftest import _Seed, agent_headers, auth_headers
+from tests.conftest import _Seed, agent_headers, allow_capture, auth_headers
 
 
 def _browse(sequence: int, url: str) -> dict[str, object]:
@@ -31,8 +32,9 @@ async def test_insights_unauthenticated(client: AsyncClient, seed: _Seed) -> Non
 
 
 async def test_insights_flags_distraction_and_is_scoped(
-    client: AsyncClient, settings: Settings, seed: _Seed
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
 ) -> None:
+    await allow_capture(db, seed.report.id)
     # 1 productive + 3 unproductive samples today ⇒ focus 25% ⇒ at risk.
     await _ingest(client, seed, 1, "https://github.com/optiminastic/avora")
     await _ingest(client, seed, 2, "https://www.youtube.com/watch?v=a")
