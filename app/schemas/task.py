@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator
 
 from app.models.task import TaskCadence, TaskPriority, TaskStatus
 from app.schemas.common import ORMModel
@@ -91,7 +91,12 @@ class TaskRead(ORMModel):
     description: str | None
     assignee_id: uuid.UUID
     assigned_by_id: uuid.UUID | None
-    project: str | None
+    # Reads the ORM's resolved `project_name` (linked Project's name, else the
+    # legacy free-text label), falling back to the raw `project` column. Serialized
+    # back out as `project`, so a task linked only via project_id still shows a name.
+    project: str | None = Field(
+        default=None, validation_alias=AliasChoices("project_name", "project")
+    )
     project_id: uuid.UUID | None
     priority: TaskPriority
     status: TaskStatus

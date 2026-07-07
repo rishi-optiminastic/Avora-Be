@@ -132,6 +132,22 @@ class EmployeeRepository:
         await self._session.flush()
         return employee
 
+    async def readmit_from_invite(
+        self, employee: Employee, *, role: Role, department: str | None
+    ) -> None:
+        """Re-admit a previously de-activated (offboarded) employee when they
+        accept a fresh admin invite. Without this, an accepted invite would leave
+        an existing is_active=False row untouched — the backend 401s every request
+        for an inactive employee and the invite-only gate rejects re-sign-in.
+        Reactivating + re-applying the invited role/department is the in-PMS,
+        admin-authorised re-admission path (mirrors create_from_invite, rule 5.5)."""
+        employee.is_active = True
+        employee.status = EmployeeStatus.ACTIVE
+        employee.role = role
+        if department is not None:
+            employee.department = department
+        await self._session.flush()
+
     async def refresh_display_name(self, employee: Employee, provider_name: str | None) -> None:
         """Replace an email-derived placeholder with the provider's real name.
 

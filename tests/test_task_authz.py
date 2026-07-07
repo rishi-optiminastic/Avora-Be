@@ -159,6 +159,47 @@ async def test_manager_can_attach_project(
     )
     assert resp.status_code == 201, resp.text
     assert resp.json()["project_id"] == project_id
+    # A task linked only via project_id still surfaces the project's name so the
+    # board/card can show it without a separate lookup.
+    assert resp.json()["project"] == "Vara Ads"
+
+
+async def test_project_name_follows_relink(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """Re-pointing a task's project_id updates the resolved project name in the
+    response (the selectin relation is refreshed, not left stale)."""
+    first = await _make_project(client, settings, seed)
+    created = await client.post(
+        "/api/v1/tasks",
+        json={**_new_task(str(seed.report.id)), "project_id": first},
+        headers=auth_headers(settings, seed.manager),
+    )
+    assert created.status_code == 201, created.text
+    task_id = created.json()["id"]
+
+    second = await client.post(
+        "/api/v1/work-entities",
+        json={"name": "Circle", "keywords": ["circle"], "domains": []},
+        headers=auth_headers(settings, seed.admin),
+    )
+    assert second.status_code == 201, second.text
+    relinked = await client.patch(
+        f"/api/v1/tasks/{task_id}",
+        json={"project_id": second.json()["id"]},
+        headers=auth_headers(settings, seed.manager),
+    )
+    assert relinked.status_code == 200, relinked.text
+    assert relinked.json()["project"] == "Circle"
+
+    # Clearing the link falls back to no project name.
+    cleared = await client.patch(
+        f"/api/v1/tasks/{task_id}",
+        json={"project_id": None},
+        headers=auth_headers(settings, seed.manager),
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["project"] is None
 
 
 async def test_unknown_project_is_rejected(

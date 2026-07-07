@@ -256,6 +256,10 @@ class TaskService:
             task.completed_at = datetime.now(UTC) if task.status is TaskStatus.DONE else None
 
         await self._tasks.flush()
+        # A re-project must reflect the new project's name in the response — the
+        # selectin relation still holds the pre-update link until refreshed.
+        if "project_id" in fields:
+            await self._tasks.reload_project_link(task)
         await self._audit.append(
             actor=str(caller.employee_id),
             action="task.update",

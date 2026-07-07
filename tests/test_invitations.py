@@ -86,6 +86,47 @@ async def test_accept_invite_provisions_employee(
     assert reused.status_code == 409
 
 
+async def test_accept_readmits_offboarded_employee(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """A previously-offboarded (is_active=False) person who is re-invited and
+    accepts must come back ACTIVE — otherwise the backend 401s their every request
+    and the invite-only gate rejects re-sign-in, locking them out permanently."""
+    stale = Employee(
+        hr_external_id="hr-stale-1",
+        work_email="returning@acme.com",
+        full_name="Returning Person",
+        role=Role.EMPLOYEE,
+        status=EmployeeStatus.INACTIVE,
+        is_active=False,
+    )
+    db.add(stale)
+    await db.commit()
+
+    created = await client.post(
+        "/api/v1/invitations",
+        json={"email": "returning@acme.com", "role": "manager", "department": "Ops"},
+        headers=auth_headers(settings, seed.admin),
+    )
+    token = created.json()["accept_url"].rsplit("/", 1)[1]
+
+    resp = await client.post(
+        "/api/v1/invitations/accept",
+        json={"token": token},
+        headers=bearer_for_email(settings, "returning@acme.com"),
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # Reactivated, and re-admitted at the invited role/department.
+    assert body["is_active"] is True
+    assert body["role"] == "manager"
+    assert body["department"] == "Ops"
+
+    await db.refresh(stale)
+    assert stale.is_active is True
+    assert stale.status is EmployeeStatus.ACTIVE
+
+
 async def test_accept_uses_real_name_from_identity(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:

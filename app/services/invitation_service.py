@@ -184,6 +184,14 @@ class InvitationService:
                 department=invitation.department,
             )
         else:
+            # An existing but de-activated (offboarded) record must be re-admitted
+            # on accept — otherwise the person stays locked out forever: the
+            # backend 401s every request for an inactive employee and the
+            # invite-only gate rejects their re-sign-in.
+            if not employee.is_active:
+                await self._employees.readmit_from_invite(
+                    employee, role=invitation.role, department=invitation.department
+                )
             await self._employees.refresh_display_name(employee, identity_name)
 
         await self._invitations.mark_accepted(

@@ -20,6 +20,7 @@ from sqlalchemy.orm.attributes import set_committed_value
 from app.models.employee import Employee, Role
 from app.models.task import Task, TaskCadence, TaskStatus
 from app.models.task_collaborator import TaskCollaborator
+from app.models.work_entity import WorkEntity
 from app.schemas.auth import CurrentUser
 from app.schemas.task import TaskCreate
 
@@ -102,6 +103,7 @@ class TaskRepository:
         # A new task has no collaborators yet — seed the (selectin) collection so
         # serializing `collaborator_ids` never triggers a lazy load outside async.
         set_committed_value(task, "collaborators", [])
+        await self._seed_project_link(task)
         return task
 
     async def create_many(
@@ -133,7 +135,19 @@ class TaskRepository:
         await self._session.flush()
         for task in tasks:
             set_committed_value(task, "collaborators", [])
+            await self._seed_project_link(task)
         return tasks
+
+    async def _seed_project_link(self, task: Task) -> None:
+        """Seed the (selectin) `project_link` on a freshly-created task so reading
+        `project_name` never triggers a lazy load outside async. Fetches the linked
+        Project only when one is set; otherwise commits the relation as empty."""
+        entity = (
+            await self._session.get(WorkEntity, task.project_id)
+            if task.project_id is not None
+            else None
+        )
+        set_committed_value(task, "project_link", entity)
 
     async def get(self, task_id: uuid.UUID) -> Task | None:
         return await self._session.get(Task, task_id)
@@ -159,6 +173,11 @@ class TaskRepository:
         """Re-read a task's collaborators after a membership change (the relation
         is read-only/secondary, so it doesn't auto-sync with add/remove)."""
         await self._session.refresh(task, attribute_names=["collaborators"])
+
+    async def reload_project_link(self, task: Task) -> None:
+        """Re-read a task's linked Project after project_id changed, so the read
+        model shows the new project's name (the relation doesn't auto-sync)."""
+        await self._session.refresh(task, attribute_names=["project_link"])
 
     async def get_in_scope(self, caller: CurrentUser, task_id: uuid.UUID) -> Task | None:
         clause = self._scope_clause(caller)

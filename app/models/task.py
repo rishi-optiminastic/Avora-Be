@@ -20,6 +20,7 @@ from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 if TYPE_CHECKING:
     from app.models.employee import Employee
+    from app.models.work_entity import WorkEntity
 
 
 class TaskPriority(StrEnum):
@@ -61,6 +62,14 @@ class Task(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     project: Mapped[str | None] = mapped_column(String(128), default=None)
     project_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("work_entities.id", ondelete="SET NULL"), default=None, index=True
+    )
+    # The linked Project, selectin-loaded so a task read carries its project's
+    # display name without an N+1. viewonly — the link is set via project_id.
+    project_link: Mapped[WorkEntity | None] = relationship(
+        "WorkEntity",
+        primaryjoin="Task.project_id == WorkEntity.id",
+        lazy="selectin",
+        viewonly=True,
     )
     priority: Mapped[TaskPriority] = mapped_column(default=TaskPriority.MEDIUM, index=True)
     status: Mapped[TaskStatus] = mapped_column(default=TaskStatus.TODO, index=True)
@@ -105,3 +114,11 @@ class Task(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     def collaborator_ids(self) -> list[uuid.UUID]:
         """The collaborator employee ids — surfaced on `TaskRead`."""
         return [collaborator.id for collaborator in self.collaborators]
+
+    @property
+    def project_name(self) -> str | None:
+        """Display label surfaced on `TaskRead.project`: the linked Project's
+        name when the task is connected to one, else the legacy free-text label."""
+        if self.project_link is not None:
+            return self.project_link.name
+        return self.project
