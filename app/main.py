@@ -78,9 +78,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(api_router, prefix="/api/v1")
 
     # Claude Code / MCP integration. The Avora MCP server is a Streamable-HTTP
-    # ASGI app mounted here; it authenticates a Personal Access Token and reuses
-    # the same task/employee services the REST API uses.
-    app.mount("/mcp", mcp_app)
+    # ASGI app that serves at exactly "/mcp" (its own internal route). Mounting at
+    # the root prefix - rather than at "/mcp" - avoids Starlette's trailing-slash
+    # redirect (/mcp -> /mcp/), which some MCP clients follow while dropping the
+    # Authorization header. The API routes above are matched first; only unmatched
+    # paths (i.e. "/mcp") fall through to this app.
+    app.mount("", mcp_app)
 
     return app
 
