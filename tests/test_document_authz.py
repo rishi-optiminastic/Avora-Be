@@ -35,6 +35,50 @@ async def test_admin_can_add_list_delete(
     assert removed.status_code == 204
 
 
+async def test_upload_file_admin_only_and_downloadable_by_self(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    body = b"%PDF-1.4 fake offer letter"
+    params = {"title": "Signed offer", "category": "contract", "filename": "offer.pdf"}
+
+    # The employee themselves cannot upload (writes are HR/Admin only).
+    denied = await client.post(
+        f"/api/v1/employees/{seed.report.id}/documents/upload",
+        params=params,
+        content=body,
+        headers={**auth_headers(settings, seed.report), "Content-Type": "application/pdf"},
+    )
+    assert denied.status_code == 403
+
+    # Admin uploads the file; it comes back as a byte-backed doc (no url).
+    created = await client.post(
+        f"/api/v1/employees/{seed.report.id}/documents/upload",
+        params=params,
+        content=body,
+        headers={**auth_headers(settings, seed.admin), "Content-Type": "application/pdf"},
+    )
+    assert created.status_code == 201, created.text
+    doc = created.json()
+    assert doc["url"] is None
+    assert doc["byte_size"] == len(body)
+    doc_id = doc["id"]
+
+    # The person can download their own uploaded document...
+    ok = await client.get(
+        f"/api/v1/employees/{seed.report.id}/documents/{doc_id}/download",
+        headers=auth_headers(settings, seed.report),
+    )
+    assert ok.status_code == 200
+    assert ok.content == body
+
+    # ...but an unrelated employee gets a 404 (never leaking it exists).
+    denied_dl = await client.get(
+        f"/api/v1/employees/{seed.report.id}/documents/{doc_id}/download",
+        headers=auth_headers(settings, seed.outsider),
+    )
+    assert denied_dl.status_code == 404
+
+
 async def test_person_reads_own_but_cannot_add(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:

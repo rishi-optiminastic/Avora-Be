@@ -15,7 +15,7 @@ from __future__ import annotations
 import uuid
 from enum import StrEnum
 
-from sqlalchemy import ForeignKey, Index, Integer, LargeBinary, String
+from sqlalchemy import JSON, ForeignKey, Index, Integer, LargeBinary, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -28,6 +28,15 @@ class WorkspaceFileCategory(StrEnum):
     REPORT = "report"  # exported reports / analyses
     ASSET = "asset"  # design / brand / media
     OTHER = "other"
+
+
+class WorkspaceVisibility(StrEnum):
+    """Who may see a workspace entry. EVERYONE = the whole org (the default — it's
+    a team drive). RESTRICTED = only the listed departments / individuals, plus the
+    uploader and Admin/HR, who always retain access."""
+
+    EVERYONE = "everyone"
+    RESTRICTED = "restricted"
 
 
 class WorkspaceFile(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -43,6 +52,23 @@ class WorkspaceFile(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     content_type: Mapped[str] = mapped_column(String(128), default="application/octet-stream")
     byte_size: Mapped[int] = mapped_column(Integer, default=0)
     original_filename: Mapped[str | None] = mapped_column(String(255), default=None)
+
+    # A link entry (Google Sheet/Doc, a receipt URL, anything) instead of an
+    # uploaded file: `url` is set and there are no bytes (object_key/content null).
+    url: Mapped[str | None] = mapped_column(String(2048), default=None)
+
+    # Access control. EVERYONE (default) keeps the team-drive behaviour; RESTRICTED
+    # limits reads to the listed departments and/or individual employees (+ the
+    # uploader and Admin/HR). Ids are stored as strings for a simple JSON ACL.
+    visibility: Mapped[WorkspaceVisibility] = mapped_column(
+        default=WorkspaceVisibility.EVERYONE, index=True
+    )
+    visible_departments: Mapped[list[str]] = mapped_column(JSON, default=list)
+    visible_employee_ids: Mapped[list[str]] = mapped_column(JSON, default=list)
+
+    @property
+    def is_link(self) -> bool:
+        return self.url is not None
 
     # Optional link to an admin-curated Project. SET NULL so deleting a project
     # never deletes its files (the file just becomes unfiled).

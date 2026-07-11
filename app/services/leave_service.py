@@ -22,7 +22,7 @@ from app.core.exceptions import (
 )
 from app.core.logging import get_logger
 from app.core.payroll import working_days_between
-from app.models.employee import Role
+from app.models.employee import Gender, Role
 from app.models.leave import HalfDayPeriod, Leave, LeaveStatus, LeaveType
 from app.models.leave_comment import LeaveComment
 from app.models.notification import NotificationKind, NotificationLevel
@@ -49,6 +49,27 @@ from app.services.notification_service import NotificationService
 _HALF_DAY_WEIGHT = 0.5
 # Half-day time off draws from the planned-leave quota (it is planned time off).
 _PLANNED_TYPES = (LeaveType.PLANNED, LeaveType.HALF_DAY)
+
+# Types that must be applied in advance (planned time off). Event-based leave
+# (sick, bereavement, birthday, maternity, paternity, marriage) and unpaid can be
+# applied any time (still never for a past date — see _enforce_not_past).
+_NOTICE_TYPES = (LeaveType.PLANNED, LeaveType.ANNUAL)
+
+# The paid, quota-tracked leave types shown on the balance. Each row is:
+#   (leave type, LeavePolicy attr, LeaveAllocation override attr, member types)
+# "member types" are the leave types whose approved/pending days count against
+# this quota (half-day rolls up into planned). UNPAID is uncapped and handled
+# separately. Adding a new tracked type is a single row here + the two columns.
+_TRACKED_LEAVE: tuple[tuple[LeaveType, str, str, tuple[LeaveType, ...]], ...] = (
+    (LeaveType.PLANNED, "annual_planned_days", "planned_days", _PLANNED_TYPES),
+    (LeaveType.ANNUAL, "annual_days", "annual_days", (LeaveType.ANNUAL,)),
+    (LeaveType.SICK, "annual_sick_days", "sick_days", (LeaveType.SICK,)),
+    (LeaveType.BEREAVEMENT, "bereavement_days", "bereavement_days", (LeaveType.BEREAVEMENT,)),
+    (LeaveType.BIRTHDAY, "birthday_days", "birthday_days", (LeaveType.BIRTHDAY,)),
+    (LeaveType.MATERNITY, "maternity_days", "maternity_days", (LeaveType.MATERNITY,)),
+    (LeaveType.PATERNITY, "paternity_days", "paternity_days", (LeaveType.PATERNITY,)),
+    (LeaveType.MARRIAGE, "marriage_days", "marriage_days", (LeaveType.MARRIAGE,)),
+)
 
 _LEAVES_LINK = "/dashboard/time/leaves"
 
@@ -92,25 +113,58 @@ class LeaveService:
             raise NotFoundError()
         return leave
 
+    async def _org_today(self) -> date:
+        """Today's date in the org's policy timezone (never the server's clock)."""
+        spec = await self._attendance_policy.spec()
+        return datetime.now(UTC).astimezone(ZoneInfo(spec.timezone)).date()
+
+    async def _enforce_not_past(self, payload: LeaveCreate) -> None:
+        """No one may apply for leave that starts before today. 'Today' is the
+        org's policy-timezone date, so it never drifts with the server's clock."""
+        if _utc_date(payload.start_date) < await self._org_today():
+            raise ValidationError("You can't apply for leave for a past date.")
+
     async def _enforce_min_notice(self, payload: LeaveCreate) -> None:
-        """Planned leave must be applied at least `planned_min_notice_days` before
-        it starts (configurable in the leave policy). Sick, unpaid and half-day
-        leave can be applied any time. 'Today' is the org's policy-timezone date."""
-        if payload.leave_type is not LeaveType.PLANNED:
+        """Planned / annual leave must be applied at least `planned_min_notice_days`
+        before it starts (configurable in the leave policy). Other types can be
+        applied any time. 'Today' is the org's policy-timezone date."""
+        if payload.leave_type not in _NOTICE_TYPES:
             return
         required = (await self._policy.get_or_create()).planned_min_notice_days
         if required <= 0:
             return
-        spec = await self._attendance_policy.spec()
-        today = datetime.now(UTC).astimezone(ZoneInfo(spec.timezone)).date()
-        if (_utc_date(payload.start_date) - today).days < required:
+        if (_utc_date(payload.start_date) - await self._org_today()).days < required:
             raise ValidationError(
-                f"Planned leave must be applied at least {required} "
+                f"This leave must be applied at least {required} "
                 f"day{'s' if required != 1 else ''} in advance. "
                 "Use sick leave if you need time off sooner."
             )
 
+    async def _enforce_eligibility(self, caller: CurrentUser, payload: LeaveCreate) -> None:
+        """Gender/DOB-gated leave: maternity (female only), paternity (male only),
+        and birthday (needs a date of birth on file, and must fall in the person's
+        birth month). Other types are open to everyone."""
+        leave_type = payload.leave_type
+        if leave_type not in (LeaveType.MATERNITY, LeaveType.PATERNITY, LeaveType.BIRTHDAY):
+            return
+        employee = await self._employees.get(caller.employee_id)
+        if employee is None:
+            raise NotFoundError()
+        if leave_type is LeaveType.MATERNITY and employee.gender is not Gender.FEMALE:
+            raise ValidationError("Maternity leave is available to female employees.")
+        if leave_type is LeaveType.PATERNITY and employee.gender is not Gender.MALE:
+            raise ValidationError("Paternity leave is available to male employees.")
+        if leave_type is LeaveType.BIRTHDAY:
+            if employee.date_of_birth is None:
+                raise ValidationError(
+                    "Add your date of birth to your profile to take birthday leave."
+                )
+            if _utc_date(payload.start_date).month != employee.date_of_birth.month:
+                raise ValidationError("Birthday leave must fall in your birth month.")
+
     async def apply(self, caller: CurrentUser, payload: LeaveCreate) -> Leave:
+        await self._enforce_not_past(payload)
+        await self._enforce_eligibility(caller, payload)
         await self._enforce_min_notice(payload)
         # Employees apply for themselves; their manager is the default reviewer.
         leave = await self._leaves.create(
@@ -268,16 +322,12 @@ class LeaveService:
         )
         policy = await self._policy.get_or_create()
         allocation = await self._allocations.get_for_employee(target_id)
-        planned_days = (
-            allocation.planned_days
-            if allocation is not None and allocation.planned_days is not None
-            else policy.annual_planned_days
-        )
-        sick_days = (
-            allocation.sick_days
-            if allocation is not None and allocation.sick_days is not None
-            else policy.annual_sick_days
-        )
+
+        def quota(policy_attr: str, alloc_attr: str) -> float:
+            """The employee's effective annual quota: their per-employee override
+            when set, else the org policy default."""
+            override = getattr(allocation, alloc_attr) if allocation is not None else None
+            return float(override if override is not None else getattr(policy, policy_attr))
 
         def bucket(
             rows: list[tuple[datetime, datetime, LeaveType, LeaveStatus]],
@@ -294,11 +344,8 @@ class LeaveService:
             return total
 
         balances: list[LeaveTypeBalance] = []
-        for leave_type, allocated, types in (
-            (LeaveType.PLANNED, float(planned_days), _PLANNED_TYPES),
-            (LeaveType.SICK, float(sick_days), (LeaveType.SICK,)),
-            (LeaveType.UNPAID, 0.0, (LeaveType.UNPAID,)),
-        ):
+        for leave_type, policy_attr, alloc_attr, types in _TRACKED_LEAVE:
+            allocated = quota(policy_attr, alloc_attr)
             used = bucket(approved, types)
             pend = bucket(pending, types)
             balances.append(
@@ -310,6 +357,18 @@ class LeaveService:
                     remaining=allocated - used - pend,
                 )
             )
+        # Unpaid leave is uncapped — surfaced for visibility (used/pending only).
+        unpaid_used = bucket(approved, (LeaveType.UNPAID,))
+        unpaid_pending = bucket(pending, (LeaveType.UNPAID,))
+        balances.append(
+            LeaveTypeBalance(
+                leave_type=LeaveType.UNPAID,
+                allocated=0.0,
+                used=unpaid_used,
+                pending=unpaid_pending,
+                remaining=-unpaid_used - unpaid_pending,
+            )
+        )
 
         await self._audit.append(
             actor=str(caller.employee_id),

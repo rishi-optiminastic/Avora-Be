@@ -12,6 +12,8 @@ from app.api.v1.routes import (
     biometric,
     browsing,
     category_rules,
+    celebrations,
+    changelog,
     compensation,
     dashboard,
     devices,
@@ -31,8 +33,10 @@ from app.api.v1.routes import (
     notifications,
     onboarding,
     org,
+    pat,
     payroll,
     pings,
+    resignations,
     screenshots,
     targets,
     tasks,
@@ -50,6 +54,9 @@ api_router.include_router(tasks.router)
 api_router.include_router(targets.router)
 api_router.include_router(leaves.router)
 api_router.include_router(leave_allocation.router)
+api_router.include_router(resignations.router)
+api_router.include_router(celebrations.router)
+api_router.include_router(changelog.router)
 api_router.include_router(notifications.router)
 api_router.include_router(onboarding.router)
 api_router.include_router(org.router)
@@ -74,3 +81,4 @@ api_router.include_router(workspace_files.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(eod.router)
 api_router.include_router(envsync.router)
+api_router.include_router(pat.router)

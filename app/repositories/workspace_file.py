@@ -18,7 +18,7 @@ from sqlalchemy.orm import defer
 
 from app.models.employee import Employee
 from app.models.work_entity import WorkEntity
-from app.models.workspace_file import WorkspaceFile, WorkspaceFileCategory
+from app.models.workspace_file import WorkspaceFile, WorkspaceFileCategory, WorkspaceVisibility
 
 
 class FileStats(NamedTuple):
@@ -55,6 +55,10 @@ class WorkspaceFileRepository:
         content_type: str,
         byte_size: int,
         original_filename: str | None,
+        url: str | None,
+        visibility: WorkspaceVisibility,
+        visible_departments: list[str],
+        visible_employee_ids: list[str],
         project_id: uuid.UUID | None,
         uploaded_by: uuid.UUID,
         object_key: str | None,
@@ -67,6 +71,10 @@ class WorkspaceFileRepository:
             content_type=content_type,
             byte_size=byte_size,
             original_filename=original_filename,
+            url=url,
+            visibility=visibility,
+            visible_departments=visible_departments,
+            visible_employee_ids=visible_employee_ids,
             project_id=project_id,
             uploaded_by=uploaded_by,
             object_key=object_key,

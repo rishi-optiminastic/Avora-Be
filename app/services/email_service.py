@@ -15,10 +15,15 @@ import httpx
 from app.core.config import Settings
 from app.services.email_templates import (
     agent_reinstall_email,
+    anniversary_email,
+    birthday_email,
+    festival_email,
     forgot_checkout_email,
     invite_email,
     leave_decision_email,
     payslip_email,
+    resignation_decision_email,
+    resignation_submitted_email,
     task_assigned_email,
 )
 
@@ -191,4 +196,56 @@ class EmailService:
             employee_name=employee_name,
             install_url=self._absolute(link_path),
         )
+        await self.send(to=to, subject=subject, html=html)
+
+    async def send_resignation_submitted(
+        self,
+        *,
+        to: str,
+        recipient_name: str,
+        resigner_name: str,
+        last_working_label: str,
+        reason: str | None,
+        link_path: str,
+    ) -> None:
+        subject, html = resignation_submitted_email(
+            recipient_name=recipient_name,
+            resigner_name=resigner_name,
+            last_working_label=last_working_label,
+            reason=reason,
+            url=self._absolute(link_path),
+        )
+        await self.send(to=to, subject=subject, html=html)
+
+    async def send_resignation_decision(
+        self,
+        *,
+        to: str,
+        employee_name: str,
+        accepted: bool,
+        last_working_label: str,
+        decided_by: str,
+        note: str | None,
+        link_path: str,
+    ) -> None:
+        subject, html = resignation_decision_email(
+            employee_name=employee_name,
+            accepted=accepted,
+            last_working_label=last_working_label,
+            decided_by=decided_by,
+            note=note,
+            url=self._absolute(link_path),
+        )
+        await self.send(to=to, subject=subject, html=html)
+
+    async def send_birthday(self, *, to: str, person_name: str) -> None:
+        subject, html = birthday_email(person_name=person_name)
+        await self.send(to=to, subject=subject, html=html)
+
+    async def send_anniversary(self, *, to: str, person_name: str, years: int) -> None:
+        subject, html = anniversary_email(person_name=person_name, years=years)
+        await self.send(to=to, subject=subject, html=html)
+
+    async def send_festival(self, *, to: str, festival_name: str, message: str) -> None:
+        subject, html = festival_email(festival_name=festival_name, message=message)
         await self.send(to=to, subject=subject, html=html)

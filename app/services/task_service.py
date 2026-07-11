@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 
 from app.core.exceptions import AuthorizationError, NotFoundError, ValidationError
 from app.core.logging import get_logger
-from app.models.notification import NotificationKind
+from app.models.notification import NotificationKind, NotificationLevel
 from app.models.task import Task, TaskCadence, TaskStatus
 from app.models.task_comment import TaskComment
 from app.repositories.audit import AuditRepository
@@ -37,10 +37,10 @@ from app.services.notification_service import NotificationService
 logger = get_logger("app.task")
 
 # An assignee updating their OWN task may report progress (move it on the board,
-# update %, note blockers) — but not retitle, reassign, or write the review.
-# Collaborators get the same comment-level write surface (view + progress).
+# update %, note blockers) and link it under a parent task — but not retitle,
+# reassign, or write the review. Collaborators get the same write surface.
 _ASSIGNEE_EDITABLE = frozenset(
-    {"status", "remarks", "completion_pct", "blocked_reason", "attachments"}
+    {"status", "remarks", "completion_pct", "blocked_reason", "attachments", "parent_task_id"}
 )
 
 # Window in which an identical comment from the same author is treated as a
@@ -81,6 +81,29 @@ class TaskService:
         if entity is None or not entity.is_active:
             raise ValidationError("Unknown or inactive project.")
 
+    async def _validate_parent(
+        self, caller: CurrentUser, parent_id: uuid.UUID | None, *, task_id: uuid.UUID | None
+    ) -> None:
+        """A parent link must point at a task the caller can see, must not be the
+        task itself, and must not create a cycle (a task can't be its own ancestor).
+        `task_id` is None on create (the task doesn't exist yet)."""
+        if parent_id is None:
+            return
+        if task_id is not None and parent_id == task_id:
+            raise ValidationError("A task can't be its own parent.")
+        parent = await self._tasks.get_in_scope(caller, parent_id)
+        if parent is None:
+            raise ValidationError("Parent task not found or not visible to you.")
+        # Walk up the parent's ancestry; reaching this task means a cycle. Bounded
+        # by a guard so a pre-existing bad chain can never loop forever.
+        ancestor: Task | None = parent
+        for _ in range(100):
+            if ancestor is None or ancestor.parent_task_id is None:
+                return
+            if ancestor.parent_task_id == task_id:
+                raise ValidationError("That link would create a circular task chain.")
+            ancestor = await self._tasks.get(ancestor.parent_task_id)
+
     async def list_for_caller(
         self,
         caller: CurrentUser,
@@ -117,6 +140,7 @@ class TaskService:
         if not await self._employees.can_read(caller, payload.assignee_id):
             raise AuthorizationError()
         await self._validate_project(payload.project_id)
+        await self._validate_parent(caller, payload.parent_task_id, task_id=None)
         task = await self._tasks.create(payload, assigned_by_id=caller.employee_id)
         await self._audit.append(
             actor=str(caller.employee_id),
@@ -241,6 +265,11 @@ class TaskService:
             if "project_id" in fields:
                 await self._validate_project(payload.project_id)
 
+        # A parent link (from anyone allowed to edit) must be a visible task and
+        # must not create a cycle.
+        if "parent_task_id" in fields:
+            await self._validate_parent(caller, payload.parent_task_id, task_id=task_id)
+
         # Defense in depth: the FE gates a move to Blocked behind a reason
         # prompt, but any other client could still send status=blocked bare —
         # reject it here too so a blocked task can never end up reason-less.
@@ -268,7 +297,13 @@ class TaskService:
         return task
 
     async def escalate(self, caller: CurrentUser, task_id: uuid.UUID) -> Task:
-        """Flag a task for attention (overdue/blocked). Manager-only, scoped."""
+        """Flag a task for attention (overdue/blocked). Manager-only, scoped.
+
+        Repeatable by design: a manager can escalate the same task more than
+        once to keep drawing attention. There is no "already escalated" guard —
+        the flag simply stays set and the assignee is re-notified each time (no
+        dedupe), so a second escalation still lands in their inbox.
+        """
         if not caller.is_manager:
             raise AuthorizationError()
         task = await self._tasks.get_in_scope(caller, task_id)
@@ -276,9 +311,59 @@ class TaskService:
             raise NotFoundError()
         task.escalated = True
         await self._tasks.flush()
+        # Ping the assignee every time (deliberately no dedupe) so each repeated
+        # escalation is felt. notify() drops the self-case if a manager escalates
+        # a task assigned to themselves.
+        await self._notifications.notify(
+            recipient_id=task.assignee_id,
+            kind=NotificationKind.ESCALATION,
+            title=f"Task escalated: {task.title}",
+            level=NotificationLevel.WARNING,
+            link=f"/dashboard/goals/tasks?task={task.id}",
+            entity_type="task",
+            entity_id=task.id,
+            actor_id=caller.employee_id,
+        )
         await self._audit.append(
             actor=str(caller.employee_id),
             action="task.escalate",
+            target=f"task:{task.id}",
+        )
+        return task
+
+    async def appreciate(
+        self, caller: CurrentUser, task_id: uuid.UUID, note: str | None
+    ) -> Task:
+        """Send the assignee a kudos for completing a task. Manager (or the
+        assigner) only, scoped, and only for tasks that are actually done.
+
+        Notification-only by design: it re-uses the notification inbox rather
+        than mutating the task, and can be sent more than once (each is a fresh
+        thank-you). notify() drops the self-case if the manager both assigned
+        and completed the task."""
+        task = await self._tasks.get_in_scope(caller, task_id)
+        if task is None:
+            raise NotFoundError()
+        if not (caller.is_manager or task.assigned_by_id == caller.employee_id):
+            raise AuthorizationError()
+        if task.status != TaskStatus.DONE:
+            raise ValidationError("Only a completed task can be appreciated.")
+        clean_note = (note or "").strip() or None
+        actor = await self._employees.get(caller.employee_id)
+        who = actor.full_name if actor else "Your manager"
+        await self._notifications.notify(
+            recipient_id=task.assignee_id,
+            kind=NotificationKind.APPRECIATION,
+            title=f"{who} appreciated your work on “{task.title}”",
+            body=clean_note,
+            link=f"/dashboard/goals/tasks?task={task.id}",
+            entity_type="task",
+            entity_id=task.id,
+            actor_id=caller.employee_id,
+        )
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="task.appreciate",
             target=f"task:{task.id}",
         )
         return task

@@ -65,15 +65,9 @@ async def update_my_profile(
     caller: CurrentUserDep,
     service: EmployeeServiceDep,
 ) -> EmployeeRead:
-    """The employee edits their own display fields (name, job title, timezone)."""
-    return EmployeeRead.model_validate(
-        await service.update_self_profile(
-            caller,
-            full_name=payload.full_name,
-            job_title=payload.job_title,
-            timezone=payload.timezone,
-        )
-    )
+    """The employee edits their own profile: name, job title, timezone, plus the
+    required date of birth and gender (see SelfProfileUpdate)."""
+    return EmployeeRead.model_validate(await service.update_self_profile(caller, payload))
 
 
 @router.post("/me/avatar", response_model=EmployeeRead, status_code=status.HTTP_201_CREATED)

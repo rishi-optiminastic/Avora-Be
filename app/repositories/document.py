@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.document import EmployeeDocument
+from app.models.document import DocumentCategory, EmployeeDocument
 from app.schemas.document import DocumentCreate
 
 
@@ -38,6 +38,35 @@ class DocumentRepository:
             title=data.title.strip(),
             category=data.category,
             url=data.url,
+            uploaded_by=uploaded_by,
+        )
+        self._session.add(document)
+        await self._session.flush()
+        return document
+
+    async def add_file(
+        self,
+        employee_id: uuid.UUID,
+        *,
+        title: str,
+        category: DocumentCategory,
+        content_type: str,
+        byte_size: int,
+        original_filename: str | None,
+        object_key: str | None,
+        content: bytes | None,
+        uploaded_by: uuid.UUID,
+    ) -> EmployeeDocument:
+        document = EmployeeDocument(
+            employee_id=employee_id,
+            title=title.strip(),
+            category=category,
+            url=None,
+            content_type=content_type,
+            byte_size=byte_size,
+            original_filename=original_filename,
+            object_key=object_key,
+            content=content,
             uploaded_by=uploaded_by,
         )
         self._session.add(document)

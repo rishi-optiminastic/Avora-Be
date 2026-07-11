@@ -24,11 +24,12 @@ from app.core.deps import (
 )
 from app.core.exceptions import NotFoundError
 from app.core.http import read_capped_body
-from app.models.workspace_file import WorkspaceFileCategory
+from app.models.workspace_file import WorkspaceFileCategory, WorkspaceVisibility
 from app.schemas.workspace_file import (
     WorkspaceFileMeta,
     WorkspaceFileRead,
     WorkspaceFileStats,
+    WorkspaceLinkCreate,
 )
 from app.services.workspace_file_service import MAX_FILE_BYTES
 
@@ -53,6 +54,9 @@ async def upload_file(
     project_id: Annotated[uuid.UUID | None, Query()] = None,
     description: Annotated[str | None, Query(max_length=1000)] = None,
     filename: Annotated[str | None, Query(max_length=255)] = None,
+    visibility: Annotated[WorkspaceVisibility, Query()] = WorkspaceVisibility.EVERYONE,
+    visible_departments: Annotated[list[str], Query()] = [],  # noqa: B006 — FastAPI reads it
+    visible_employee_ids: Annotated[list[uuid.UUID], Query()] = [],  # noqa: B006
     content_type: Annotated[str, Header()] = "application/octet-stream",
 ) -> WorkspaceFileRead:
     # Bytes ride in the body; metadata in the query + Content-Type header. The
@@ -61,9 +65,26 @@ async def upload_file(
     # an oversized upload is refused before it can buffer into memory (rule 5.6).
     data = await read_capped_body(request, MAX_FILE_BYTES)
     meta = WorkspaceFileMeta(
-        name=name, description=description, category=category, project_id=project_id
+        name=name,
+        description=description,
+        category=category,
+        project_id=project_id,
+        visibility=visibility,
+        visible_departments=visible_departments,
+        visible_employee_ids=visible_employee_ids,
     )
     return await service.upload(caller, meta, data, filename=filename, content_type=content_type)
+
+
+@router.post("/link", response_model=WorkspaceFileRead, status_code=status.HTTP_201_CREATED)
+async def create_link(
+    payload: WorkspaceLinkCreate,
+    caller: CurrentUserDep,
+    service: WorkspaceFileServiceDep,
+) -> WorkspaceFileRead:
+    """Store a link (Google Sheet/Doc, a receipt URL, anything) in the workspace,
+    with the same category / project / access controls as an uploaded file."""
+    return await service.create_link(caller, payload)
 
 
 @router.get("", response_model=list[WorkspaceFileRead])

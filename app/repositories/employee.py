@@ -15,7 +15,7 @@ from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.names import clean_display_name, is_placeholder_name
-from app.models.employee import Employee, EmployeeStatus, Role, TrackingMode
+from app.models.employee import Employee, EmployeeStatus, Gender, Role, TrackingMode
 from app.schemas.auth import CurrentUser
 
 
@@ -63,10 +63,14 @@ class EmployeeRepository:
         full_name: str,
         job_title: str | None,
         timezone: str | None,
+        date_of_birth: date,
+        gender: Gender,
     ) -> None:
         employee.full_name = full_name
         employee.job_title = job_title
         employee.timezone = timezone
+        employee.date_of_birth = date_of_birth
+        employee.gender = gender
         await self._session.flush()
 
     # The only profile attributes an admin/HR PATCH may set (role/email/identity
@@ -80,6 +84,9 @@ class EmployeeRepository:
             "manager_id",
             "timezone",
             "hire_date",
+            "uan_number",
+            "date_of_birth",
+            "gender",
             "biometric_id",
         }
     )
@@ -230,6 +237,13 @@ class EmployeeRepository:
             select(Employee)
             .where(Employee.role == role, Employee.is_active.is_(True))
             .order_by(Employee.full_name)
+        )
+        return rows.scalars().all()
+
+    async def list_all_active(self) -> Sequence[Employee]:
+        """Every active employee (org-wide) — used by the celebration broadcast."""
+        rows = await self._session.execute(
+            select(Employee).where(Employee.is_active.is_(True)).order_by(Employee.full_name)
         )
         return rows.scalars().all()
 

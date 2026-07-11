@@ -35,6 +35,12 @@ class LeaveAllocationRepository:
             self._session.add(record)
         record.planned_days = data.planned_days
         record.sick_days = data.sick_days
+        record.annual_days = data.annual_days
+        record.bereavement_days = data.bereavement_days
+        record.birthday_days = data.birthday_days
+        record.maternity_days = data.maternity_days
+        record.paternity_days = data.paternity_days
+        record.marriage_days = data.marriage_days
         record.note = data.note
         record.updated_by = updated_by
         await self._session.flush()

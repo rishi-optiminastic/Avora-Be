@@ -25,11 +25,20 @@ class DocumentCreate(BaseModel):
         return cleaned
 
 
+class DocumentFileMeta(BaseModel):
+    """Metadata for an uploaded document (the bytes ride in the request body)."""
+
+    title: str = Field(min_length=1, max_length=200)
+    category: DocumentCategory = DocumentCategory.OTHER
+
+
 class DocumentRead(ORMModel):
     id: uuid.UUID
     employee_id: uuid.UUID
     title: str
     category: DocumentCategory
-    url: str
+    url: str | None
+    byte_size: int
+    original_filename: str | None
     uploaded_by: uuid.UUID | None
     created_at: datetime

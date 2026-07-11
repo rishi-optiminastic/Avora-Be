@@ -265,6 +265,46 @@ async def test_escalate_is_manager_only(
     )
     assert ok.status_code == 200
     assert ok.json()["escalated"] is True
+    # Escalation is repeatable — a second escalation still succeeds (no
+    # "already escalated" guard) so a manager can re-flag attention.
+    again = await client.post(
+        f"/api/v1/tasks/{task['id']}/escalate", headers=auth_headers(settings, seed.manager)
+    )
+    assert again.status_code == 200
+    assert again.json()["escalated"] is True
+
+
+async def test_appreciate_requires_done_and_is_scoped(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    task = await _create_as(client, settings, seed.manager, str(seed.report.id))
+    # A task that isn't done yet can't be appreciated.
+    early = await client.post(
+        f"/api/v1/tasks/{task['id']}/appreciate",
+        json={"note": "great"},
+        headers=auth_headers(settings, seed.manager),
+    )
+    assert early.status_code == 422
+    done = await client.patch(
+        f"/api/v1/tasks/{task['id']}",
+        json={"status": "done"},
+        headers=auth_headers(settings, seed.manager),
+    )
+    assert done.status_code == 200
+    # The assignee is neither a manager nor the assigner → forbidden.
+    blocked = await client.post(
+        f"/api/v1/tasks/{task['id']}/appreciate",
+        json={},
+        headers=auth_headers(settings, seed.report),
+    )
+    assert blocked.status_code == 403
+    # The manager (assigner) may appreciate a completed task.
+    ok = await client.post(
+        f"/api/v1/tasks/{task['id']}/appreciate",
+        json={"note": "well done"},
+        headers=auth_headers(settings, seed.manager),
+    )
+    assert ok.status_code == 200
 
 
 async def test_admin_sees_all_and_can_delete(

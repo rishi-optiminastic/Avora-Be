@@ -50,6 +50,27 @@ async def test_screenshots_unauthenticated(client: AsyncClient, seed: _Seed) -> 
     assert (await client.get("/api/v1/screenshots")).status_code == 401
 
 
+async def test_delete_is_admin_only(
+    client: AsyncClient, settings: Settings, db: AsyncSession, seed: _Seed
+) -> None:
+    """Only an admin may delete a screenshot; the deleted row is then gone."""
+    await allow_capture(db, seed.report.id)
+    up = await _upload(client, seed)
+    shot_id = up.json()["id"]  # type: ignore[attr-defined]
+
+    denied = await client.delete(
+        f"/api/v1/screenshots/{shot_id}", headers=auth_headers(settings, seed.report)
+    )
+    assert denied.status_code == 403
+
+    ok = await client.delete(
+        f"/api/v1/screenshots/{shot_id}", headers=auth_headers(settings, seed.admin)
+    )
+    assert ok.status_code == 204
+    gone = await db.get(Screenshot, uuid.UUID(shot_id))
+    assert gone is None
+
+
 async def test_upload_stores_per_monitor_rects(
     client: AsyncClient, db: AsyncSession, seed: _Seed
 ) -> None:

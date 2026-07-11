@@ -28,6 +28,12 @@ class LeaveAllocation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Annual quota overrides, in days. Null = fall back to the org LeavePolicy.
     planned_days: Mapped[int | None] = mapped_column(Integer, default=None)
     sick_days: Mapped[int | None] = mapped_column(Integer, default=None)
+    annual_days: Mapped[int | None] = mapped_column(Integer, default=None)
+    bereavement_days: Mapped[int | None] = mapped_column(Integer, default=None)
+    birthday_days: Mapped[int | None] = mapped_column(Integer, default=None)
+    maternity_days: Mapped[int | None] = mapped_column(Integer, default=None)
+    paternity_days: Mapped[int | None] = mapped_column(Integer, default=None)
+    marriage_days: Mapped[int | None] = mapped_column(Integer, default=None)
     note: Mapped[str | None] = mapped_column(String(500), default=None)
 
     # Who last set it — audit trail at a glance (full trail in the audit log).

@@ -33,6 +33,15 @@ class EmployeeStatus(StrEnum):
     INACTIVE = "inactive"  # soft-deleted on offboard; never hard-deleted
 
 
+class Gender(StrEnum):
+    """Self-reported gender. Gates gender-specific leave (maternity / paternity)
+    and, with `date_of_birth`, birthday leave."""
+
+    MALE = "male"
+    FEMALE = "female"
+    OTHER = "other"
+
+
 class TrackingMode(StrEnum):
     """Whether the laptop agent should be capturing this person right now.
 
@@ -59,6 +68,11 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Self-service profile fields (display/preference only — never privilege).
     job_title: Mapped[str | None] = mapped_column(String(128), default=None)
     timezone: Mapped[str | None] = mapped_column(String(64), default=None)
+    # Self-reported, required of every employee (enforced in the app, not the DB,
+    # so existing rows stay valid). DOB drives birthday leave; gender gates
+    # maternity/paternity leave.
+    date_of_birth: Mapped[date | None] = mapped_column(Date, default=None)
+    gender: Mapped[Gender | None] = mapped_column(default=None)
 
     # Enrollment id on the office biometric device. The on-prem connector tags
     # each punch with this so we can match it to an employee; set by HR sync or an
@@ -70,6 +84,11 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # for older records / invite-provisioned people; the leave-balance logic falls
     # back to `created_at` when this is unset.
     hire_date: Mapped[date | None] = mapped_column(Date, default=None)
+
+    # EPF Universal Account Number — the 12-digit PF identifier. HR-operational
+    # data, set by HR/admin (never by the agent or self-service). Nullable: not
+    # every employee has one on file, and non-India orgs won't use it at all.
+    uan_number: Mapped[str | None] = mapped_column(String(12), default=None)
 
     # Org tree: self-referential reporting line, set from HR.
     manager_id: Mapped[uuid.UUID | None] = mapped_column(

@@ -89,6 +89,21 @@ class _FakeEmailService:
     async def send_payslip(self, **kwargs: object) -> None:
         return None
 
+    async def send_resignation_submitted(self, **kwargs: object) -> None:
+        return None
+
+    async def send_resignation_decision(self, **kwargs: object) -> None:
+        return None
+
+    async def send_birthday(self, **kwargs: object) -> None:
+        return None
+
+    async def send_anniversary(self, **kwargs: object) -> None:
+        return None
+
+    async def send_festival(self, **kwargs: object) -> None:
+        return None
+
 
 @pytest.fixture(scope="session")
 def settings() -> Settings:
