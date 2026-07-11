@@ -63,11 +63,15 @@ _INSTRUCTIONS = (
 # the real deploy host. Disable that one check; auth remains fully enforced.
 _TRANSPORT_SECURITY = TransportSecuritySettings(enable_dns_rebinding_protection=False)
 
+# Serve the MCP endpoint at exactly "/mcp" (see app.main for the root mount). A
+# trailing-slash redirect here (e.g. /mcp -> /mcp/) is fatal: some MCP clients
+# drop the Authorization header when following the 307, so the server would see
+# no bearer token. Matching the path exactly means no redirect ever happens.
 mcp = FastMCP(
     "avora-tasks",
     instructions=_INSTRUCTIONS,
     stateless_http=True,
-    streamable_http_path="/",
+    streamable_http_path="/mcp",
     transport_security=_TRANSPORT_SECURITY,
 )
 
