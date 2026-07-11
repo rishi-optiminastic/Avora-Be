@@ -40,7 +40,7 @@ class TaskCreate(BaseModel):
     project: str | None = Field(default=None, max_length=128)
     project_id: uuid.UUID | None = None
     priority: TaskPriority = TaskPriority.MEDIUM
-    cadence: TaskCadence = TaskCadence.DAILY
+    cadence: TaskCadence = TaskCadence.ONE_TIME
     start_date: datetime | None = None
     due_date: datetime | None = None
     remarks: str | None = Field(default=None, max_length=2000)
@@ -83,6 +83,8 @@ class TaskUpdate(BaseModel):
     final_outcome: str | None = Field(default=None, max_length=2000)
     blocked_reason: str | None = Field(default=None, max_length=500)
     attachments: list[Attachment] | None = None
+    # Link this task under a parent (a bigger task it belongs to). None clears it.
+    parent_task_id: uuid.UUID | None = None
 
 
 class TaskRead(ORMModel):
@@ -164,3 +166,10 @@ class TaskParseResult(BaseModel):
 
 class CollaboratorAdd(BaseModel):
     employee_id: uuid.UUID
+
+
+class TaskAppreciate(BaseModel):
+    """Manager kudos on a completed task. The note is an optional personal line
+    shown to the assignee alongside the appreciation."""
+
+    note: str | None = Field(default=None, max_length=280)

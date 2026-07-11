@@ -108,3 +108,13 @@ async def get_screenshot_image(
     if shot.image is not None:
         return Response(content=shot.image, media_type=shot.content_type)
     raise NotFoundError()
+
+
+@router.delete("/{screenshot_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_screenshot(
+    screenshot_id: uuid.UUID,
+    caller: CurrentUserDep,
+    service: ScreenshotServiceDep,
+) -> None:
+    """Delete a single screenshot. Admin-only (the service enforces + audits)."""
+    await service.delete(caller, screenshot_id)

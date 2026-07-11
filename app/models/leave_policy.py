@@ -23,9 +23,18 @@ class LeavePolicy(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Annual entitlement (working days) per paid leave type, per leave year.
     annual_planned_days: Mapped[int] = mapped_column(default=12)
     annual_sick_days: Mapped[int] = mapped_column(default=8)
+    # Additional paid leave types (see LeaveType). Each is an annual working-day
+    # quota; birthday/maternity/paternity are further gated by profile fields
+    # (date_of_birth / gender) in the service.
+    annual_days: Mapped[int] = mapped_column(default=15)
+    bereavement_days: Mapped[int] = mapped_column(default=5)
+    birthday_days: Mapped[int] = mapped_column(default=1)
+    maternity_days: Mapped[int] = mapped_column(default=90)
+    paternity_days: Mapped[int] = mapped_column(default=15)
+    marriage_days: Mapped[int] = mapped_column(default=5)
 
-    # Minimum days' notice required to apply for PLANNED leave (0 ⇒ any time).
-    # Sick / unpaid / half-day are always applicable any time.
+    # Minimum days' notice required to apply for PLANNED / ANNUAL leave (0 ⇒ any
+    # time). Sick / unpaid / half-day / event-based leave are applicable any time.
     planned_min_notice_days: Mapped[int] = mapped_column(default=2)
 
     updated_by: Mapped[uuid.UUID | None] = mapped_column(

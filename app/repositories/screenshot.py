@@ -101,6 +101,10 @@ class ScreenshotRepository:
     async def get(self, screenshot_id: uuid.UUID) -> Screenshot | None:
         return await self._session.get(Screenshot, screenshot_id)
 
+    async def delete(self, shot: Screenshot) -> None:
+        await self._session.delete(shot)
+        await self._session.flush()
+
     async def latest_ocr_text(
         self, employee_ids: Sequence[uuid.UUID], since: datetime
     ) -> dict[uuid.UUID, str]:

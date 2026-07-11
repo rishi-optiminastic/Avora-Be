@@ -34,6 +34,8 @@ from app.repositories.attribution_correction import AttributionCorrectionReposit
 from app.repositories.audit import AuditRepository
 from app.repositories.browsing_hidden_domain import BrowsingHiddenDomainRepository
 from app.repositories.category_rule import CategoryRuleRepository
+from app.repositories.celebration_settings import CelebrationSettingsRepository
+from app.repositories.changelog import ChangelogRepository
 from app.repositories.compensation import CompensationRepository
 from app.repositories.device import DeviceRepository
 from app.repositories.document import DocumentRepository
@@ -41,6 +43,7 @@ from app.repositories.employee import EmployeeRepository
 from app.repositories.envsync import EnvSyncRepository
 from app.repositories.eod_report import EodReportRepository
 from app.repositories.eod_settings import EodSettingsRepository
+from app.repositories.festival import FestivalRepository
 from app.repositories.holiday import HolidayRepository
 from app.repositories.idempotency import IdempotencyRepository
 from app.repositories.invitation import InvitationRepository
@@ -55,9 +58,11 @@ from app.repositories.org_settings import OrgSettingsRepository
 from app.repositories.payroll_run import PayrollRunRepository
 from app.repositories.payroll_settings import PayrollSettingsRepository
 from app.repositories.payslip import PayslipRepository
+from app.repositories.personal_access_token import PersonalAccessTokenRepository
 from app.repositories.ping import PingRepository
 from app.repositories.quick_meet import QuickMeetRepository
 from app.repositories.regularization import RegularizationRepository
+from app.repositories.resignation import ResignationRepository
 from app.repositories.screenshot import ScreenshotRepository
 from app.repositories.target import TargetRepository
 from app.repositories.task import TaskRepository
@@ -76,6 +81,8 @@ from app.services.attribution_service import AttributionService
 from app.services.biometric_service import BiometricService
 from app.services.browsing_privacy_service import BrowsingPrivacyService
 from app.services.category_rule_service import CategoryRuleService
+from app.services.celebration_service import CelebrationService
+from app.services.changelog_service import ChangelogService
 from app.services.compensation_service import CompensationService
 from app.services.dashboard_service import DashboardService
 from app.services.device_service import DeviceService
@@ -100,10 +107,12 @@ from app.services.note_service import NoteService
 from app.services.notification_service import NotificationService
 from app.services.onboarding_service import OnboardingService
 from app.services.org_settings_service import OrgSettingsService
+from app.services.pat_service import PatService
 from app.services.payroll_service import PayrollService
 from app.services.ping_service import PingService
 from app.services.reconciliation_service import ReconciliationService
 from app.services.regularization_service import RegularizationService
+from app.services.resignation_service import ResignationService
 from app.services.screenshot_service import ScreenshotService
 from app.services.target_service import TargetService
 from app.services.task_service import TaskService
@@ -194,6 +203,18 @@ def get_leave_repo(db: DbDep) -> LeaveRepository:
     return LeaveRepository(db)
 
 
+def get_resignation_repo(db: DbDep) -> ResignationRepository:
+    return ResignationRepository(db)
+
+
+def get_festival_repo(db: DbDep) -> FestivalRepository:
+    return FestivalRepository(db)
+
+
+def get_celebration_settings_repo(db: DbDep) -> CelebrationSettingsRepository:
+    return CelebrationSettingsRepository(db)
+
+
 def get_leave_policy_repo(db: DbDep) -> LeavePolicyRepository:
     return LeavePolicyRepository(db)
 
@@ -220,6 +241,10 @@ def get_holiday_repo(db: DbDep) -> HolidayRepository:
 
 def get_announcement_repo(db: DbDep) -> AnnouncementRepository:
     return AnnouncementRepository(db)
+
+
+def get_changelog_repo(db: DbDep) -> ChangelogRepository:
+    return ChangelogRepository(db)
 
 
 def get_work_session_repo(db: DbDep) -> WorkSessionRepository:
@@ -280,6 +305,10 @@ def get_workspace_file_repo(db: DbDep) -> WorkspaceFileRepository:
 
 def get_envsync_repo(db: DbDep) -> EnvSyncRepository:
     return EnvSyncRepository(db)
+
+
+def get_pat_repo(db: DbDep) -> PersonalAccessTokenRepository:
+    return PersonalAccessTokenRepository(db)
 
 
 # --------------------------------------------------------------------------- #
@@ -515,8 +544,9 @@ def get_screenshot_service(
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     settings: SettingsDep,
     gate: Annotated[MonitoringGateService, Depends(get_monitoring_gate)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
 ) -> ScreenshotService:
-    return ScreenshotService(screenshots, employees, settings, gate)
+    return ScreenshotService(screenshots, employees, settings, gate, audit)
 
 
 def get_ping_service(
@@ -620,6 +650,17 @@ def get_envsync_service(
 EnvSyncServiceDep = Annotated[EnvSyncService, Depends(get_envsync_service)]
 
 
+def get_pat_service(
+    repo: Annotated[PersonalAccessTokenRepository, Depends(get_pat_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    settings: SettingsDep,
+) -> PatService:
+    return PatService(repo, audit, settings)
+
+
+PatServiceDep = Annotated[PatService, Depends(get_pat_service)]
+
+
 def get_leave_policy_service(
     policies: Annotated[LeavePolicyRepository, Depends(get_leave_policy_repo)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
@@ -653,6 +694,26 @@ def get_leave_service(
     )
 
 
+def get_resignation_service(
+    resignations: Annotated[ResignationRepository, Depends(get_resignation_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    notifications: Annotated[NotificationService, Depends(get_notification_service)],
+    email: Annotated[EmailService, Depends(get_email_service)],
+) -> ResignationService:
+    return ResignationService(resignations, employees, audit, notifications, email)
+
+
+def get_celebration_service(
+    settings: Annotated[CelebrationSettingsRepository, Depends(get_celebration_settings_repo)],
+    festivals: Annotated[FestivalRepository, Depends(get_festival_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    email: Annotated[EmailService, Depends(get_email_service)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> CelebrationService:
+    return CelebrationService(settings, festivals, employees, email, audit)
+
+
 def get_leave_allocation_service(
     allocations: Annotated[LeaveAllocationRepository, Depends(get_leave_allocation_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
@@ -675,6 +736,13 @@ def get_announcement_service(
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
 ) -> AnnouncementService:
     return AnnouncementService(announcements, holidays, policy, audit)
+
+
+def get_changelog_service(
+    entries: Annotated[ChangelogRepository, Depends(get_changelog_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> ChangelogService:
+    return ChangelogService(entries, audit)
 
 
 def get_compensation_service(
@@ -719,17 +787,19 @@ def get_document_service(
     documents: Annotated[DocumentRepository, Depends(get_document_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    settings: SettingsDep,
 ) -> DocumentService:
-    return DocumentService(documents, employees, audit)
+    return DocumentService(documents, employees, audit, settings)
 
 
 def get_workspace_file_service(
     files: Annotated[WorkspaceFileRepository, Depends(get_workspace_file_repo)],
     entities: Annotated[WorkEntityRepository, Depends(get_work_entity_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
     settings: SettingsDep,
 ) -> WorkspaceFileService:
-    return WorkspaceFileService(files, entities, audit, settings)
+    return WorkspaceFileService(files, entities, employees, audit, settings)
 
 
 EmployeeServiceDep = Annotated[EmployeeService, Depends(get_employee_service)]
@@ -755,6 +825,8 @@ InvitationServiceDep = Annotated[InvitationService, Depends(get_invitation_servi
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
 TargetServiceDep = Annotated[TargetService, Depends(get_target_service)]
 LeaveServiceDep = Annotated[LeaveService, Depends(get_leave_service)]
+ResignationServiceDep = Annotated[ResignationService, Depends(get_resignation_service)]
+CelebrationServiceDep = Annotated[CelebrationService, Depends(get_celebration_service)]
 LeavePolicyServiceDep = Annotated[LeavePolicyService, Depends(get_leave_policy_service)]
 LeaveAllocationServiceDep = Annotated[LeaveAllocationService, Depends(get_leave_allocation_service)]
 MeetingServiceDep = Annotated[MeetingService, Depends(get_meeting_service)]
@@ -762,6 +834,7 @@ NoteServiceDep = Annotated[NoteService, Depends(get_note_service)]
 NotificationServiceDep = Annotated[NotificationService, Depends(get_notification_service)]
 HolidayServiceDep = Annotated[HolidayService, Depends(get_holiday_service)]
 AnnouncementServiceDep = Annotated[AnnouncementService, Depends(get_announcement_service)]
+ChangelogServiceDep = Annotated[ChangelogService, Depends(get_changelog_service)]
 CompensationServiceDep = Annotated[CompensationService, Depends(get_compensation_service)]
 PayrollServiceDep = Annotated[PayrollService, Depends(get_payroll_service)]
 DocumentServiceDep = Annotated[DocumentService, Depends(get_document_service)]

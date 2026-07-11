@@ -12,14 +12,17 @@ from app.models.audit import AuditLog
 from app.models.base import Base
 from app.models.browsing_hidden_domain import BrowsingHiddenDomain
 from app.models.category_rule import CategoryRule
+from app.models.celebration_settings import CelebrationSettings
+from app.models.changelog import ChangelogEntry
 from app.models.compensation import Compensation, PayPeriod
 from app.models.device import Device
 from app.models.document import DocumentCategory, EmployeeDocument
-from app.models.employee import Employee, EmployeeStatus, Role, TrackingMode
+from app.models.employee import Employee, EmployeeStatus, Gender, Role, TrackingMode
 from app.models.env_access_token import EnvAccessToken
 from app.models.env_project import EnvMemberRole, EnvProject, EnvProjectMember, EnvVersion
 from app.models.eod_report import EodReport, EodStatus
 from app.models.eod_settings import EodSettings
+from app.models.festival import Festival
 from app.models.holiday import Holiday, HolidayType
 from app.models.idempotency_key import IdempotencyKey, IdempotencyStatus
 from app.models.invitation import Invitation, InvitationStatus
@@ -32,9 +35,11 @@ from app.models.org_settings import OrgSettings
 from app.models.payroll_run import PayrollRun, PayrollRunSource
 from app.models.payroll_settings import PayCycle, PayrollSettings
 from app.models.payslip import Payslip, PayslipStatus
+from app.models.personal_access_token import PersonalAccessToken
 from app.models.ping import Ping
 from app.models.quick_meet_default import QuickMeetDefault
 from app.models.regularization import Regularization, RegularizationStatus
+from app.models.resignation import Resignation, ResignationStatus
 from app.models.screenshot import OcrStatus, Screenshot
 from app.models.target import Target, TargetPeriod, TargetStatus
 from app.models.task import Task, TaskCadence, TaskPriority, TaskStatus
@@ -42,7 +47,11 @@ from app.models.task_collaborator import TaskCollaborator
 from app.models.task_comment import TaskComment
 from app.models.work_entity import WorkEntity
 from app.models.work_session import WorkSession
-from app.models.workspace_file import WorkspaceFile, WorkspaceFileCategory
+from app.models.workspace_file import (
+    WorkspaceFile,
+    WorkspaceFileCategory,
+    WorkspaceVisibility,
+)
 
 __all__ = [
     "ActivitySample",
@@ -54,6 +63,8 @@ __all__ = [
     "Base",
     "BrowsingHiddenDomain",
     "CategoryRule",
+    "CelebrationSettings",
+    "ChangelogEntry",
     "Compensation",
     "CorrectionStatus",
     "Device",
@@ -69,6 +80,8 @@ __all__ = [
     "EodReport",
     "EodSettings",
     "EodStatus",
+    "Festival",
+    "Gender",
     "Holiday",
     "HolidayType",
     "IdempotencyKey",
@@ -93,10 +106,13 @@ __all__ = [
     "PayrollSettings",
     "Payslip",
     "PayslipStatus",
+    "PersonalAccessToken",
     "Ping",
     "QuickMeetDefault",
     "Regularization",
     "RegularizationStatus",
+    "Resignation",
+    "ResignationStatus",
     "Role",
     "Screenshot",
     "Target",
@@ -113,4 +129,5 @@ __all__ = [
     "WorkSession",
     "WorkspaceFile",
     "WorkspaceFileCategory",
+    "WorkspaceVisibility",
 ]

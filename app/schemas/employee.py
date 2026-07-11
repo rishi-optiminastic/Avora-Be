@@ -8,11 +8,11 @@ here, but privilege-changing fields are absent from HR-sourced inputs.
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
-from app.models.employee import EmployeeStatus, Role, TrackingMode
+from app.models.employee import EmployeeStatus, Gender, Role, TrackingMode
 from app.schemas.common import ORMModel
 
 
@@ -31,6 +31,9 @@ class EmployeeRead(ORMModel):
     tracking_mode: TrackingMode
     biometric_id: str | None
     hire_date: date | None
+    uan_number: str | None
+    date_of_birth: date | None
+    gender: Gender | None
     has_avatar: bool
     created_at: datetime
     updated_at: datetime
@@ -54,11 +57,24 @@ class SelfProfileUpdate(BaseModel):
     Deliberately excludes email, role, department, and manager: email is the
     identity key, role is admin-only (rule 5.5), and department/manager are org
     structure that drive scope, so HR/admin own them — not self-service.
+
+    `date_of_birth` and `gender` are REQUIRED — every employee must record them
+    (they gate birthday / maternity / paternity leave), and the dashboard blocks
+    on a completion gate until they're set, so the profile save enforces them too.
     """
 
     full_name: str = Field(min_length=1, max_length=256)
     job_title: str | None = Field(default=None, max_length=128)
     timezone: str | None = Field(default=None, max_length=64)
+    date_of_birth: date
+    gender: Gender
+
+    @field_validator("date_of_birth")
+    @classmethod
+    def _dob_in_past(cls, value: date) -> date:
+        if value >= datetime.now(UTC).date():
+            raise ValueError("Date of birth must be in the past.")
+        return value
 
 
 class AdminProfileUpdate(BaseModel):
@@ -77,7 +93,23 @@ class AdminProfileUpdate(BaseModel):
     manager_id: uuid.UUID | None = None
     timezone: str | None = Field(default=None, max_length=64)
     hire_date: date | None = None
+    uan_number: str | None = None
+    date_of_birth: date | None = None
+    gender: Gender | None = None
     biometric_id: str | None = Field(default=None, max_length=64)
+
+    @field_validator("uan_number")
+    @classmethod
+    def _valid_uan(cls, value: str | None) -> str | None:
+        """UAN is exactly 12 digits. Blank clears it; anything else must match."""
+        if value is None:
+            return None
+        cleaned = value.strip()
+        if not cleaned:
+            return None
+        if not (cleaned.isdigit() and len(cleaned) == 12):
+            raise ValueError("UAN must be exactly 12 digits.")
+        return cleaned
 
 
 class EmployeeStatusUpdate(BaseModel):

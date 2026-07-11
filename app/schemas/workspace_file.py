@@ -10,18 +10,48 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
-from app.models.workspace_file import WorkspaceFileCategory
+from app.models.workspace_file import WorkspaceFileCategory, WorkspaceVisibility
+
+# Bounded so one request can't attach an unbounded access list.
+_MAX_ACL = 100
 
 
-class WorkspaceFileMeta(BaseModel):
+class AccessSpec(BaseModel):
+    """Who may see an entry. Departments are names (matched against the employee's
+    department); employees are ids in the caller's scope. Ignored when EVERYONE."""
+
+    visibility: WorkspaceVisibility = WorkspaceVisibility.EVERYONE
+    visible_departments: list[str] = Field(default_factory=list, max_length=_MAX_ACL)
+    visible_employee_ids: list[uuid.UUID] = Field(default_factory=list, max_length=_MAX_ACL)
+
+
+class WorkspaceFileMeta(AccessSpec):
     """Metadata supplied alongside an upload (the bytes ride in the request body)."""
 
     name: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=1000)
     category: WorkspaceFileCategory = WorkspaceFileCategory.OTHER
     project_id: uuid.UUID | None = None
+
+
+class WorkspaceLinkCreate(AccessSpec):
+    """Create a link entry (a URL to a Google Sheet/Doc, a receipt, anything)."""
+
+    name: str = Field(min_length=1, max_length=200)
+    url: str = Field(min_length=1, max_length=2048)
+    description: str | None = Field(default=None, max_length=1000)
+    category: WorkspaceFileCategory = WorkspaceFileCategory.REFERENCE
+    project_id: uuid.UUID | None = None
+
+    @field_validator("url")
+    @classmethod
+    def _http_url(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned.startswith(("http://", "https://")):
+            raise ValueError("Link must be an http(s) URL.")
+        return cleaned
 
 
 class WorkspaceFileRead(BaseModel):
@@ -32,6 +62,10 @@ class WorkspaceFileRead(BaseModel):
     content_type: str
     byte_size: int
     original_filename: str | None
+    url: str | None
+    visibility: WorkspaceVisibility
+    visible_departments: list[str]
+    visible_employee_ids: list[uuid.UUID]
     project_id: uuid.UUID | None
     project_name: str | None
     uploaded_by: uuid.UUID | None

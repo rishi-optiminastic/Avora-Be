@@ -37,6 +37,10 @@ class TaskStatus(StrEnum):
 
 
 class TaskCadence(StrEnum):
+    # A one-time task is done once and never expected to recur — the default, and
+    # what most tasks actually are. daily/weekly/monthly are recurring cadences
+    # (labels only; the system does not auto-regenerate them).
+    ONE_TIME = "one_time"
     DAILY = "daily"
     WEEKLY = "weekly"
     MONTHLY = "monthly"
@@ -73,7 +77,7 @@ class Task(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     priority: Mapped[TaskPriority] = mapped_column(default=TaskPriority.MEDIUM, index=True)
     status: Mapped[TaskStatus] = mapped_column(default=TaskStatus.TODO, index=True)
-    cadence: Mapped[TaskCadence] = mapped_column(default=TaskCadence.DAILY, index=True)
+    cadence: Mapped[TaskCadence] = mapped_column(default=TaskCadence.ONE_TIME, index=True)
 
     start_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     due_date: Mapped[datetime | None] = mapped_column(

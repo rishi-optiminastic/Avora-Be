@@ -510,3 +510,117 @@ def eod_report_email(
         content_html=content,
         footer=_ACTIVITY_FOOTER,
     )
+
+
+# -- Resignation ------------------------------------------------------------ #
+
+
+def resignation_submitted_email(
+    *,
+    recipient_name: str,
+    resigner_name: str,
+    last_working_label: str,
+    reason: str | None,
+    url: str,
+) -> tuple[str, str]:
+    """(subject, html) telling HR/Admin a resignation was submitted to review."""
+    subject = f"Resignation submitted — {resigner_name}"
+    reason_html = _note_block(reason) if reason else ""
+    content = f"""\
+<div style="font-size:11px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:{_MUTED};">
+  People · Resignation
+</div>
+<h1 style="margin:8px 0 16px;font-family:{_SERIF};font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
+  Resignation to review
+</h1>
+<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:{_INK};">
+  Hi {recipient_name}, <strong>{resigner_name}</strong> has submitted a resignation with a last
+  working day of <strong>{last_working_label}</strong>.
+</p>
+{reason_html}
+<p style="margin:0 0 4px;">{_button("Review resignation", url)}</p>"""
+    return subject, _layout(
+        preheader=f"{resigner_name} submitted a resignation (last day {last_working_label})",
+        content_html=content,
+        footer=_ACTIVITY_FOOTER,
+    )
+
+
+def resignation_decision_email(
+    *,
+    employee_name: str,
+    accepted: bool,
+    last_working_label: str,
+    decided_by: str,
+    note: str | None,
+    url: str,
+) -> tuple[str, str]:
+    """(subject, html) telling an employee their resignation was decided."""
+    verb = "accepted" if accepted else "declined"
+    subject = f"Your resignation was {verb}"
+    note_html = _note_block(note) if note else ""
+    content = f"""\
+<div style="font-size:11px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:{_MUTED};">
+  People · Resignation
+</div>
+<h1 style="margin:8px 0 16px;font-family:{_SERIF};font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
+  Resignation {verb}
+</h1>
+<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:{_INK};">
+  Hi {employee_name}, <strong>{decided_by}</strong> {verb} your resignation with a last working
+  day of <strong>{last_working_label}</strong>.
+</p>
+{note_html}
+<p style="margin:0 0 4px;">{_button("View resignation", url)}</p>"""
+    return subject, _layout(
+        preheader=f"{decided_by} {verb} your resignation",
+        content_html=content,
+        footer=_ACTIVITY_FOOTER,
+    )
+
+
+# -- Celebrations (broadcast to the whole team) ----------------------------- #
+
+
+def _celebration_email(*, eyebrow: str, heading: str, body: str) -> tuple[str, str]:
+    content = f"""\
+<div style="font-size:11px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:{_MUTED};">
+  {eyebrow}
+</div>
+<h1 style="margin:8px 0 16px;font-family:{_SERIF};font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
+  {heading}
+</h1>
+<p style="margin:0 0 4px;font-size:15px;line-height:1.65;color:{_INK};">{body}</p>"""
+    return heading, _layout(preheader=heading, content_html=content, footer=_ACTIVITY_FOOTER)
+
+
+def birthday_email(*, person_name: str) -> tuple[str, str]:
+    return _celebration_email(
+        eyebrow="People · Celebration",
+        heading=f"🎂 Happy Birthday, {person_name}!",
+        body=(
+            f"It's <strong>{person_name}</strong>'s birthday today. Wishing you a wonderful year "
+            "ahead — from everyone at the team. 🎉"
+        ),
+    )
+
+
+def anniversary_email(*, person_name: str, years: int) -> tuple[str, str]:
+    label = "year" if years == 1 else "years"
+    return _celebration_email(
+        eyebrow="People · Work Anniversary",
+        heading=f"Happy Work Anniversary — {person_name}",
+        body=(
+            f"Congratulations <strong>{person_name}</strong> on completing "
+            f"<strong>{years} {label}</strong> with us! Thank you for everything you bring to the "
+            "team — here's to many more. 🎊"
+        ),
+    )
+
+
+def festival_email(*, festival_name: str, message: str) -> tuple[str, str]:
+    return _celebration_email(
+        eyebrow="Celebration",
+        heading=f"{festival_name} 🎉",
+        body=message,
+    )

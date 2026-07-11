@@ -27,7 +27,7 @@ from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.ping import PingRepository
 from app.schemas.auth import CurrentUser
-from app.schemas.employee import AdminProfileUpdate
+from app.schemas.employee import AdminProfileUpdate, SelfProfileUpdate
 
 logger = get_logger("app.employee")
 
@@ -116,17 +116,20 @@ class EmployeeService:
         return employee
 
     async def update_self_profile(
-        self, caller: CurrentUser, *, full_name: str, job_title: str | None, timezone: str | None
+        self, caller: CurrentUser, payload: SelfProfileUpdate
     ) -> Employee:
-        """The employee edits their own display fields (name/title/timezone)."""
+        """The employee edits their own display fields (name/title/timezone) plus
+        the required date_of_birth / gender (see SelfProfileUpdate)."""
         employee = await self._employees.get(caller.employee_id)
         if employee is None:
             raise NotFoundError()
         await self._employees.update_profile(
             employee,
-            full_name=full_name.strip(),
-            job_title=(job_title or None),
-            timezone=(timezone or None),
+            full_name=payload.full_name.strip(),
+            job_title=(payload.job_title or None),
+            timezone=(payload.timezone or None),
+            date_of_birth=payload.date_of_birth,
+            gender=payload.gender,
         )
         await self._audit.append(
             actor=str(caller.employee_id),

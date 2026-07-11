@@ -16,9 +16,10 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core import storage
 from app.core.config import Settings
-from app.core.exceptions import NotFoundError, ValidationError
+from app.core.exceptions import AuthorizationError, NotFoundError, ValidationError
 from app.core.logging import get_logger
 from app.models.screenshot import Screenshot
+from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.screenshot import ScreenshotRepository
 from app.schemas.auth import CurrentDevice, CurrentUser
@@ -41,11 +42,13 @@ class ScreenshotService:
         employees: EmployeeRepository,
         settings: Settings,
         gate: MonitoringGateService,
+        audit: AuditRepository,
     ) -> None:
         self._screenshots = screenshots
         self._employees = employees
         self._settings = settings
         self._gate = gate
+        self._audit = audit
 
     async def ingest(
         self,
@@ -114,6 +117,29 @@ class ScreenshotService:
         if shot is None or not await self._employees.can_read(caller, shot.employee_id):
             raise NotFoundError()
         return shot
+
+    async def delete(self, caller: CurrentUser, screenshot_id: uuid.UUID) -> None:
+        """Admin-only removal of a single screenshot (e.g. a mistakenly captured
+        private moment). Deletes the S3 blob first so the row never orphans it,
+        then the row; the action is audited (rule 5.7)."""
+        if not caller.is_admin:
+            raise AuthorizationError()
+        shot = await self._screenshots.get(screenshot_id)
+        if shot is None:
+            raise NotFoundError()
+        if shot.object_key and self._settings.s3_enabled:
+            try:
+                await storage.delete_objects([shot.object_key])
+            except (ClientError, BotoCoreError):
+                logger.warning(
+                    "screenshot_s3_delete_failed", extra={"key": shot.object_key}
+                )
+        await self._screenshots.delete(shot)
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="screenshot.delete",
+            target=f"screenshot:{screenshot_id}",
+        )
 
     async def purge_old(self) -> int:
         cutoff = datetime.now(UTC) - timedelta(days=self._settings.screenshot_retention_days)

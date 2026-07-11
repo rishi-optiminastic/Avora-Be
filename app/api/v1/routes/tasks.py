@@ -23,6 +23,7 @@ from app.models.task import TaskCadence, TaskStatus
 from app.schemas.common import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Page
 from app.schemas.task import (
     CollaboratorAdd,
+    TaskAppreciate,
     TaskBulkCreate,
     TaskCommentCreate,
     TaskCommentRead,
@@ -164,6 +165,17 @@ async def escalate_task(
 ) -> TaskRead:
     """Flag a task for attention (manager/admin, scoped)."""
     return TaskRead.model_validate(await service.escalate(caller, task_id))
+
+
+@router.post("/{task_id}/appreciate", response_model=TaskRead)
+async def appreciate_task(
+    task_id: uuid.UUID,
+    payload: TaskAppreciate,
+    caller: CurrentUserDep,
+    service: TaskServiceDep,
+) -> TaskRead:
+    """Send the assignee kudos for completing a task (manager/assigner, scoped)."""
+    return TaskRead.model_validate(await service.appreciate(caller, task_id, payload.note))
 
 
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)

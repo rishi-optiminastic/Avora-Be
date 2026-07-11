@@ -21,9 +21,12 @@ from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 class NotificationKind(StrEnum):
     LEAVE_REQUEST = "leave_request"  # a report submitted leave you must review
     LEAVE_DECISION = "leave_decision"  # your leave was approved/rejected
+    RESIGNATION_SUBMITTED = "resignation_submitted"  # someone resigned — HR/Admin
+    RESIGNATION_DECISION = "resignation_decision"  # your resignation was decided
     TASK_ASSIGNED = "task_assigned"  # you were assigned a task
     UNDERPERFORMANCE = "underperformance"  # a person you manage is at risk
     ESCALATION = "escalation"  # a repeated issue escalated up to you
+    APPRECIATION = "appreciation"  # a manager thanked you for completing a task
     SYSTEM = "system"
 
 

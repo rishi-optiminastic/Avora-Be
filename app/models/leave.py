@@ -19,7 +19,13 @@ from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 class LeaveType(StrEnum):
     PLANNED = "planned"
+    ANNUAL = "annual"
     SICK = "sick"
+    BEREAVEMENT = "bereavement"
+    BIRTHDAY = "birthday"
+    MATERNITY = "maternity"
+    PATERNITY = "paternity"
+    MARRIAGE = "marriage"
     UNPAID = "unpaid"
     HALF_DAY = "half_day"
 

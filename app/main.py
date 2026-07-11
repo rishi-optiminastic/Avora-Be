@@ -20,6 +20,7 @@ from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
 from app.core.migrate import upgrade_to_head
+from app.mcp.server import mcp, mcp_app
 
 logger = get_logger("app.main")
 
@@ -37,7 +38,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.exception("auto_migrate_failed")
     logger.info("startup", extra={"environment": settings.environment})
-    yield
+    # The mounted MCP endpoint (/mcp) needs its Streamable-HTTP session manager
+    # running for the life of the app.
+    async with mcp.session_manager.run():
+        yield
     logger.info("shutdown")
 
 
@@ -72,6 +76,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     register_exception_handlers(app)
     app.include_router(api_router, prefix="/api/v1")
+
+    # Claude Code / MCP integration. The Avora MCP server is a Streamable-HTTP
+    # ASGI app mounted here; it authenticates a Personal Access Token and reuses
+    # the same task/employee services the REST API uses.
+    app.mount("/mcp", mcp_app)
 
     return app
 
