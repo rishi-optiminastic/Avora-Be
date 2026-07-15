@@ -488,3 +488,129 @@ async def test_manager_cannot_add_out_of_scope_collaborator(
         headers=auth_headers(settings, seed.manager),
     )
     assert resp.status_code == 403
+
+
+# Assignment grants ---------------------------------------------------------- #
+# The reporting tree gives a manager their direct reports. A grant is the extra,
+# explicit edge for authority the tree can't express (two managers, one report).
+# It is assign-only and must never widen the employee read scope.
+
+
+async def _grant(
+    client: AsyncClient, settings: Settings, seed: _Seed, assignee_ids: list[str]
+) -> None:
+    """Admin grants the seed manager the right to assign to `assignee_ids`."""
+    resp = await client.put(
+        f"/api/v1/employees/{seed.manager.id}/assignment-grants",
+        json={"assignee_ids": assignee_ids},
+        headers=auth_headers(settings, seed.admin),
+    )
+    assert resp.status_code == 200, resp.text
+
+
+async def test_manager_cannot_assign_to_ungranted_outsider(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """The baseline the grant is measured against: no grant, no assignment."""
+    resp = await client.post(
+        "/api/v1/tasks",
+        json=_new_task(str(seed.outsider.id)),
+        headers=auth_headers(settings, seed.manager),
+    )
+    assert resp.status_code == 403
+
+
+async def test_grant_lets_manager_assign_outside_their_reports(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    await _grant(client, settings, seed, [str(seed.outsider.id)])
+
+    resp = await client.post(
+        "/api/v1/tasks",
+        json=_new_task(str(seed.outsider.id)),
+        headers=auth_headers(settings, seed.manager),
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["assignee_id"] == str(seed.outsider.id)
+    assert resp.json()["assigned_by_id"] == str(seed.manager.id)
+
+
+async def test_grant_does_not_widen_the_read_scope(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """A grant is assign-only — it must not leak the granted person's profile."""
+    await _grant(client, settings, seed, [str(seed.outsider.id)])
+
+    resp = await client.get(
+        f"/api/v1/employees/{seed.outsider.id}", headers=auth_headers(settings, seed.manager)
+    )
+    assert resp.status_code == 404, "granting assignment must not expose the profile"
+
+
+async def test_revoking_a_grant_removes_the_ability(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    await _grant(client, settings, seed, [str(seed.outsider.id)])
+    # PUT is a full replace — an empty list revokes everything.
+    await _grant(client, settings, seed, [])
+
+    resp = await client.post(
+        "/api/v1/tasks",
+        json=_new_task(str(seed.outsider.id)),
+        headers=auth_headers(settings, seed.manager),
+    )
+    assert resp.status_code == 403
+
+
+async def test_only_admin_or_hr_may_manage_grants(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    for actor in (seed.manager, seed.report, seed.outsider):
+        write = await client.put(
+            f"/api/v1/employees/{seed.manager.id}/assignment-grants",
+            json={"assignee_ids": [str(seed.outsider.id)]},
+            headers=auth_headers(settings, actor),
+        )
+        assert write.status_code == 403, "granting yourself authority must be admin/HR only"
+        read = await client.get(
+            f"/api/v1/employees/{seed.manager.id}/assignment-grants",
+            headers=auth_headers(settings, actor),
+        )
+        assert read.status_code == 403
+
+
+async def test_assignable_list_reflects_scope_plus_grants(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """The picker's source of truth must match what create actually allows."""
+
+    async def assignable(actor: object) -> set[str]:
+        resp = await client.get(
+            "/api/v1/employees/assignable", headers=auth_headers(settings, actor)
+        )
+        assert resp.status_code == 200, resp.text
+        return {row["id"] for row in resp.json()}
+
+    # An individual contributor has only their own work to plan.
+    assert await assignable(seed.report) == {str(seed.report.id)}
+
+    # A manager: themselves + their reports, and NOT the outsider yet.
+    before = await assignable(seed.manager)
+    assert {str(seed.manager.id), str(seed.report.id)} <= before
+    assert str(seed.outsider.id) not in before
+
+    await _grant(client, settings, seed, [str(seed.outsider.id)])
+    assert str(seed.outsider.id) in await assignable(seed.manager)
+
+
+async def test_grant_applies_to_bulk_create_too(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    await _grant(client, settings, seed, [str(seed.outsider.id)])
+
+    resp = await client.post(
+        "/api/v1/tasks/bulk",
+        json={"tasks": [_new_task(str(seed.outsider.id), "Granted bulk")]},
+        headers=auth_headers(settings, seed.manager),
+    )
+    assert resp.status_code == 201, resp.text

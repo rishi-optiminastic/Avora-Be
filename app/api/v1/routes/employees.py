@@ -26,6 +26,7 @@ from app.core.http import read_capped_body
 from app.schemas.common import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Page
 from app.schemas.employee import (
     AdminProfileUpdate,
+    AssignmentGrantsUpdate,
     EmployeeRead,
     EmployeeRoleUpdate,
     EmployeeStatusUpdate,
@@ -51,6 +52,18 @@ async def list_employees(
         size=size,
         total=total,
     )
+
+
+@router.get("/assignable", response_model=list[EmployeeRead])
+async def list_assignable_employees(
+    caller: CurrentUserDep, service: EmployeeServiceDep
+) -> list[EmployeeRead]:
+    """Everyone the caller may assign a task to — their reporting scope plus any
+    explicit assignment grants. Declared before `/{employee_id}` so the literal
+    path wins over the UUID route. Bounded by the caller's scope, so no page arg.
+    """
+    people = await service.list_assignable(caller)
+    return [EmployeeRead.model_validate(p) for p in people]
 
 
 @router.get("/me", response_model=EmployeeRead)
@@ -122,6 +135,32 @@ async def set_employee_role(
     """Admin-only privilege change — the sole path that sets a role (rule 5.5)."""
     employee = await service.set_role(admin, employee_id, payload.role)
     return EmployeeRead.model_validate(employee)
+
+
+@router.get("/{employee_id}/assignment-grants", response_model=list[EmployeeRead])
+async def list_assignment_grants(
+    employee_id: uuid.UUID,
+    manager: AdminOrHrDep,
+    service: EmployeeServiceDep,
+) -> list[EmployeeRead]:
+    """Admin/HR: the extra people this employee may assign work to, on top of
+    whatever their role and reporting line already allow."""
+    people = await service.list_grants(manager, employee_id)
+    return [EmployeeRead.model_validate(p) for p in people]
+
+
+@router.put("/{employee_id}/assignment-grants", response_model=list[EmployeeRead])
+async def set_assignment_grants(
+    employee_id: uuid.UUID,
+    payload: AssignmentGrantsUpdate,
+    manager: AdminOrHrDep,
+    service: EmployeeServiceDep,
+) -> list[EmployeeRead]:
+    """Admin/HR: replace this employee's assignment grants with the full list in
+    the body (PUT — anything omitted is revoked). Assign-only: it never widens
+    what they can read about the granted person."""
+    people = await service.set_grants(manager, employee_id, payload.assignee_ids)
+    return [EmployeeRead.model_validate(p) for p in people]
 
 
 @router.patch("/{employee_id}", response_model=EmployeeRead)
