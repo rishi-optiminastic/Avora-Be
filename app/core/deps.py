@@ -29,6 +29,7 @@ from app.db.session import get_session
 from app.models.employee import Role
 from app.repositories.activity import ActivityRepository
 from app.repositories.announcement import AnnouncementRepository
+from app.repositories.assignment_grant import AssignmentGrantRepository
 from app.repositories.attendance_policy import AttendancePolicyRepository
 from app.repositories.attribution_correction import AttributionCorrectionRepository
 from app.repositories.audit import AuditRepository
@@ -139,6 +140,10 @@ DbDep = Annotated[AsyncSession, Depends(get_db)]
 # --------------------------------------------------------------------------- #
 def get_employee_repo(db: DbDep) -> EmployeeRepository:
     return EmployeeRepository(db)
+
+
+def get_assignment_grant_repo(db: DbDep) -> AssignmentGrantRepository:
+    return AssignmentGrantRepository(db)
 
 
 def get_device_repo(db: DbDep) -> DeviceRepository:
@@ -333,11 +338,12 @@ def get_meeting_service(
 
 def get_employee_service(
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    grants: Annotated[AssignmentGrantRepository, Depends(get_assignment_grant_repo)],
     pings: Annotated[PingRepository, Depends(get_ping_repo)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
     settings: SettingsDep,
 ) -> EmployeeService:
-    return EmployeeService(employees, pings, audit, settings)
+    return EmployeeService(employees, grants, pings, audit, settings)
 
 
 def get_hr_service(
@@ -620,6 +626,7 @@ def get_agent_nudge_service(
 def get_task_service(
     tasks: Annotated[TaskRepository, Depends(get_task_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    grants: Annotated[AssignmentGrantRepository, Depends(get_assignment_grant_repo)],
     entities: Annotated[WorkEntityRepository, Depends(get_work_entity_repo)],
     comments: Annotated[TaskCommentRepository, Depends(get_task_comment_repo)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
@@ -627,7 +634,9 @@ def get_task_service(
     email: Annotated[EmailService, Depends(get_email_service)],
     llm: Annotated[LlmService, Depends(get_llm_service)],
 ) -> TaskService:
-    return TaskService(tasks, employees, entities, comments, audit, notifications, email, llm)
+    return TaskService(
+        tasks, employees, grants, entities, comments, audit, notifications, email, llm
+    )
 
 
 def get_target_service(

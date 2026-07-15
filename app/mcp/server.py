@@ -30,6 +30,7 @@ from app.core.exceptions import AppError
 from app.db.session import SessionFactory
 from app.models.employee import Employee
 from app.models.task import Task
+from app.repositories.assignment_grant import AssignmentGrantRepository
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.notification import NotificationRepository
@@ -104,9 +105,7 @@ async def _authenticate(session: AsyncSession, ctx: Context[Any, Any, Any]) -> C
     employee = await EmployeeRepository(session).get(employee_id)
     if employee is None or not employee.is_active:
         raise ToolError("Your Avora account is inactive.")
-    return CurrentUser(
-        employee_id=employee.id, role=employee.role, manager_id=employee.manager_id
-    )
+    return CurrentUser(employee_id=employee.id, role=employee.role, manager_id=employee.manager_id)
 
 
 def _task_service(session: AsyncSession) -> TaskService:
@@ -114,6 +113,7 @@ def _task_service(session: AsyncSession) -> TaskService:
     return TaskService(
         TaskRepository(session),
         EmployeeRepository(session),
+        AssignmentGrantRepository(session),
         WorkEntityRepository(session),
         TaskCommentRepository(session),
         AuditRepository(session),
@@ -126,7 +126,11 @@ def _task_service(session: AsyncSession) -> TaskService:
 def _employee_service(session: AsyncSession) -> EmployeeService:
     settings = get_settings()
     return EmployeeService(
-        EmployeeRepository(session), PingRepository(session), AuditRepository(session), settings
+        EmployeeRepository(session),
+        AssignmentGrantRepository(session),
+        PingRepository(session),
+        AuditRepository(session),
+        settings,
     )
 
 
@@ -216,15 +220,14 @@ async def list_teammates(
     filters by name or email. Use the returned `id` as `assignee_id`."""
 
     async def _h(session: AsyncSession, caller: CurrentUser) -> str:
-        capped = max(1, min(limit, 100))
-        people, _ = await _employee_service(session).list_for_caller(
-            caller, offset=0, limit=capped
-        )
+        # The assignable list, not the directory — it already folds in explicit
+        # assignment grants, so this never offers a person create_task rejects.
+        people = await _employee_service(session).list_assignable(caller)
         rows = [_employee_brief(p) for p in people]
         if search:
             needle = search.lower()
             rows = [r for r in rows if needle in r["name"].lower() or needle in r["email"].lower()]
-        return json.dumps({"teammates": rows, "count": len(rows)})
+        return json.dumps({"teammates": rows[: max(1, min(limit, 100))], "count": len(rows)})
 
     return await _dispatch(ctx, _h)
 

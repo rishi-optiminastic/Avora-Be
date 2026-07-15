@@ -23,6 +23,7 @@ from app.core.exceptions import (
 from app.core.logging import get_logger
 from app.models.employee import Employee, Role, TrackingMode
 from app.models.ping import PingKind
+from app.repositories.assignment_grant import AssignmentGrantRepository
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.ping import PingRepository
@@ -44,11 +45,13 @@ class EmployeeService:
     def __init__(
         self,
         employees: EmployeeRepository,
+        grants: AssignmentGrantRepository,
         pings: PingRepository,
         audit: AuditRepository,
         settings: Settings,
     ) -> None:
         self._employees = employees
+        self._grants = grants
         self._pings = pings
         self._audit = audit
         self._settings = settings
@@ -79,6 +82,71 @@ class EmployeeService:
         self, caller: CurrentUser, *, offset: int, limit: int
     ) -> tuple[Sequence[Employee], int]:
         return await self._employees.list_for_scope(caller, offset=offset, limit=limit)
+
+    async def list_assignable(self, caller: CurrentUser) -> Sequence[Employee]:
+        """Everyone this caller may put a task on — their reporting scope plus any
+        explicitly granted people (see `AssignmentGrant`). Mirrors exactly what
+        `TaskService._can_assign_to` allows, so the assignee picker never offers a
+        person the API would then reject. Individual contributors get just
+        themselves, which is what the picker treats as "no one to assign to".
+        """
+        in_scope = await self._employees.all_in_scope(caller) if caller.is_manager else []
+        granted = await self._grants.assignees_for(caller.employee_id)
+        by_id = {e.id: e for e in (*in_scope, *granted)}
+        if caller.employee_id not in by_id:
+            me = await self._employees.get(caller.employee_id)
+            if me is not None:
+                by_id[me.id] = me
+        return sorted(by_id.values(), key=lambda e: e.full_name)
+
+    async def list_grants(self, caller: CurrentUser, employee_id: uuid.UUID) -> Sequence[Employee]:
+        """The extra people `employee_id` may assign work to. Admin/HR only — it
+        is a privilege listing, not directory data."""
+        if caller.role not in (Role.ADMIN, Role.HR):
+            raise AuthorizationError()
+        if await self._employees.get(employee_id) is None:
+            raise NotFoundError()
+        return await self._grants.assignees_for(employee_id)
+
+    async def set_grants(
+        self, caller: CurrentUser, employee_id: uuid.UUID, assignee_ids: Sequence[uuid.UUID]
+    ) -> Sequence[Employee]:
+        """Replace `employee_id`'s grants with exactly `assignee_ids` (admin/HR).
+
+        Idempotent: we diff against what's stored and only touch the difference,
+        so re-saving an unchanged list writes nothing.
+        """
+        if caller.role not in (Role.ADMIN, Role.HR):
+            raise AuthorizationError()
+        if await self._employees.get(employee_id) is None:
+            raise NotFoundError()
+
+        wanted = set(assignee_ids)
+        if employee_id in wanted:
+            raise ValidationError(
+                "An employee always has their own work — remove them from the list."
+            )
+        for target_id in wanted:
+            if await self._employees.get(target_id) is None:
+                raise ValidationError("One of the selected people no longer exists.")
+
+        current = await self._grants.assignee_ids_for(employee_id)
+        for assignee_id in wanted - current:
+            await self._grants.add(
+                assigner_id=employee_id,
+                assignee_id=assignee_id,
+                granted_by_id=caller.employee_id,
+            )
+        for assignee_id in current - wanted:
+            await self._grants.remove(employee_id, assignee_id)
+
+        if wanted != current:
+            await self._audit.append(
+                actor=str(caller.employee_id),
+                action="employee.assignment_grants",
+                target=f"employee:{employee_id}:count:{len(wanted)}",
+            )
+        return await self._grants.assignees_for(employee_id)
 
     async def set_my_avatar(self, caller: CurrentUser, data: bytes, content_type: str) -> Employee:
         """The employee uploads their own profile photo (image, ≤2 MB)."""

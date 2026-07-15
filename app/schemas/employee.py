@@ -45,6 +45,13 @@ class EmployeeRoleUpdate(BaseModel):
     role: Role
 
 
+class AssignmentGrantsUpdate(BaseModel):
+    """Admin/HR replacing who an employee may assign work to beyond their own
+    reports. The full desired list — anything omitted is revoked."""
+
+    assignee_ids: list[uuid.UUID] = Field(default_factory=list, max_length=100)
+
+
 class TrackingModeUpdate(BaseModel):
     """An employee toggling their own work/personal capture mode."""
 

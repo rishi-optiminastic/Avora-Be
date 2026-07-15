@@ -1,8 +1,9 @@
 """Task business rules.
 
 Reads are scoped in the repository. Writes are authorized here: you may assign a
-task only to someone within your visible scope (reuses the employee scope), and
-you may delete only a task you assigned (or as admin). No FastAPI objects here
+task only to yourself, to someone within your visible scope (reuses the employee
+scope), or to someone an admin granted you explicitly (`_can_assign_to`); and you
+may delete only a task you assigned (or as admin). No FastAPI objects here
 (Layering §4); every mutation is audited.
 """
 
@@ -17,6 +18,7 @@ from app.core.logging import get_logger
 from app.models.notification import NotificationKind, NotificationLevel
 from app.models.task import Task, TaskCadence, TaskStatus
 from app.models.task_comment import TaskComment
+from app.repositories.assignment_grant import AssignmentGrantRepository
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.task import TaskRepository
@@ -58,6 +60,7 @@ class TaskService:
         self,
         tasks: TaskRepository,
         employees: EmployeeRepository,
+        grants: AssignmentGrantRepository,
         entities: WorkEntityRepository,
         comments: TaskCommentRepository,
         audit: AuditRepository,
@@ -67,12 +70,30 @@ class TaskService:
     ) -> None:
         self._tasks = tasks
         self._employees = employees
+        self._grants = grants
         self._entities = entities
         self._comments = comments
         self._audit = audit
         self._notifications = notifications
         self._email = email
         self._llm = llm
+
+    async def _can_assign_to(self, caller: CurrentUser, assignee_id: uuid.UUID) -> bool:
+        """May this caller put a task on that person's plate?
+
+        Three ways to earn it, in order of cost:
+        1. It's your own work — anyone may plan a task for themselves.
+        2. You manage them: a manager/senior manager/HR/admin assigning to
+           someone inside their visible employee scope (Security rule 5.3).
+        3. An admin/HR granted you the edge explicitly, for the authority the
+           reporting tree can't express (see `AssignmentGrant`). The grant is
+           assign-only — it deliberately does not widen the read scope.
+        """
+        if assignee_id == caller.employee_id:
+            return True
+        if caller.is_manager and await self._employees.can_read(caller, assignee_id):
+            return True
+        return await self._grants.exists(caller.employee_id, assignee_id)
 
     async def _validate_project(self, project_id: uuid.UUID | None) -> None:
         if project_id is None:
@@ -130,14 +151,7 @@ class TaskService:
         return task
 
     async def create(self, caller: CurrentUser, payload: TaskCreate) -> Task:
-        # Managers/senior managers/HR/admin assign work to anyone in their scope.
-        # Everyone else may still create a task, but only for THEMSELVES — an
-        # individual contributor can plan their own work, not assign others'.
-        if not caller.is_manager and payload.assignee_id != caller.employee_id:
-            raise AuthorizationError()
-        # You may only assign a task to someone you can see (reports, department,
-        # anyone for admin/HR, or yourself) — reuses the employee scope.
-        if not await self._employees.can_read(caller, payload.assignee_id):
+        if not await self._can_assign_to(caller, payload.assignee_id):
             raise AuthorizationError()
         await self._validate_project(payload.project_id)
         await self._validate_parent(caller, payload.parent_task_id, task_id=None)
@@ -200,7 +214,7 @@ class TaskService:
         if not caller.is_manager:
             raise AuthorizationError()
         for item in payload.tasks:
-            if not await self._employees.can_read(caller, item.assignee_id):
+            if not await self._can_assign_to(caller, item.assignee_id):
                 raise AuthorizationError()
             await self._validate_project(item.project_id)
 
@@ -258,7 +272,7 @@ class TaskService:
                 raise AuthorizationError()
         else:
             # Reassignment / re-project must stay valid and within scope.
-            if payload.assignee_id is not None and not await self._employees.can_read(
+            if payload.assignee_id is not None and not await self._can_assign_to(
                 caller, payload.assignee_id
             ):
                 raise AuthorizationError()
@@ -331,9 +345,7 @@ class TaskService:
         )
         return task
 
-    async def appreciate(
-        self, caller: CurrentUser, task_id: uuid.UUID, note: str | None
-    ) -> Task:
+    async def appreciate(self, caller: CurrentUser, task_id: uuid.UUID, note: str | None) -> Task:
         """Send the assignee a kudos for completing a task. Manager (or the
         assigner) only, scoped, and only for tasks that are actually done.
 
