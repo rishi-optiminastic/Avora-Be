@@ -309,7 +309,7 @@ class PayrollService:
         worked = min(float(cal.working_days), present + paid)
         lop = max(0.0, float(cal.working_days) - worked)
         payable = max(0.0, float(cal.total_days) - lop)
-        prorated = prorate_breakdown(breakdown, payable, cal.total_days, cfg)
+        prorated = prorate_breakdown(breakdown, payable, cal.total_days)
         return PayrollLineRead(
             employee_id=employee.id,
             name=employee.full_name,

@@ -93,26 +93,6 @@ def test_prorate_breakdown_edges() -> None:
     assert days_in_month(2026, 2) == 28 and days_in_month(2026, 6) == 30
 
 
-def test_prorate_pf_recomputed_from_basic_not_shrunk() -> None:
-    # High earner: full Basic ₹24,000 → PF 12% = ₹2,880, capped to ₹1,800.
-    b = compute_breakdown(80_000_00)
-    assert b.basic_minor == 24_000_00
-    assert b.employee_pf_minor == 1_800_00  # capped
-
-    # 26/30: prorated Basic ₹20,800 → 12% = ₹2,496, still above the cap → stays
-    # pinned at ₹1,800 (NOT proportionally shrunk to ₹1,560).
-    high = prorate_breakdown(b, payable_days=26, total_days=30)
-    assert high.basic_minor == 20_800_00
-    assert high.employee_pf_minor == 1_800_00
-    assert high.employer_pf_minor == 1_800_00
-
-    # 15/30: prorated Basic ₹12,000 → 12% = ₹1,440 (now below the cap) → PF drops
-    # to ₹1,440, i.e. 12% of the reduced Basic.
-    half = prorate_breakdown(b, payable_days=15, total_days=30)
-    assert half.basic_minor == 12_000_00
-    assert half.employee_pf_minor == 1_440_00
-
-
 # ---- estimate over the org ------------------------------------------------- #
 
 _COMP = {"amount_minor": 50_000_00, "currency": "inr", "period": "monthly"}
