@@ -157,37 +157,46 @@ def attendance_ratio(payable_days: float, total_days: int) -> float:
 
 
 def prorate_breakdown(
-    breakdown: SalaryBreakdown, payable_days: float, total_days: int
+    breakdown: SalaryBreakdown,
+    payable_days: float,
+    total_days: int,
+    config: CalcConfig | None = None,
 ) -> SalaryBreakdown:
     """Prorate a full-month slip to the days actually paid (the reference method).
 
-    Every *earning* (Basic / HRA / Special / Gross / CTC) and *both* PF figures
-    scale by ``payable_days / total_days``; Professional Tax and Income Tax are
-    flat statutory monthly charges and are **not** prorated. Net is rebuilt from
-    the prorated lines, so it equals prorated-gross minus prorated-employee-PF
-    minus the flat statutory deductions. Reproduces the reference sheet exactly:
+    Every *earning* (Basic / HRA / Special / Gross / CTC) scales by
+    ``payable_days / total_days``. **PF is recomputed from the reduced Basic** —
+    ``min(pf_pct% of prorated Basic, pf_cap)`` — not shrunk proportionally, so a
+    high earner already at the cap (₹1,800) stays pinned there, not dropping.
+    Professional Tax and Income Tax are flat statutory monthly charges and are
+    **not** prorated. Net is rebuilt from the prorated lines. Reproduces the
+    reference sheet exactly:
 
         CTC ₹40,000, 26 of 30 days → Gross 33,419 · PF 1,248 · PT 200 (flat)
                                      → Net 31,971
     """
+    cfg = config or CalcConfig()
     ratio = attendance_ratio(payable_days, total_days)
 
     def scale(minor: int) -> int:
         return round(minor * ratio)
 
-    employee_pf = scale(breakdown.employee_pf_minor)
+    basic = scale(breakdown.basic_minor)
+    # PF tracks the reduced Basic (12% of prorated Basic, capped) — a fresh
+    # computation, not a proportional shrink of the full-month PF figure.
+    pf = min(round(basic * cfg.pf_pct / 100), cfg.pf_cap_minor)
     prof_tax = breakdown.professional_tax_minor  # flat statutory charge
     income_tax = breakdown.income_tax_minor  # flat monthly withholding
-    total_deduction = employee_pf + prof_tax + income_tax
+    total_deduction = pf + prof_tax + income_tax
     gross = scale(breakdown.gross_minor)
     return SalaryBreakdown(
         ctc_minor=scale(breakdown.ctc_minor),
-        basic_minor=scale(breakdown.basic_minor),
+        basic_minor=basic,
         hra_minor=scale(breakdown.hra_minor),
         special_allowance_minor=scale(breakdown.special_allowance_minor),
-        employer_pf_minor=scale(breakdown.employer_pf_minor),
+        employer_pf_minor=pf,
         gross_minor=gross,
-        employee_pf_minor=employee_pf,
+        employee_pf_minor=pf,
         professional_tax_minor=prof_tax,
         income_tax_minor=income_tax,
         total_deduction_minor=total_deduction,

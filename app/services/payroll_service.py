@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
+from app.core.config import Settings
 from app.core.exceptions import AuthorizationError, NotFoundError, ValidationError
 from app.core.payroll import (
     CalcConfig,
@@ -26,7 +27,9 @@ from app.core.payroll import (
     prorate_breakdown,
     weekdays_in_month,
 )
+from app.core.payroll_export import PayrollExportRow, build_payroll_xlsx
 from app.core.payslip_pdf import PayslipPdfData, render_payslip_pdf
+from app.core.pii_crypto import decrypt_pii
 from app.models.compensation import Compensation, PayPeriod
 from app.models.employee import Employee, Role
 from app.models.leave import LeaveType
@@ -117,6 +120,7 @@ class PayrollService:
         orgs: OrgSettingsRepository,
         email: EmailService,
         audit: AuditRepository,
+        settings: Settings,
     ) -> None:
         self._settings_repo = settings_repo
         self._runs = runs
@@ -130,6 +134,7 @@ class PayrollService:
         self._orgs = orgs
         self._email = email
         self._audit = audit
+        self._settings = settings
 
     # ---- settings ---------------------------------------------------------- #
     async def get_settings_model(self) -> PayrollSettings:
@@ -223,6 +228,59 @@ class PayrollService:
             lines=lines,
         )
 
+    async def export_xlsx(self, caller: CurrentUser, month: str | None) -> tuple[bytes, str]:
+        """HR/Admin: the month's payroll as an .xlsx — identity + bank details +
+        UAN + the LOP-adjusted salary breakdown, one row per employee. The account
+        number is decrypted only here, for the authorized export. Audited (5.7)."""
+        est = await self.estimate(caller, month)  # authorizes HR/Admin
+        ids = [line.employee_id for line in est.lines]
+        comps = await self._compensation.get_for_employees(ids)
+        employees = {e.id: e for e in await self._employees.all_in_scope(caller)}
+
+        rows: list[PayrollExportRow] = []
+        for line in est.lines:
+            comp = comps.get(line.employee_id)
+            emp = employees.get(line.employee_id)
+            account_number = (
+                decrypt_pii(self._settings, comp.account_number_encrypted)
+                if comp is not None and comp.account_number_encrypted
+                else ""
+            )
+            p = line.prorated
+            rows.append(
+                PayrollExportRow(
+                    employee=line.name,
+                    department=line.department or "",
+                    uan=(emp.uan_number or "") if emp is not None else "",
+                    account_holder=(comp.account_holder_name or "") if comp is not None else "",
+                    bank_name=(comp.bank_name or "") if comp is not None else "",
+                    account_number=account_number,
+                    ifsc=(comp.ifsc_code or "") if comp is not None else "",
+                    account_type=(
+                        comp.account_type.value if comp is not None and comp.account_type else ""
+                    ),
+                    present_days=line.present_days,
+                    payable_days=line.payable_days,
+                    total_days=line.total_days,
+                    basic=round(p.basic_minor / 100),
+                    hra=round(p.hra_minor / 100),
+                    special_allowance=round(p.special_allowance_minor / 100),
+                    gross=round(p.gross_minor / 100),
+                    provident_fund=round(p.employee_pf_minor / 100),
+                    professional_tax=round(p.professional_tax_minor / 100),
+                    income_tax=round(p.income_tax_minor / 100),
+                    total_deductions=round(p.total_deduction_minor / 100),
+                    net_pay=round(p.net_minor / 100),
+                )
+            )
+
+        year, m = _parse_month(est.month)
+        xlsx = build_payroll_xlsx(rows, month_label=_month_label(year, m), currency=est.currency)
+        await self._audit.append(
+            actor=str(caller.employee_id), action="payroll.export", target=f"month:{est.month}"
+        )
+        return xlsx, f"payroll-{est.month}.xlsx"
+
     async def _line_for(
         self,
         employee: Employee,
@@ -251,7 +309,7 @@ class PayrollService:
         worked = min(float(cal.working_days), present + paid)
         lop = max(0.0, float(cal.working_days) - worked)
         payable = max(0.0, float(cal.total_days) - lop)
-        prorated = prorate_breakdown(breakdown, payable, cal.total_days)
+        prorated = prorate_breakdown(breakdown, payable, cal.total_days, cfg)
         return PayrollLineRead(
             employee_id=employee.id,
             name=employee.full_name,

@@ -33,10 +33,15 @@ async def get_my_payslip(
     caller: CurrentUserDep,
     service: PayrollServiceDep,
     month: str | None = Query(default=None, description="YYYY-MM; defaults to the current month"),
+    employee_id: Annotated[
+        uuid.UUID | None,
+        Query(description="Whose live slip (self-or-HR/Admin); defaults to the caller"),
+    ] = None,
 ) -> PayslipRead:
-    """The caller's own LIVE slip for a month (recomputed; an HR preview before a
-    month is finalized). Released history lives under `/payroll/payslips`."""
-    return await service.my_slip(caller, None, month)
+    """A person's own LIVE slip for a month (recomputed; an HR preview before a
+    month is finalized). Self-or-HR: an employee sees only their own, HR/Admin may
+    pass any `employee_id`. Released history lives under `/payroll/payslips`."""
+    return await service.my_slip(caller, employee_id, month)
 
 
 @router.get("/payslips", response_model=list[PayslipSummaryRead])
@@ -75,6 +80,25 @@ async def download_payslip_pdf(
     return Response(
         content=pdf,
         media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+_XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+@router.get("/export")
+async def export_payroll_xlsx(
+    caller: CurrentUserDep,
+    service: PayrollServiceDep,
+    month: str | None = Query(default=None, description="YYYY-MM; defaults to the current month"),
+) -> Response:
+    """HR/Admin: download the month's payroll as an .xlsx (identity + bank details
+    + UAN + the LOP-adjusted salary breakdown, one row per employee)."""
+    xlsx, filename = await service.export_xlsx(caller, month)
+    return Response(
+        content=xlsx,
+        media_type=_XLSX_MEDIA_TYPE,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 

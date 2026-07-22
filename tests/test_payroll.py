@@ -93,6 +93,26 @@ def test_prorate_breakdown_edges() -> None:
     assert days_in_month(2026, 2) == 28 and days_in_month(2026, 6) == 30
 
 
+def test_prorate_pf_recomputed_from_basic_not_shrunk() -> None:
+    # High earner: full Basic ₹24,000 → PF 12% = ₹2,880, capped to ₹1,800.
+    b = compute_breakdown(80_000_00)
+    assert b.basic_minor == 24_000_00
+    assert b.employee_pf_minor == 1_800_00  # capped
+
+    # 26/30: prorated Basic ₹20,800 → 12% = ₹2,496, still above the cap → stays
+    # pinned at ₹1,800 (NOT proportionally shrunk to ₹1,560).
+    high = prorate_breakdown(b, payable_days=26, total_days=30)
+    assert high.basic_minor == 20_800_00
+    assert high.employee_pf_minor == 1_800_00
+    assert high.employer_pf_minor == 1_800_00
+
+    # 15/30: prorated Basic ₹12,000 → 12% = ₹1,440 (now below the cap) → PF drops
+    # to ₹1,440, i.e. 12% of the reduced Basic.
+    half = prorate_breakdown(b, payable_days=15, total_days=30)
+    assert half.basic_minor == 12_000_00
+    assert half.employee_pf_minor == 1_440_00
+
+
 # ---- estimate over the org ------------------------------------------------- #
 
 _COMP = {"amount_minor": 50_000_00, "currency": "inr", "period": "monthly"}
@@ -172,6 +192,34 @@ async def test_hr_can_read_estimate(
         "/api/v1/payroll/estimate?month=2026-06", headers=auth_headers(settings, hr)
     )
     assert resp.status_code == 200
+
+
+# ---- excel export ---------------------------------------------------------- #
+
+_XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+async def test_export_xlsx_hr_admin_only(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation",
+        json=_COMP,
+        headers=auth_headers(settings, seed.admin),
+    )
+    ok = await client.get(
+        "/api/v1/payroll/export?month=2026-06", headers=auth_headers(settings, seed.admin)
+    )
+    assert ok.status_code == 200
+    assert ok.headers["content-type"] == _XLSX_MEDIA_TYPE
+    assert ok.content[:2] == b"PK"  # xlsx is a zip archive
+    assert "payroll-2026-06.xlsx" in ok.headers["content-disposition"]
+
+    for actor in (seed.report, seed.manager, seed.outsider):
+        forbidden = await client.get(
+            "/api/v1/payroll/export?month=2026-06", headers=auth_headers(settings, actor)
+        )
+        assert forbidden.status_code == 403, f"{actor.work_email} must not export payroll"
 
 
 # ---- authorization: payroll is HR/Admin only (CLAUDE §9) ------------------- #

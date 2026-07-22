@@ -24,6 +24,11 @@ class PayPeriod(StrEnum):
     MONTHLY = "monthly"
 
 
+class AccountType(StrEnum):
+    SAVINGS = "savings"
+    CURRENT = "current"
+
+
 class Compensation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "compensations"
     __table_args__ = (UniqueConstraint("employee_id", name="uq_compensations_employee_id"),)
@@ -39,6 +44,15 @@ class Compensation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     period: Mapped[PayPeriod] = mapped_column(default=PayPeriod.ANNUAL)
     effective_date: Mapped[date | None] = mapped_column(Date, default=None)
     note: Mapped[str | None] = mapped_column(String(500), default=None)
+
+    # Bank details for salary disbursal. The account number is the sensitive PII,
+    # stored as Fernet ciphertext (Security rule 5.6); the rest are low-risk (a
+    # name / a public IFSC code) and kept in plaintext for querying/display.
+    account_holder_name: Mapped[str | None] = mapped_column(String(128), default=None)
+    bank_name: Mapped[str | None] = mapped_column(String(128), default=None)
+    account_number_encrypted: Mapped[str | None] = mapped_column(String(512), default=None)
+    ifsc_code: Mapped[str | None] = mapped_column(String(16), default=None)
+    account_type: Mapped[AccountType | None] = mapped_column(default=None)
 
     # Who last set it — audit trail at a glance (full trail in the audit log).
     updated_by: Mapped[uuid.UUID | None] = mapped_column(

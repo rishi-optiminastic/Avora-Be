@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.compensation import Compensation
+from app.models.compensation import AccountType, Compensation
 from app.schemas.compensation import CompensationWrite
 
 
@@ -51,6 +51,32 @@ class CompensationRepository:
         record.period = data.period
         record.effective_date = data.effective_date
         record.note = data.note
+        record.updated_by = updated_by
+        await self._session.flush()
+        return record
+
+    async def upsert_bank(
+        self,
+        employee_id: uuid.UUID,
+        *,
+        account_holder_name: str | None,
+        bank_name: str | None,
+        account_number_encrypted: str | None,
+        ifsc_code: str | None,
+        account_type: AccountType | None,
+        updated_by: uuid.UUID,
+    ) -> Compensation:
+        """Set only the bank fields (get-or-create), leaving pay untouched. The
+        account number arrives already encrypted; the repo never sees plaintext."""
+        record = await self.get_for_employee(employee_id)
+        if record is None:
+            record = Compensation(employee_id=employee_id)
+            self._session.add(record)
+        record.account_holder_name = account_holder_name
+        record.bank_name = bank_name
+        record.account_number_encrypted = account_number_encrypted
+        record.ifsc_code = ifsc_code
+        record.account_type = account_type
         record.updated_by = updated_by
         await self._session.flush()
         return record
