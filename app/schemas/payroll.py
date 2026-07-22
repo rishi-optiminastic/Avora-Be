@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -114,14 +114,25 @@ class SalaryBreakdownRead(BaseModel):
 
 
 class PayrollLineRead(BaseModel):
-    """One employee's payroll for the month (full slip + attendance proration)."""
+    """One employee's payroll for the month (full slip + attendance proration).
+
+    `breakdown` is the full-month entitlement; `prorated` is the same slip scaled
+    to `payable_days / total_days` (earnings + PF prorated, statutory taxes flat).
+    `total_days` is calendar days in the month (the proration denominator);
+    `working_days` is weekdays-minus-holidays and drives the present/absent split.
+    """
 
     employee_id: uuid.UUID
     name: str
     department: str | None
+    job_title: str | None
+    location: str | None
+    hire_date: date | None
     currency: str
     monthly_ctc_minor: int
     breakdown: SalaryBreakdownRead
+    prorated: SalaryBreakdownRead
+    total_days: int
     working_days: int
     present_days: float
     paid_leave_days: float
@@ -133,6 +144,7 @@ class PayrollLineRead(BaseModel):
 class PayrollEstimateRead(BaseModel):
     month: str  # YYYY-MM
     currency: str
+    total_days: int
     working_days: int
     employee_count: int
     total_ctc_minor: int
@@ -151,6 +163,8 @@ class PayslipRead(BaseModel):
     currency: str
     monthly_ctc_minor: int
     breakdown: SalaryBreakdownRead
+    prorated: SalaryBreakdownRead
+    total_days: int
     working_days: int
     present_days: float
     paid_leave_days: float
@@ -192,9 +206,14 @@ class ReleasedPayslipRead(BaseModel):
     employee_id: uuid.UUID
     employee_name: str
     department: str | None
+    job_title: str | None
+    location: str | None
+    hire_date: date | None
     currency: str
     monthly_ctc_minor: int
     breakdown: SalaryBreakdownRead
+    prorated: SalaryBreakdownRead
+    total_days: int
     working_days: int
     present_days: float
     paid_leave_days: float
@@ -210,9 +229,14 @@ class ReleasedPayslipRead(BaseModel):
             employee_id=m.employee_id,
             employee_name=m.employee_name,
             department=m.department,
+            job_title=m.job_title,
+            location=m.location,
+            hire_date=m.hire_date,
             currency=m.currency,
             monthly_ctc_minor=m.monthly_ctc_minor,
             breakdown=SalaryBreakdownRead(**m.breakdown),
+            prorated=SalaryBreakdownRead(**(m.prorated_breakdown or m.breakdown)),
+            total_days=m.total_days,
             working_days=m.working_days,
             present_days=m.present_days,
             paid_leave_days=m.paid_leave_days,

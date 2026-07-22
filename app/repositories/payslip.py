@@ -10,12 +10,42 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.payslip import Payslip, PayslipStatus
+
+
+@dataclass(frozen=True)
+class PayslipSnapshot:
+    """Everything frozen into one released (employee, month) payslip row.
+
+    A DTO so `upsert` stays a single argument rather than ~18 keyword params;
+    the service builds it once from a `PayrollLineRead`.
+    """
+
+    employee_id: uuid.UUID
+    period_month: str
+    employee_name: str
+    department: str | None
+    job_title: str | None
+    location: str | None
+    hire_date: date | None
+    currency: str
+    monthly_ctc_minor: int
+    gross_minor: int
+    net_minor: int
+    breakdown: dict[str, int]
+    prorated_breakdown: dict[str, int]
+    total_days: int
+    working_days: int
+    present_days: float
+    paid_leave_days: float
+    payable_days: float
+    finalized_by: uuid.UUID | None
 
 
 class PayslipRepository:
@@ -46,43 +76,31 @@ class PayslipRepository:
         )
         return rows.scalars().all()
 
-    async def upsert(
-        self,
-        *,
-        employee_id: uuid.UUID,
-        period_month: str,
-        employee_name: str,
-        department: str | None,
-        currency: str,
-        monthly_ctc_minor: int,
-        gross_minor: int,
-        net_minor: int,
-        breakdown: dict[str, int],
-        working_days: int,
-        present_days: float,
-        paid_leave_days: float,
-        payable_days: float,
-        finalized_by: uuid.UUID | None,
-    ) -> Payslip:
+    async def upsert(self, *, snapshot: PayslipSnapshot) -> Payslip:
         """Create or refresh the (employee, month) snapshot and (re)release it."""
-        record = await self.get(employee_id, period_month)
+        record = await self.get(snapshot.employee_id, snapshot.period_month)
         if record is None:
-            record = Payslip(employee_id=employee_id, period_month=period_month)
+            record = Payslip(employee_id=snapshot.employee_id, period_month=snapshot.period_month)
             self._session.add(record)
-        record.employee_name = employee_name
-        record.department = department
-        record.currency = currency
-        record.monthly_ctc_minor = monthly_ctc_minor
-        record.gross_minor = gross_minor
-        record.net_minor = net_minor
-        record.breakdown = breakdown
-        record.working_days = working_days
-        record.present_days = present_days
-        record.paid_leave_days = paid_leave_days
-        record.payable_days = payable_days
+        record.employee_name = snapshot.employee_name
+        record.department = snapshot.department
+        record.job_title = snapshot.job_title
+        record.location = snapshot.location
+        record.hire_date = snapshot.hire_date
+        record.currency = snapshot.currency
+        record.monthly_ctc_minor = snapshot.monthly_ctc_minor
+        record.gross_minor = snapshot.gross_minor
+        record.net_minor = snapshot.net_minor
+        record.breakdown = snapshot.breakdown
+        record.prorated_breakdown = snapshot.prorated_breakdown
+        record.total_days = snapshot.total_days
+        record.working_days = snapshot.working_days
+        record.present_days = snapshot.present_days
+        record.paid_leave_days = snapshot.paid_leave_days
+        record.payable_days = snapshot.payable_days
         record.status = PayslipStatus.RELEASED
         record.released_at = datetime.now(UTC)
-        record.finalized_by = finalized_by
+        record.finalized_by = snapshot.finalized_by
         await self._session.flush()
         return record
 

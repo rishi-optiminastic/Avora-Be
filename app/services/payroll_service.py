@@ -4,13 +4,14 @@ Payroll is an HR/Admin concern across the whole org (CLAUDE §5.3). Every public
 method authorizes HR/Admin and the heavy reads are scoped through the caller
 (`all_in_scope`), which for HR/Admin is the entire active org. Each employee's
 month is: derive the salary slip from their CTC (`app.core.payroll`), then
-prorate the net by attendance — present + paid-leave days over the month's
-working days (weekdays minus holidays). Sends are audited (rule 5.7).
+prorate it to the days actually paid. Proration is on **calendar days**: weekends
+and holidays are auto-paid, so only working days (weekdays minus holidays) that
+were neither present nor paid leave are loss-of-pay. `payable_days = total_days -
+lop_days`. Sends are audited (rule 5.7).
 """
 
 from __future__ import annotations
 
-import calendar
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -20,8 +21,9 @@ from app.core.exceptions import AuthorizationError, NotFoundError, ValidationErr
 from app.core.payroll import (
     CalcConfig,
     compute_breakdown,
+    days_in_month,
     monthly_ctc_minor,
-    prorate_net,
+    prorate_breakdown,
     weekdays_in_month,
 )
 from app.core.payslip_pdf import PayslipPdfData, render_payslip_pdf
@@ -39,7 +41,7 @@ from app.repositories.leave import LeaveRepository
 from app.repositories.org_settings import OrgSettingsRepository
 from app.repositories.payroll_run import PayrollRunRepository
 from app.repositories.payroll_settings import PayrollSettingsRepository
-from app.repositories.payslip import PayslipRepository
+from app.repositories.payslip import PayslipRepository, PayslipSnapshot
 from app.schemas.attendance_report import AttendanceMonthSummary
 from app.schemas.auth import CurrentUser
 from app.schemas.payroll import (
@@ -73,6 +75,7 @@ class _MonthCalendar:
     year: int
     month: int
     working_dates: frozenset[date]
+    total_days: int  # calendar days in the month (the proration denominator)
     timezone: str
 
     @property
@@ -212,6 +215,7 @@ class PayrollService:
         return PayrollEstimateRead(
             month=period,
             currency=s.currency,
+            total_days=cal.total_days,
             working_days=cal.working_days,
             employee_count=len(lines),
             total_ctc_minor=total_ctc,
@@ -242,20 +246,29 @@ class PayrollService:
             else 0
         )
         breakdown = compute_breakdown(mctc, cfg, month=cal.month)
-        payable = min(float(cal.working_days), present + paid)
-        net = prorate_net(breakdown.net_minor, payable, cal.working_days)
+        # Weekends and holidays are auto-paid: only working days that were neither
+        # present nor paid leave are loss-of-pay, so payable = calendar days - LOP.
+        worked = min(float(cal.working_days), present + paid)
+        lop = max(0.0, float(cal.working_days) - worked)
+        payable = max(0.0, float(cal.total_days) - lop)
+        prorated = prorate_breakdown(breakdown, payable, cal.total_days)
         return PayrollLineRead(
             employee_id=employee.id,
             name=employee.full_name,
             department=employee.department,
+            job_title=employee.job_title,
+            location=employee.location,
+            hire_date=employee.hire_date,
             currency=currency,
             monthly_ctc_minor=mctc,
             breakdown=SalaryBreakdownRead(**breakdown.__dict__),
+            prorated=SalaryBreakdownRead(**prorated.__dict__),
+            total_days=cal.total_days,
             working_days=cal.working_days,
             present_days=present,
             paid_leave_days=paid,
             payable_days=payable,
-            net_minor=net,
+            net_minor=prorated.net_minor,
             missing_compensation=comp is None,
         )
 
@@ -309,6 +322,8 @@ class PayrollService:
             currency=line.currency,
             monthly_ctc_minor=line.monthly_ctc_minor,
             breakdown=line.breakdown,
+            prorated=line.prorated,
+            total_days=line.total_days,
             working_days=line.working_days,
             present_days=line.present_days,
             paid_leave_days=line.paid_leave_days,
@@ -416,20 +431,27 @@ class PayrollService:
                 skipped += 1
                 continue
             snapshot = await self._payslips.upsert(
-                employee_id=line.employee_id,
-                period_month=est.month,
-                employee_name=line.name,
-                department=line.department,
-                currency=line.currency,
-                monthly_ctc_minor=line.monthly_ctc_minor,
-                gross_minor=line.breakdown.gross_minor,
-                net_minor=line.net_minor,
-                breakdown=line.breakdown.model_dump(),
-                working_days=line.working_days,
-                present_days=line.present_days,
-                paid_leave_days=line.paid_leave_days,
-                payable_days=line.payable_days,
-                finalized_by=finalized_by,
+                snapshot=PayslipSnapshot(
+                    employee_id=line.employee_id,
+                    period_month=est.month,
+                    employee_name=line.name,
+                    department=line.department,
+                    job_title=line.job_title,
+                    location=line.location,
+                    hire_date=line.hire_date,
+                    currency=line.currency,
+                    monthly_ctc_minor=line.monthly_ctc_minor,
+                    gross_minor=line.breakdown.gross_minor,
+                    net_minor=line.net_minor,
+                    breakdown=line.breakdown.model_dump(),
+                    prorated_breakdown=line.prorated.model_dump(),
+                    total_days=line.total_days,
+                    working_days=line.working_days,
+                    present_days=line.present_days,
+                    paid_leave_days=line.paid_leave_days,
+                    payable_days=line.payable_days,
+                    finalized_by=finalized_by,
+                )
             )
             released += 1
             employee = await self._employees.get(line.employee_id)
@@ -458,24 +480,20 @@ class PayrollService:
 
     def _pdf_data_from_snapshot(self, m: Payslip, org_name: str) -> PayslipPdfData:
         year, month = _parse_month(m.period_month)
-        b = m.breakdown
         return PayslipPdfData(
             org_name=org_name,
             employee_name=m.employee_name,
+            job_title=m.job_title,
             department=m.department,
+            location=m.location,
+            doj_label=m.hire_date.strftime("%d %b %Y") if m.hire_date else None,
             month_label=_month_label(year, month),
             currency=m.currency,
             monthly_ctc_minor=m.monthly_ctc_minor,
-            basic_minor=b.get("basic_minor", 0),
-            hra_minor=b.get("hra_minor", 0),
-            special_allowance_minor=b.get("special_allowance_minor", 0),
-            gross_minor=b.get("gross_minor", 0),
-            employee_pf_minor=b.get("employee_pf_minor", 0),
-            professional_tax_minor=b.get("professional_tax_minor", 0),
-            income_tax_minor=b.get("income_tax_minor", 0),
-            total_deduction_minor=b.get("total_deduction_minor", 0),
-            net_minor=b.get("net_minor", 0),
+            monthly=m.breakdown,
+            prorated=m.prorated_breakdown or m.breakdown,
             net_payable_minor=m.net_minor,
+            total_days=m.total_days,
             working_days=m.working_days,
             present_days=m.present_days,
             paid_leave_days=m.paid_leave_days,
@@ -535,7 +553,7 @@ class PayrollService:
             month_label=_month_label(year, m),
             currency=est.currency,
             lines=[
-                (line.name, line.net_minor, line.payable_days, line.working_days)
+                (line.name, line.net_minor, line.payable_days, line.total_days)
                 for line in est.lines
             ],
             total_net_minor=est.total_net_minor,
@@ -564,10 +582,12 @@ class PayrollService:
     ) -> _MonthCalendar:
         year, m = _parse_month(month)
         weekdays = weekdays_in_month(year, m, working_days_per_week)
-        last_day = calendar.monthrange(year, m)[1]
+        last_day = days_in_month(year, m)
         holidays = await self._holidays.dates_in_range(date(year, m, 1), date(year, m, last_day))
         working = frozenset(d for d in weekdays if d not in holidays)
-        return _MonthCalendar(year=year, month=m, working_dates=working, timezone=tz)
+        return _MonthCalendar(
+            year=year, month=m, working_dates=working, total_days=last_day, timezone=tz
+        )
 
     async def _leave_days_by_employee(
         self, employee_ids: list[uuid.UUID], cal: _MonthCalendar

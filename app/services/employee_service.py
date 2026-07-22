@@ -263,7 +263,7 @@ class EmployeeService:
                 raise ValidationError("Manager not found.")
         if "full_name" in fields:
             fields["full_name"] = str(fields["full_name"]).strip()
-        for key in ("department", "job_title", "timezone", "biometric_id"):
+        for key in ("department", "location", "job_title", "timezone", "biometric_id"):
             if key in fields and isinstance(fields[key], str):
                 fields[key] = fields[key].strip() or None
         await self._employees.admin_update_profile(employee, fields)
