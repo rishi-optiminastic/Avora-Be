@@ -174,6 +174,34 @@ async def test_hr_can_read_estimate(
     assert resp.status_code == 200
 
 
+# ---- excel export ---------------------------------------------------------- #
+
+_XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+async def test_export_xlsx_hr_admin_only(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation",
+        json=_COMP,
+        headers=auth_headers(settings, seed.admin),
+    )
+    ok = await client.get(
+        "/api/v1/payroll/export?month=2026-06", headers=auth_headers(settings, seed.admin)
+    )
+    assert ok.status_code == 200
+    assert ok.headers["content-type"] == _XLSX_MEDIA_TYPE
+    assert ok.content[:2] == b"PK"  # xlsx is a zip archive
+    assert "payroll-2026-06.xlsx" in ok.headers["content-disposition"]
+
+    for actor in (seed.report, seed.manager, seed.outsider):
+        forbidden = await client.get(
+            "/api/v1/payroll/export?month=2026-06", headers=auth_headers(settings, actor)
+        )
+        assert forbidden.status_code == 403, f"{actor.work_email} must not export payroll"
+
+
 # ---- authorization: payroll is HR/Admin only (CLAUDE §9) ------------------- #
 
 

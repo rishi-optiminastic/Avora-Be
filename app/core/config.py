@@ -118,6 +118,19 @@ class Settings(BaseSettings):
     def envsync_enabled(self) -> bool:
         return bool(self.envsync_fernet_key.strip())
 
+    # Bank-detail PII encryption ---------------------------------------------
+    # Fernet key(s) used to encrypt employee bank account numbers at rest
+    # (Security rule 5.6). Same format/rotation rules as `envsync_fernet_key`;
+    # if left empty it falls back to `envsync_fernet_key` so existing prod
+    # deployments encrypt out of the box. Generate a dedicated one with:
+    #   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+    bank_fernet_key: str = ""
+
+    @property
+    def bank_crypto_key(self) -> str:
+        """The active PII key: the dedicated one, else the Env Sync key."""
+        return self.bank_fernet_key.strip() or self.envsync_fernet_key.strip()
+
     # Transactional email (SendGrid) + invitations ---------------------------
     sendgrid_api_key: str = Field(default="change-me", min_length=8)
     email_from: str = "no-reply@signalor.ai"

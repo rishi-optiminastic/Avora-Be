@@ -12,7 +12,7 @@ import uuid
 from fastapi import APIRouter
 
 from app.core.deps import CompensationServiceDep, CurrentUserDep
-from app.schemas.compensation import CompensationRead, CompensationWrite
+from app.schemas.compensation import BankDetailsWrite, CompensationRead, CompensationWrite
 
 router = APIRouter(prefix="/employees", tags=["compensation"])
 
@@ -23,7 +23,7 @@ async def get_compensation(
     caller: CurrentUserDep,
     service: CompensationServiceDep,
 ) -> CompensationRead:
-    return CompensationRead.model_validate(await service.get(caller, employee_id))
+    return await service.get(caller, employee_id)
 
 
 @router.put("/{employee_id}/compensation", response_model=CompensationRead)
@@ -33,4 +33,15 @@ async def set_compensation(
     caller: CurrentUserDep,
     service: CompensationServiceDep,
 ) -> CompensationRead:
-    return CompensationRead.model_validate(await service.set(caller, employee_id, payload))
+    return await service.set(caller, employee_id, payload)
+
+
+@router.put("/{employee_id}/compensation/bank", response_model=CompensationRead)
+async def set_bank_details(
+    employee_id: uuid.UUID,
+    payload: BankDetailsWrite,
+    caller: CurrentUserDep,
+    service: CompensationServiceDep,
+) -> CompensationRead:
+    """Set salary-disbursal bank details — the person themselves or HR/Admin."""
+    return await service.set_bank(caller, employee_id, payload)

@@ -758,8 +758,9 @@ def get_compensation_service(
     compensation: Annotated[CompensationRepository, Depends(get_compensation_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    settings: SettingsDep,
 ) -> CompensationService:
-    return CompensationService(compensation, employees, audit)
+    return CompensationService(compensation, employees, audit, settings)
 
 
 def get_payroll_service(
@@ -775,6 +776,7 @@ def get_payroll_service(
     orgs: Annotated[OrgSettingsRepository, Depends(get_org_settings_repo)],
     email: Annotated[EmailService, Depends(get_email_service)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    settings: SettingsDep,
 ) -> PayrollService:
     return PayrollService(
         settings_repo,
@@ -789,6 +791,7 @@ def get_payroll_service(
         orgs,
         email,
         audit,
+        settings,
     )
 
 

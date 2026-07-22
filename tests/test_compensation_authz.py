@@ -99,3 +99,52 @@ async def test_unset_compensation_is_404(
         headers=auth_headers(settings, seed.admin),
     )
     assert resp.status_code == 404
+
+
+# ---- bank details: the person may set their own (unlike pay) --------------- #
+
+_BANK = {
+    "account_holder_name": "Rishi Patel",
+    "bank_name": "HDFC Bank",
+    "account_number": "50100123456789",
+    "ifsc_code": "hdfc0001234",  # lower-case in -> upper-case out
+    "account_type": "savings",
+}
+
+
+async def test_person_can_set_own_bank_and_number_round_trips(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    put = await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation/bank",
+        json=_BANK,
+        headers=auth_headers(settings, seed.report),  # the person themselves
+    )
+    assert put.status_code == 200
+    body = put.json()
+    assert body["account_holder_name"] == "Rishi Patel"
+    assert body["ifsc_code"] == "HDFC0001234"  # normalized upper-case
+    assert body["account_number"] == "50100123456789"  # decrypted round-trip
+    assert body["account_type"] == "savings"
+
+
+async def test_outsider_cannot_set_someone_elses_bank(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    resp = await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation/bank",
+        json=_BANK,
+        headers=auth_headers(settings, seed.outsider),
+    )
+    assert resp.status_code == 403
+
+
+async def test_bad_ifsc_is_rejected(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    resp = await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation/bank",
+        json={**_BANK, "ifsc_code": "nope"},
+        headers=auth_headers(settings, seed.report),
+    )
+    assert resp.status_code == 422
