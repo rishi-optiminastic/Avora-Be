@@ -2,7 +2,9 @@
 
 Given a monthly **CTC** (the stored compensation amount), derive the full Indian
 salary slip — Basic / HRA / Special Allowance / employer & employee PF /
-Professional Tax / income-tax TDS / Net — and prorate the net by attendance.
+Professional Tax / income-tax TDS / Net — then prorate it to the days actually
+paid: each earning and PF scales by ``payable_days / total_days`` (calendar days),
+while Professional Tax and Income Tax stay flat as the statutory charges they are.
 Everything is in integer **minor units** (paise/cents); we never do float money
 for the stored amounts (only ratios). The defaults reproduce the reference
 structure exactly:
@@ -119,9 +121,7 @@ def compute_breakdown(
     hra = round(basic * cfg.hra_pct / 100)
     special = gross - basic - hra  # the balancing figure
     prof_tax = cfg.professional_tax_feb_minor if month == 2 else cfg.professional_tax_minor
-    income_tax = (
-        round(compute_annual_income_tax(gross * 12) / 12) if cfg.deduct_income_tax else 0
-    )
+    income_tax = round(compute_annual_income_tax(gross * 12) / 12) if cfg.deduct_income_tax else 0
     total_deduction = pf + prof_tax + income_tax
     net = gross - total_deduction
     return SalaryBreakdown(
@@ -144,12 +144,55 @@ def monthly_ctc_minor(amount_minor: int, *, is_annual: bool) -> int:
     return round(amount_minor / 12) if is_annual else amount_minor
 
 
-def prorate_net(net_minor: int, payable_days: float, working_days: int) -> int:
-    """Scale net by attendance: net * (payable / working), clamped to [0, net]."""
-    if working_days <= 0:
-        return net_minor
-    ratio = min(1.0, max(0.0, payable_days / working_days))
-    return round(net_minor * ratio)
+def days_in_month(year: int, month: int) -> int:
+    """Total calendar days in the month — the proration denominator."""
+    return calendar.monthrange(year, month)[1]
+
+
+def attendance_ratio(payable_days: float, total_days: int) -> float:
+    """Payable share of the month, clamped to [0, 1]. Full month if no days."""
+    if total_days <= 0:
+        return 1.0
+    return min(1.0, max(0.0, payable_days / total_days))
+
+
+def prorate_breakdown(
+    breakdown: SalaryBreakdown, payable_days: float, total_days: int
+) -> SalaryBreakdown:
+    """Prorate a full-month slip to the days actually paid (the reference method).
+
+    Every *earning* (Basic / HRA / Special / Gross / CTC) and *both* PF figures
+    scale by ``payable_days / total_days``; Professional Tax and Income Tax are
+    flat statutory monthly charges and are **not** prorated. Net is rebuilt from
+    the prorated lines, so it equals prorated-gross minus prorated-employee-PF
+    minus the flat statutory deductions. Reproduces the reference sheet exactly:
+
+        CTC ₹40,000, 26 of 30 days → Gross 33,419 · PF 1,248 · PT 200 (flat)
+                                     → Net 31,971
+    """
+    ratio = attendance_ratio(payable_days, total_days)
+
+    def scale(minor: int) -> int:
+        return round(minor * ratio)
+
+    employee_pf = scale(breakdown.employee_pf_minor)
+    prof_tax = breakdown.professional_tax_minor  # flat statutory charge
+    income_tax = breakdown.income_tax_minor  # flat monthly withholding
+    total_deduction = employee_pf + prof_tax + income_tax
+    gross = scale(breakdown.gross_minor)
+    return SalaryBreakdown(
+        ctc_minor=scale(breakdown.ctc_minor),
+        basic_minor=scale(breakdown.basic_minor),
+        hra_minor=scale(breakdown.hra_minor),
+        special_allowance_minor=scale(breakdown.special_allowance_minor),
+        employer_pf_minor=scale(breakdown.employer_pf_minor),
+        gross_minor=gross,
+        employee_pf_minor=employee_pf,
+        professional_tax_minor=prof_tax,
+        income_tax_minor=income_tax,
+        total_deduction_minor=total_deduction,
+        net_minor=gross - total_deduction,
+    )
 
 
 def weekdays_in_month(year: int, month: int, working_days_per_week: int = 5) -> list[date]:

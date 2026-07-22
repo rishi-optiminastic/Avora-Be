@@ -123,9 +123,9 @@ def invite_email(
 
 
 def _digest_row(
-    name: str, net_minor: int, payable_days: float, working_days: int, currency: str
+    name: str, net_minor: int, payable_days: float, total_days: int, currency: str
 ) -> str:
-    days = f"{payable_days:g}/{working_days}"
+    days = f"{payable_days:g}/{total_days}"
     return (
         f'<tr><td style="padding:9px 0;border-top:1px solid {_LINE};font-size:13px;color:{_INK};">{name}</td>'
         f'<td style="padding:9px 0;border-top:1px solid {_LINE};font-size:12px;color:{_MUTED};text-align:center;">{days}</td>'
@@ -143,11 +143,11 @@ def payroll_digest_email(
 ) -> tuple[str, str]:
     """Render the (subject, html) for the monthly HR payroll digest.
 
-    Each line is (employee_name, net_minor, payable_days, working_days).
+    Each line is (employee_name, net_minor, payable_days, total_days).
     """
     subject = f"Payroll estimate — {month_label}"
     rows = "".join(
-        _digest_row(name, net, payable, working, currency) for name, net, payable, working in lines
+        _digest_row(name, net, payable, total, currency) for name, net, payable, total in lines
     )
     content = f"""\
 <div style="font-size:11px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:{_MUTED};">

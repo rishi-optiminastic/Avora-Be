@@ -51,8 +51,11 @@ async def test_my_slip_returns_own_pay(
     # Full-month slip is attendance-independent and matches the reference image.
     assert slip["breakdown"]["net_minor"] == 46_200_00
     assert slip["missing_compensation"] is False
-    # No work sessions seeded -> no payable days -> prorated take-home is zero.
-    assert slip["net_minor"] == 0
+    # No work sessions seeded -> working days are loss-of-pay, but weekends and
+    # holidays stay paid, so the prorated take-home is a fraction, not zero.
+    assert slip["net_minor"] == slip["prorated"]["net_minor"]
+    assert 0 < slip["net_minor"] < 46_200_00
+    assert slip["payable_days"] == slip["total_days"] - slip["working_days"]
 
 
 async def test_my_slip_matches_estimate_line(
@@ -81,6 +84,7 @@ async def test_my_slip_matches_estimate_line(
     ).json()
     assert slip["monthly_ctc_minor"] == line["monthly_ctc_minor"]
     assert slip["breakdown"] == line["breakdown"]
+    assert slip["prorated"] == line["prorated"]
     assert slip["net_minor"] == line["net_minor"]
     assert slip["payable_days"] == line["payable_days"]
 

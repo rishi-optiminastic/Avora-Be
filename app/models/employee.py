@@ -55,6 +55,8 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     work_email: Mapped[str] = mapped_column(String(320), index=True)
     full_name: Mapped[str] = mapped_column(String(256))
     department: Mapped[str | None] = mapped_column(String(128), default=None)
+    # Office/work location (e.g. "Mumbai"), HR/admin-owned; shown on the payslip.
+    location: Mapped[str | None] = mapped_column(String(128), default=None)
 
     # Self-service profile fields (display/preference only — never privilege).
     job_title: Mapped[str | None] = mapped_column(String(128), default=None)

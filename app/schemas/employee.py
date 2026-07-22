@@ -22,6 +22,7 @@ class EmployeeRead(ORMModel):
     work_email: str
     full_name: str
     department: str | None
+    location: str | None
     job_title: str | None
     timezone: str | None
     manager_id: uuid.UUID | None
@@ -73,6 +74,7 @@ class AdminProfileUpdate(BaseModel):
 
     full_name: str = Field(min_length=1, max_length=256)
     department: str | None = Field(default=None, max_length=128)
+    location: str | None = Field(default=None, max_length=128)
     job_title: str | None = Field(default=None, max_length=128)
     manager_id: uuid.UUID | None = None
     timezone: str | None = Field(default=None, max_length=64)

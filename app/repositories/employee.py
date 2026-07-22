@@ -76,6 +76,7 @@ class EmployeeRepository:
         {
             "full_name",
             "department",
+            "location",
             "job_title",
             "manager_id",
             "timezone",

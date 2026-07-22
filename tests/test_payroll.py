@@ -16,7 +16,8 @@ from app.core.config import Settings
 from app.core.payroll import (
     CalcConfig,
     compute_breakdown,
-    prorate_net,
+    days_in_month,
+    prorate_breakdown,
     weekdays_in_month,
     working_days_between,
 )
@@ -63,12 +64,33 @@ def test_breakdown_honours_config_knobs() -> None:
     assert b.professional_tax_minor == 0
 
 
-def test_prorate_net_by_attendance() -> None:
-    assert prorate_net(46_200_00, 22, 22) == 46_200_00  # full attendance
-    assert prorate_net(46_200_00, 20, 22) == 42_000_00  # 2 absent of 22
-    assert prorate_net(46_200_00, 0, 22) == 0  # fully absent
-    assert prorate_net(46_200_00, 30, 22) == 46_200_00  # capped at full
-    assert prorate_net(46_200_00, 10, 0) == 46_200_00  # no working days -> full
+def test_prorate_breakdown_matches_reference_sheet() -> None:
+    # The reference "Salary Breakdown" sheet: ₹40,000/mo CTC, 26 of 30 days paid.
+    b = compute_breakdown(40_000_00)
+    assert b.gross_minor == 38_560_00  # full-month gross
+    assert b.net_minor == 36_920_00  # full-month net (no TDS at this income)
+
+    p = prorate_breakdown(b, payable_days=26, total_days=30)
+    # Earnings + both PF figures scale by 26/30.
+    assert p.basic_minor == 10_400_00
+    assert p.hra_minor == 5_200_00
+    assert p.special_allowance_minor == 17_818_67  # 20,560 * 26/30, to the paise
+    assert p.gross_minor == 33_418_67  # displays as ₹33,419 (rounded)
+    assert p.employee_pf_minor == 1_248_00
+    # Professional tax stays FLAT — it is not attendance-linked.
+    assert p.professional_tax_minor == 200_00
+    assert p.income_tax_minor == 0
+    assert p.total_deduction_minor == 1_448_00
+    assert p.net_minor == 31_970_67  # displays as ₹31,971 (rounded)
+
+
+def test_prorate_breakdown_edges() -> None:
+    b = compute_breakdown(40_000_00)
+    assert prorate_breakdown(b, 30, 30).net_minor == b.net_minor  # full month
+    assert prorate_breakdown(b, 0, 30).gross_minor == 0  # nothing payable
+    assert prorate_breakdown(b, 40, 30).net_minor == b.net_minor  # capped at full
+    assert prorate_breakdown(b, 10, 0).net_minor == b.net_minor  # no days -> full
+    assert days_in_month(2026, 2) == 28 and days_in_month(2026, 6) == 30
 
 
 # ---- estimate over the org ------------------------------------------------- #
@@ -108,6 +130,7 @@ async def test_estimate_computes_slip_and_total(
     assert resp.status_code == 200
     body = resp.json()
     assert body["currency"] == "INR"
+    assert body["total_days"] == 30  # June 2026 is a 30-day month
     assert body["working_days"] > 0
     assert body["employee_count"] == len(body["lines"])
     assert body["total_net_minor"] == sum(line["net_minor"] for line in body["lines"])
@@ -117,8 +140,11 @@ async def test_estimate_computes_slip_and_total(
     assert report_line["monthly_ctc_minor"] == 50_000_00
     assert report_line["breakdown"]["net_minor"] == 46_200_00
     assert report_line["missing_compensation"] is False
-    # No work sessions seeded -> no payable days -> prorated net is zero.
-    assert report_line["net_minor"] == 0
+    # No work sessions seeded -> every working day is loss-of-pay, but weekends and
+    # holidays are still paid, so the prorated take-home is a fraction, not zero.
+    assert report_line["net_minor"] == report_line["prorated"]["net_minor"]
+    assert 0 < report_line["net_minor"] < 46_200_00
+    assert report_line["payable_days"] == 30 - report_line["working_days"]
 
     outsider_line = next(
         line for line in body["lines"] if line["employee_id"] == str(seed.outsider.id)
