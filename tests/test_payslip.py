@@ -19,27 +19,38 @@ _MONTH = "2026-06"
 
 
 def test_render_payslip_pdf_produces_a_pdf() -> None:
+    monthly = {
+        "ctc_minor": 50_000_00,
+        "basic_minor": 15_000_00,
+        "hra_minor": 7_500_00,
+        "special_allowance_minor": 25_700_00,
+        "employer_pf_minor": 1_800_00,
+        "gross_minor": 48_200_00,
+        "employee_pf_minor": 1_800_00,
+        "professional_tax_minor": 200_00,
+        "income_tax_minor": 0,  # no TDS on the reference ₹50k slip
+        "total_deduction_minor": 2_000_00,
+        "net_minor": 46_200_00,
+    }
+    prorated = {**monthly, "net_minor": 42_000_00}
     data = PayslipPdfData(
         org_name="Optiminastic",
         employee_name="Rishi Patel",
+        job_title="Software Engineer",
         department="Engineering",
+        location="Mumbai",
+        doj_label="12 Jan 2024",
         month_label="June 2026",
         currency="INR",
         monthly_ctc_minor=50_000_00,
-        basic_minor=15_000_00,
-        hra_minor=7_500_00,
-        special_allowance_minor=25_700_00,
-        gross_minor=48_200_00,
-        employee_pf_minor=1_800_00,
-        professional_tax_minor=200_00,
-        income_tax_minor=0,  # no TDS on the reference ₹50k slip (deductions = PF + PT)
-        total_deduction_minor=2_000_00,
-        net_minor=46_200_00,
+        monthly=monthly,
+        prorated=prorated,
         net_payable_minor=42_000_00,
+        total_days=30,
         working_days=22,
         present_days=20.0,
         paid_leave_days=0.0,
-        payable_days=20.0,
+        payable_days=28.0,
         generated_label="30 Jun 2026",
     )
     pdf = render_payslip_pdf(data)

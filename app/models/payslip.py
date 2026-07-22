@@ -12,12 +12,13 @@ is self-contained and never needs a join to render.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from enum import StrEnum
 
 from sqlalchemy import (
     JSON,
     BigInteger,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -53,16 +54,22 @@ class Payslip(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Identity snapshot so the slip renders without a join to `employees`.
     employee_name: Mapped[str] = mapped_column(String(256), default="")
     department: Mapped[str | None] = mapped_column(String(256), default=None)
+    job_title: Mapped[str | None] = mapped_column(String(128), default=None)
+    location: Mapped[str | None] = mapped_column(String(128), default=None)
+    hire_date: Mapped[date | None] = mapped_column(Date, default=None)
 
     currency: Mapped[str] = mapped_column(String(3), default="INR")
     monthly_ctc_minor: Mapped[int] = mapped_column(BigInteger, default=0)
     gross_minor: Mapped[int] = mapped_column(BigInteger, default=0)
     net_minor: Mapped[int] = mapped_column(BigInteger, default=0)  # prorated take-home
 
-    # The full salary breakdown (SalaryBreakdownRead fields) frozen at release time.
+    # The full-month salary breakdown and its prorated counterpart (both are
+    # SalaryBreakdownRead fields), frozen at release time.
     breakdown: Mapped[dict[str, int]] = mapped_column(JSON, default=dict)
+    prorated_breakdown: Mapped[dict[str, int]] = mapped_column(JSON, default=dict)
 
-    working_days: Mapped[int] = mapped_column(default=0)
+    total_days: Mapped[int] = mapped_column(default=0)  # calendar days (proration base)
+    working_days: Mapped[int] = mapped_column(default=0)  # weekdays minus holidays
     present_days: Mapped[float] = mapped_column(Float, default=0.0)
     paid_leave_days: Mapped[float] = mapped_column(Float, default=0.0)
     payable_days: Mapped[float] = mapped_column(Float, default=0.0)
