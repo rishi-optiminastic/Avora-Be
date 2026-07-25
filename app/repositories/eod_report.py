@@ -103,6 +103,19 @@ class EodReportRepository:
         )
         return rows.scalars().all()
 
+    async def list_drafts_on(self, report_date: str) -> Sequence[EodReport]:
+        """Drafts for exactly `report_date` (local YYYY-MM-DD) still awaiting
+        review — used to send a single day without touching earlier backlog."""
+        rows = await self._session.execute(
+            select(EodReport)
+            .where(
+                EodReport.status == EodStatus.DRAFT,
+                EodReport.report_date == report_date,
+            )
+            .order_by(EodReport.employee_id)
+        )
+        return rows.scalars().all()
+
     async def list_drafts_through(self, through_date: str) -> Sequence[EodReport]:
         """Drafts for `report_date` on or before `through_date` (local YYYY-MM-DD)
         still awaiting review — the auto-send set. ISO dates sort lexicographically,

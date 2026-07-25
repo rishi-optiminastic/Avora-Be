@@ -308,6 +308,42 @@ async def test_auto_send_respects_the_6pm_window(
     assert all(r.status is EodStatus.SENT for r in rows)
 
 
+async def test_send_drafts_for_date_sends_only_that_day(
+    db: AsyncSession, seed: _Seed, settings: Settings
+) -> None:
+    tz = ZoneInfo("Asia/Kolkata")
+    now = datetime.now(UTC)
+    local = datetime(2026, 6, 29, 19, 0, tzinfo=tz)
+    today = local.date().isoformat()
+    yesterday = (local.date() - timedelta(days=1)).isoformat()
+    for report_date in (today, yesterday):
+        db.add(
+            EodReport(
+                employee_id=seed.report.id,
+                report_date=report_date,
+                status=EodStatus.DRAFT,
+                summary="x",
+                highlights={},
+            )
+        )
+    await db.commit()
+
+    service = _build_service(db, settings, llm=_StubLlm(), email=_CapturingEmail())
+
+    # Only today's draft is flushed; the earlier-day backlog is left untouched.
+    assert await service.send_drafts_for_date(today, now) == 1
+    rows = {
+        r.report_date: r.status
+        for r in (
+            await db.execute(select(EodReport).where(EodReport.employee_id == seed.report.id))
+        )
+        .scalars()
+        .all()
+    }
+    assert rows[today] is EodStatus.SENT
+    assert rows[yesterday] is EodStatus.DRAFT
+
+
 async def test_draft_notice_tells_employee_the_auto_send_time(
     db: AsyncSession, seed: _Seed, settings: Settings
 ) -> None:

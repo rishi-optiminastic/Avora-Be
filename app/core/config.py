@@ -131,10 +131,26 @@ class Settings(BaseSettings):
         """The active PII key: the dedicated one, else the Env Sync key."""
         return self.bank_fernet_key.strip() or self.envsync_fernet_key.strip()
 
-    # Transactional email (SendGrid) + invitations ---------------------------
+    # Transactional email + invitations --------------------------------------
+    # Provider switch: "sendgrid" (HTTP API) or "smtp" (e.g. Gmail). The SMTP_*
+    # fields apply only when email_provider == "smtp"; sendgrid_api_key only when
+    # it is "sendgrid". Everything goes through EmailService, so switching the
+    # provider needs no call-site changes.
+    email_provider: str = "sendgrid"
     sendgrid_api_key: str = Field(default="change-me", min_length=8)
     email_from: str = "no-reply@signalor.ai"
     email_from_name: str = "Avora"
+    # SMTP transport (used when email_provider == "smtp").
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_starttls: bool = True
+
+    @property
+    def uses_smtp(self) -> bool:
+        return self.email_provider.strip().lower() == "smtp"
+
     # Where invite links point (the Next.js app), e.g. {app}/invite/<token>.
     app_base_url: str = "http://localhost:3000"
     invite_token_pepper: str = Field(default="change-me", min_length=8)
@@ -301,11 +317,18 @@ class Settings(BaseSettings):
             ("AGENT_TOKEN_PEPPER", self.agent_token_pepper),
             ("HR_WEBHOOK_SECRET", self.hr_webhook_secret),
             ("BIOMETRIC_WEBHOOK_SECRET", self.biometric_webhook_secret),
-            ("SENDGRID_API_KEY", self.sendgrid_api_key),
             ("INVITE_TOKEN_PEPPER", self.invite_token_pepper),
         ):
             if value == "change-me":
                 problems.append(f"{name} still has its placeholder value")
+        # Validate only the transport that is actually in use.
+        if self.uses_smtp:
+            if not self.smtp_host:
+                problems.append("SMTP_HOST must be set when EMAIL_PROVIDER=smtp")
+            if not self.smtp_username:
+                problems.append("SMTP_USERNAME must be set when EMAIL_PROVIDER=smtp")
+        elif self.sendgrid_api_key == "change-me":
+            problems.append("SENDGRID_API_KEY still has its placeholder value")
         if self.jwt_algorithm.lower() == "none":
             problems.append("JWT 'none' algorithm is forbidden")
         if problems:

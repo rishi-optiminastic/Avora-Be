@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from httpx import AsyncClient
@@ -12,7 +13,8 @@ from app.schemas.monitoring import AttendanceStatus
 from tests.conftest import _Seed, auth_headers
 
 # 09:00 start, 15m buffer (on-time ≤ 09:15), +30m reg window (≤ 09:45),
-# full ≥ 480m, half < 240m. UTC tz so test times are unambiguous.
+# full ≥ 480m (15m hours grace ⇒ effective ≥ 465m), half < 240m.
+# UTC tz so test times are unambiguous.
 _POLICY = PolicySpec(
     work_start_minute=540,
     work_end_minute=1080,
@@ -20,6 +22,7 @@ _POLICY = PolicySpec(
     regularization_window_minutes=30,
     full_day_min_minutes=480,
     half_day_min_minutes=240,
+    full_day_grace_minutes=15,
     monthly_regularizations=2,
     working_days_per_week=5,
     timezone="UTC",
@@ -79,6 +82,29 @@ def test_too_late_is_half_day() -> None:
 
 def test_too_few_hours_is_half_day() -> None:
     v = classify_day(login_at=_at(9, 0), worked_minutes=120, regularized=False, policy=_POLICY)
+    assert v.status is AttendanceStatus.HALF_DAY
+    assert v.early_logout is True
+
+
+def test_hours_grace_band_near_miss_is_full_day() -> None:
+    # On time, worked 465m — 15m short of the 480m bar but inside the grace band.
+    # Before the grace band this fell straight to half day (the one-minute cliff).
+    v = classify_day(login_at=_at(9, 5), worked_minutes=465, regularized=False, policy=_POLICY)
+    assert v.status is AttendanceStatus.FULL_DAY
+    assert v.early_logout is False
+
+
+def test_hours_grace_band_just_below_is_early_logout() -> None:
+    # 464m is one minute below the graced 465m cutoff — still a full-day miss.
+    v = classify_day(login_at=_at(9, 5), worked_minutes=464, regularized=False, policy=_POLICY)
+    assert v.status is AttendanceStatus.HALF_DAY
+    assert v.early_logout is True
+
+
+def test_hours_grace_zero_restores_hard_cutoff() -> None:
+    # With the grace band off, the pre-fix behaviour holds: 479m ⇒ not a full day.
+    strict = replace(_POLICY, full_day_grace_minutes=0)
+    v = classify_day(login_at=_at(9, 5), worked_minutes=479, regularized=False, policy=strict)
     assert v.status is AttendanceStatus.HALF_DAY
     assert v.early_logout is True
 

@@ -39,6 +39,7 @@ class AttendancePolicyService:
             regularization_window_minutes=p.regularization_window_minutes,
             full_day_min_minutes=p.full_day_min_minutes,
             half_day_min_minutes=p.half_day_min_minutes,
+            full_day_grace_minutes=p.full_day_grace_minutes,
             monthly_regularizations=p.monthly_regularizations,
             working_days_per_week=p.working_days_per_week,
             timezone=p.timezone,

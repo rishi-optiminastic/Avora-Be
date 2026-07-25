@@ -26,6 +26,7 @@ class AttendancePolicyRead(BaseModel):
     regularization_window_minutes: int
     full_day_min_minutes: int
     half_day_min_minutes: int
+    full_day_grace_minutes: int
     monthly_regularizations: int
     working_days_per_week: int
     timezone: str
@@ -39,6 +40,7 @@ class AttendancePolicyRead(BaseModel):
             regularization_window_minutes=m.regularization_window_minutes,
             full_day_min_minutes=m.full_day_min_minutes,
             half_day_min_minutes=m.half_day_min_minutes,
+            full_day_grace_minutes=m.full_day_grace_minutes,
             monthly_regularizations=m.monthly_regularizations,
             working_days_per_week=m.working_days_per_week,
             timezone=m.timezone,
@@ -52,6 +54,7 @@ class AttendancePolicyUpdate(BaseModel):
     regularization_window_minutes: int | None = Field(default=None, ge=0, le=240)
     full_day_min_minutes: int | None = Field(default=None, ge=0, le=1440)
     half_day_min_minutes: int | None = Field(default=None, ge=0, le=1440)
+    full_day_grace_minutes: int | None = Field(default=None, ge=0, le=240)
     monthly_regularizations: int | None = Field(default=None, ge=0, le=31)
     working_days_per_week: int | None = Field(default=None, ge=1, le=7)
     timezone: str | None = Field(default=None, max_length=64)
