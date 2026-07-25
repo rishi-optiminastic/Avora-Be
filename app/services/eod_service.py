@@ -448,15 +448,29 @@ class EodService:
         if minutes < sched.send_minutes:
             return 0
         overdue = await self._reports.list_drafts_through(local_dt.date().isoformat())
-        if not overdue:
+        return await self._send_drafts(overdue, now)
+
+    async def send_drafts_for_date(self, report_date: str, now: datetime) -> int:
+        """Send only the drafts dated exactly `report_date` (local YYYY-MM-DD),
+        leaving any earlier-day backlog untouched. Used by the one-off "send just
+        today" admin path; shares the batched recipient resolution + send with
+        `auto_send_due`."""
+        drafts = await self._reports.list_drafts_on(report_date)
+        return await self._send_drafts(drafts, now)
+
+    async def _send_drafts(self, drafts: Sequence[EodReport], now: datetime) -> int:
+        """Approve + deliver a batch of drafts. Recipients are resolved in bulk up
+        front (admins once, all owners + their managers in two batched lookups) —
+        no per-report DB calls. Returns the count sent."""
+        if not drafts:
             return 0
         admins = await self._employees.list_by_role(Role.ADMIN)
-        owners = await self._employees.get_many([r.employee_id for r in overdue])
+        owners = await self._employees.get_many([r.employee_id for r in drafts])
         managers = await self._employees.get_many(
             [e.manager_id for e in owners.values() if e.manager_id is not None]
         )
         sent = 0
-        for report in overdue:
+        for report in drafts:
             report.status = EodStatus.APPROVED
             report.approved_at = now
             employee = owners.get(report.employee_id)

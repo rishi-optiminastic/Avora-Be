@@ -1,14 +1,19 @@
-"""Transactional email via SendGrid.
+"""Transactional email via SendGrid (HTTP API) or SMTP (e.g. Gmail).
 
-External call → lives in the service layer (Layering §4). The API key comes
-from Settings only, and we never log the key, recipient payload, or message
-body (Security rule 5.6) — only a generic failure with the HTTP status.
+The transport is selected by `Settings.email_provider`; every caller uses the
+same `send()` surface. External call → lives in the service layer (Layering §4).
+Credentials come from Settings only, and we never log the key/password, recipient
+payload, or message body (Security rule 5.6) — only a generic failure.
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import smtplib
 from dataclasses import dataclass
+from email.message import EmailMessage
+from email.utils import formataddr
 
 import httpx
 
@@ -56,6 +61,20 @@ class EmailService:
         html: str,
         attachments: list[EmailAttachment] | None = None,
     ) -> None:
+        """Deliver one HTML email through the configured provider."""
+        if self._settings.uses_smtp:
+            await self._send_smtp(to=to, subject=subject, html=html, attachments=attachments)
+        else:
+            await self._send_sendgrid(to=to, subject=subject, html=html, attachments=attachments)
+
+    async def _send_sendgrid(
+        self,
+        *,
+        to: str,
+        subject: str,
+        html: str,
+        attachments: list[EmailAttachment] | None = None,
+    ) -> None:
         payload: dict[str, object] = {
             "personalizations": [{"to": [{"email": to}]}],
             "from": {
@@ -87,6 +106,45 @@ class EmailService:
         if response.status_code >= 400:
             # Status only — never echo the body/key (it can contain PII/secrets).
             raise EmailError(f"email send failed ({response.status_code})")
+
+    async def _send_smtp(
+        self,
+        *,
+        to: str,
+        subject: str,
+        html: str,
+        attachments: list[EmailAttachment] | None = None,
+    ) -> None:
+        message = EmailMessage()
+        message["From"] = formataddr((self._settings.email_from_name, self._settings.email_from))
+        message["To"] = to
+        message["Subject"] = subject
+        # HTML with a minimal plaintext fallback for non-HTML clients.
+        message.set_content("This email requires an HTML-capable email client to view.")
+        message.add_alternative(html, subtype="html")
+        for attachment in attachments or []:
+            maintype, _, subtype = attachment.content_type.partition("/")
+            message.add_attachment(
+                attachment.content,
+                maintype=maintype or "application",
+                subtype=subtype or "octet-stream",
+                filename=attachment.filename,
+            )
+        # smtplib is blocking; run it off the event loop to preserve the async path.
+        try:
+            await asyncio.to_thread(self._smtp_deliver, message)
+        except (smtplib.SMTPException, OSError) as exc:
+            # Never echo the exception text — it can contain the recipient or auth detail.
+            raise EmailError("email send failed (smtp)") from exc
+
+    def _smtp_deliver(self, message: EmailMessage) -> None:
+        settings = self._settings
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as server:
+            if settings.smtp_starttls:
+                server.starttls()
+            if settings.smtp_username:
+                server.login(settings.smtp_username, settings.smtp_password)
+            server.send_message(message)
 
     async def send_invite(
         self,

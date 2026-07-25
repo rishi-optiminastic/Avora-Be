@@ -25,6 +25,7 @@ class PolicySpec:
     monthly_regularizations: int
     working_days_per_week: int
     timezone: str
+    full_day_grace_minutes: int = 0
 
     @property
     def on_time_cutoff(self) -> int:
@@ -33,6 +34,17 @@ class PolicySpec:
     @property
     def regularizable_cutoff(self) -> int:
         return self.on_time_cutoff + self.regularization_window_minutes
+
+    @property
+    def full_day_hours_cutoff(self) -> int:
+        """Worked-minute bar for a full day, after the grace band.
+
+        Mirrors the arrival `buffer_minutes`: the hours dimension had no
+        tolerance, so working one minute short of `full_day_min_minutes` fell
+        straight to half day. The grace band gives it the same near-miss slack
+        arrival already gets. Floored at 0 so a large grace can't invert it.
+        """
+        return max(0, self.full_day_min_minutes - self.full_day_grace_minutes)
 
 
 @dataclass(frozen=True)
@@ -75,10 +87,10 @@ def classify_day(
     on_time = arrival <= policy.on_time_cutoff
     in_reg_window = policy.on_time_cutoff < arrival <= policy.regularizable_cutoff
     too_late = arrival > policy.regularizable_cutoff
-    hours_ok = worked_minutes >= policy.full_day_min_minutes
+    hours_ok = worked_minutes >= policy.full_day_hours_cutoff
     # Worked hours only judge someone once the day is over (see docstring).
     too_few_hours = day_complete and worked_minutes < policy.half_day_min_minutes
-    early_logout = day_complete and worked_minutes < policy.full_day_min_minutes
+    early_logout = day_complete and worked_minutes < policy.full_day_hours_cutoff
 
     arrival_ok = on_time or regularized
 

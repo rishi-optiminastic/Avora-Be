@@ -11,7 +11,9 @@ Deploy alongside the API (one instance). Env:
   EOD_ENABLED             "true" to turn the feature on (default off).
   OPENROUTER_API_KEY      so generation can call the LLM.
   EOD_MODEL               OpenRouter model id, e.g. "anthropic/claude-sonnet-4.5".
-  SENDGRID_API_KEY        so approved/auto-sent reports can be delivered.
+  EMAIL_PROVIDER          "sendgrid" (default) or "smtp" — the delivery transport.
+  SENDGRID_API_KEY / SMTP_*  credentials for the chosen provider, so approved/
+                          auto-sent reports can be delivered.
   EOD_TICK_SECONDS        seconds between checks (default 900 = 15 min).
   HEARTBEAT_URL_EOD       optional: pinged after each successful tick (Better Stack).
 

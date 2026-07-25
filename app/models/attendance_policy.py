@@ -30,6 +30,10 @@ class AttendancePolicy(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Worked-minute thresholds for the hours dimension of full/half day.
     full_day_min_minutes: Mapped[int] = mapped_column(default=480)
     half_day_min_minutes: Mapped[int] = mapped_column(default=240)
+    # Grace on the full-day HOURS threshold, mirroring `buffer_minutes` on arrival:
+    # someone within this many minutes of the full-day requirement still counts as
+    # full (e.g. 15 ⇒ 465m worked satisfies a 480m day). Set 0 for a hard cutoff.
+    full_day_grace_minutes: Mapped[int] = mapped_column(default=15)
     # Regularization credits each employee gets per calendar month.
     monthly_regularizations: Mapped[int] = mapped_column(default=2)
     # Office working days per week, counted from Monday (5 ⇒ Mon-Fri, 6 ⇒ Mon-Sat).
