@@ -134,8 +134,12 @@ class PayrollLineRead(BaseModel):
     prorated: SalaryBreakdownRead
     total_days: int
     working_days: int
+    # Working days elapsed so far (== working_days for a finished month). The
+    # present/absent split is measured over this, so future days are not "absent".
+    elapsed_working_days: int
     present_days: float
     paid_leave_days: float
+    lop_days: float  # loss-of-pay days = elapsed working days neither present nor paid
     payable_days: float
     net_minor: int  # the prorated take-home for the month
     missing_compensation: bool
@@ -166,8 +170,10 @@ class PayslipRead(BaseModel):
     prorated: SalaryBreakdownRead
     total_days: int
     working_days: int
+    elapsed_working_days: int
     present_days: float
     paid_leave_days: float
+    lop_days: float
     payable_days: float
     net_minor: int  # the prorated take-home for the month
     missing_compensation: bool

@@ -29,7 +29,6 @@ import os
 from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from worker.heartbeat import beat
 
 from app.core.config import get_settings
 from app.db.session import SessionFactory, engine
@@ -51,6 +50,7 @@ from app.services.eod_service import EodService
 from app.services.eod_settings_service import EodSettingsService
 from app.services.llm_service import LlmService
 from app.services.notification_service import NotificationService
+from worker.heartbeat import beat
 
 log = logging.getLogger("eod_scheduler")
 

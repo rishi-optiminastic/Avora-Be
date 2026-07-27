@@ -154,6 +154,36 @@ async def test_estimate_computes_slip_and_total(
     assert outsider_line["breakdown"]["net_minor"] == 0
 
 
+async def test_future_working_days_are_not_charged_as_lop(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """A working day that has not happened yet is never loss-of-pay. For a month
+    entirely in the future, an employee with zero attendance incurs zero LOP and is
+    paid the full month — no more counting the calendar ahead as 'absent'."""
+    await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation",
+        json=_COMP,
+        headers=auth_headers(settings, seed.admin),
+    )
+    await client.put(
+        "/api/v1/payroll/settings", json=_SETTINGS, headers=auth_headers(settings, seed.admin)
+    )
+
+    resp = await client.get(
+        "/api/v1/payroll/estimate?month=2099-06", headers=auth_headers(settings, seed.admin)
+    )
+    assert resp.status_code == 200
+    line = next(
+        line for line in resp.json()["lines"] if line["employee_id"] == str(seed.report.id)
+    )
+    # The month has working days, but none have elapsed, so none are loss-of-pay.
+    assert line["working_days"] > 0
+    assert line["elapsed_working_days"] == 0
+    assert line["lop_days"] == 0
+    assert line["payable_days"] == line["total_days"]
+    assert line["net_minor"] == line["breakdown"]["net_minor"]  # full month pay
+
+
 async def test_hr_can_read_estimate(
     client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
 ) -> None:

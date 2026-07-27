@@ -78,12 +78,21 @@ class _MonthCalendar:
     year: int
     month: int
     working_dates: frozenset[date]
+    # Working dates that have already elapsed (on or before "today" in `timezone`).
+    # For a finished/past month this equals `working_dates`; for the in-progress
+    # month it excludes days that have not happened yet, so loss-of-pay is never
+    # charged for a working day the employee has not reached.
+    elapsed_working_dates: frozenset[date]
     total_days: int  # calendar days in the month (the proration denominator)
     timezone: str
 
     @property
     def working_days(self) -> int:
         return len(self.working_dates)
+
+    @property
+    def elapsed_working_days(self) -> int:
+        return len(self.elapsed_working_dates)
 
 
 def _can_manage(caller: CurrentUser) -> bool:
@@ -306,8 +315,12 @@ class PayrollService:
         breakdown = compute_breakdown(mctc, cfg, month=cal.month)
         # Weekends and holidays are auto-paid: only working days that were neither
         # present nor paid leave are loss-of-pay, so payable = calendar days - LOP.
-        worked = min(float(cal.working_days), present + paid)
-        lop = max(0.0, float(cal.working_days) - worked)
+        # LOP is charged only over ELAPSED working days — a working day that has not
+        # happened yet (later this in-progress month) is never counted as absent, so
+        # a mid-month estimate reflects days actually missed, not the calendar ahead.
+        elapsed_working = float(cal.elapsed_working_days)
+        worked = min(elapsed_working, present + paid)
+        lop = max(0.0, elapsed_working - worked)
         payable = max(0.0, float(cal.total_days) - lop)
         prorated = prorate_breakdown(breakdown, payable, cal.total_days)
         return PayrollLineRead(
@@ -323,8 +336,10 @@ class PayrollService:
             prorated=SalaryBreakdownRead(**prorated.__dict__),
             total_days=cal.total_days,
             working_days=cal.working_days,
+            elapsed_working_days=cal.elapsed_working_days,
             present_days=present,
             paid_leave_days=paid,
+            lop_days=lop,
             payable_days=payable,
             net_minor=prorated.net_minor,
             missing_compensation=comp is None,
@@ -383,8 +398,10 @@ class PayrollService:
             prorated=line.prorated,
             total_days=line.total_days,
             working_days=line.working_days,
+            elapsed_working_days=line.elapsed_working_days,
             present_days=line.present_days,
             paid_leave_days=line.paid_leave_days,
+            lop_days=line.lop_days,
             payable_days=line.payable_days,
             net_minor=line.net_minor,
             missing_compensation=line.missing_compensation,
@@ -643,8 +660,15 @@ class PayrollService:
         last_day = days_in_month(year, m)
         holidays = await self._holidays.dates_in_range(date(year, m, 1), date(year, m, last_day))
         working = frozenset(d for d in weekdays if d not in holidays)
+        today = datetime.now(UTC).astimezone(ZoneInfo(tz)).date()
+        elapsed = frozenset(d for d in working if d <= today)
         return _MonthCalendar(
-            year=year, month=m, working_dates=working, total_days=last_day, timezone=tz
+            year=year,
+            month=m,
+            working_dates=working,
+            elapsed_working_dates=elapsed,
+            total_days=last_day,
+            timezone=tz,
         )
 
     async def _leave_days_by_employee(
