@@ -19,6 +19,7 @@ from app.models.eod_report import EodReport, EodStatus
 from app.models.notification import Notification
 from app.models.screenshot import Screenshot
 from app.repositories.activity import ActivityRepository
+from app.repositories.attendance_override import AttendanceOverrideRepository
 from app.repositories.attendance_policy import AttendancePolicyRepository
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
@@ -88,6 +89,7 @@ def _build_service(
         _NoSessions(),  # type: ignore[arg-type]
         policy,
         RegularizationRepository(db),
+        AttendanceOverrideRepository(db),
     )
     return EodService(
         EodReportRepository(db),

@@ -25,6 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.db.session import SessionFactory, engine
 from app.repositories.activity import ActivityRepository
+from app.repositories.attendance_override import AttendanceOverrideRepository
 from app.repositories.attendance_policy import AttendancePolicyRepository
 from app.repositories.audit import AuditRepository
 from app.repositories.compensation import CompensationRepository
@@ -63,6 +64,7 @@ def _build_service(session: AsyncSession) -> PayrollService:
         WorkSessionRepository(session),
         policy,
         RegularizationRepository(session),
+        AttendanceOverrideRepository(session),
     )
     return PayrollService(
         PayrollSettingsRepository(session),

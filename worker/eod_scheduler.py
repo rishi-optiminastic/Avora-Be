@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.db.session import SessionFactory, engine
 from app.repositories.activity import ActivityRepository
+from app.repositories.attendance_override import AttendanceOverrideRepository
 from app.repositories.attendance_policy import AttendancePolicyRepository
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
@@ -72,6 +73,7 @@ def _build_service(session: AsyncSession) -> EodService:
         WorkSessionRepository(session),
         policy,
         RegularizationRepository(session),
+        AttendanceOverrideRepository(session),
     )
     return EodService(
         EodReportRepository(session),
