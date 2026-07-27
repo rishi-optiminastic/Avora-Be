@@ -30,6 +30,7 @@ from app.models.employee import Role
 from app.repositories.activity import ActivityRepository
 from app.repositories.announcement import AnnouncementRepository
 from app.repositories.assignment_grant import AssignmentGrantRepository
+from app.repositories.attendance_override import AttendanceOverrideRepository
 from app.repositories.attendance_policy import AttendancePolicyRepository
 from app.repositories.attribution_correction import AttributionCorrectionRepository
 from app.repositories.audit import AuditRepository
@@ -77,6 +78,7 @@ from app.schemas.auth import AuthIdentity, CurrentDevice, CurrentUser, EnvPrinci
 from app.services.activity_service import ActivityService
 from app.services.agent_nudge_service import AgentNudgeService
 from app.services.announcement_service import AnnouncementService
+from app.services.attendance_override_service import AttendanceOverrideService
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.attendance_service import AttendanceService
 from app.services.attribution_correction_service import AttributionCorrectionService
@@ -417,14 +419,29 @@ def get_onboarding_service(
 OnboardingServiceDep = Annotated[OnboardingService, Depends(get_onboarding_service)]
 
 
+def get_attendance_override_repo(db: DbDep) -> AttendanceOverrideRepository:
+    return AttendanceOverrideRepository(db)
+
+
 def get_attendance_service(
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     activity: Annotated[ActivityRepository, Depends(get_activity_repo)],
     sessions: Annotated[WorkSessionRepository, Depends(get_work_session_repo)],
     policy: Annotated[AttendancePolicyService, Depends(get_attendance_policy_service)],
     regularizations: Annotated[RegularizationRepository, Depends(get_regularization_repo)],
+    overrides: Annotated[AttendanceOverrideRepository, Depends(get_attendance_override_repo)],
 ) -> AttendanceService:
-    return AttendanceService(employees, activity, sessions, policy, regularizations)
+    return AttendanceService(
+        employees, activity, sessions, policy, regularizations, overrides
+    )
+
+
+def get_attendance_override_service(
+    overrides: Annotated[AttendanceOverrideRepository, Depends(get_attendance_override_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> AttendanceOverrideService:
+    return AttendanceOverrideService(overrides, employees, audit)
 
 
 def get_biometric_service(
@@ -876,6 +893,9 @@ ReimbursementServiceDep = Annotated[
 ]
 PayrollAdjustmentServiceDep = Annotated[
     PayrollAdjustmentService, Depends(get_payroll_adjustment_service)
+]
+AttendanceOverrideServiceDep = Annotated[
+    AttendanceOverrideService, Depends(get_attendance_override_service)
 ]
 CelebrationServiceDep = Annotated[CelebrationService, Depends(get_celebration_service)]
 LeavePolicyServiceDep = Annotated[LeavePolicyService, Depends(get_leave_policy_service)]

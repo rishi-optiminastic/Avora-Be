@@ -18,8 +18,10 @@ from zoneinfo import ZoneInfo
 
 from app.core.attendance import PolicySpec, classify_day
 from app.core.exceptions import NotFoundError, ValidationError
+from app.models.attendance_override import AttendanceOverrideStatus
 from app.models.employee import Employee
 from app.repositories.activity import ActivityRepository, DailyAgg, idle_minutes
+from app.repositories.attendance_override import AttendanceOverrideRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.regularization import RegularizationRepository
 from app.repositories.work_session import DaySpan, WorkSessionRepository
@@ -30,6 +32,13 @@ from app.schemas.work_session import BiometricTodayRead
 from app.services.attendance_policy_service import AttendancePolicyService
 
 MAX_RANGE_DAYS = 92
+
+# HR/Admin attendance overrides map onto the derived status vocabulary.
+_OVERRIDE_TO_STATUS: dict[AttendanceOverrideStatus, AttendanceStatus] = {
+    AttendanceOverrideStatus.FULL_DAY: AttendanceStatus.FULL_DAY,
+    AttendanceOverrideStatus.HALF_DAY: AttendanceStatus.HALF_DAY,
+    AttendanceOverrideStatus.ABSENT: AttendanceStatus.ABSENT,
+}
 
 
 def _aware(dt: datetime) -> datetime:
@@ -60,12 +69,14 @@ class AttendanceService:
         sessions: WorkSessionRepository,
         policy: AttendancePolicyService,
         regularizations: RegularizationRepository,
+        overrides: AttendanceOverrideRepository,
     ) -> None:
         self._employees = employees
         self._activity = activity
         self._sessions = sessions
         self._policy = policy
         self._regs = regularizations
+        self._overrides = overrides
 
     @staticmethod
     def _local_bounds(local_date: str, tz: str) -> tuple[datetime, datetime]:
@@ -146,6 +157,7 @@ class AttendanceService:
         bio = await self._sessions.biometric_day_spans(ids, start, end)
         spans = await self._sessions.day_spans(ids, start, end)
         approved = await self._regs.approved_days(ids, local_date, local_date)
+        overrides = await self._overrides.for_range(ids, local_date, local_date)
         now = datetime.now(UTC)
         now_local = now.astimezone(ZoneInfo(spec.timezone))
         today = now_local.date().isoformat()
@@ -184,10 +196,11 @@ class AttendanceService:
             agg = aggs.get(e.id)
             idle = idle_minutes(agg, worked) if agg else 0
             active = max(0, worked - idle)
+            ov = overrides.get((e.id, local_date))
             rows.append(
                 AttendanceRead(
                     employee_id=e.id,
-                    status=v.status,
+                    status=_OVERRIDE_TO_STATUS[ov] if ov is not None else v.status,
                     login_at=login,
                     logout_at=logout,
                     worked_minutes=worked,
@@ -229,6 +242,7 @@ class AttendanceService:
         bio_raw = await self._sessions.sessions_in_range(ids, start, end, source="biometric")
         all_raw = await self._sessions.sessions_in_range(ids, start, end)
         approved = await self._regs.approved_days(ids, start_date, end_date)
+        overrides = await self._overrides.for_range(ids, start_date, end_date)
         now = datetime.now(UTC)
         now_local = now.astimezone(ZoneInfo(spec.timezone))
         today = now_local.date().isoformat()
@@ -283,19 +297,41 @@ class AttendanceService:
                 policy=spec,
                 day_complete=window_closed or out_src in ("dashboard", "auto"),
             )
+            ov = overrides.get((emp_id, day))
             rows.append(
                 AttendanceDayRow(
                     employee_id=emp_id,
                     day=day,
-                    status=v.status,
+                    status=_OVERRIDE_TO_STATUS[ov] if ov is not None else v.status,
                     login_at=acc.login,
                     logout_at=None if acc.is_open else acc.logout,
                     worked_minutes=acc.worked,
                     late_login=v.late_login,
-                    regularizable=v.regularizable,
-                    regularized=v.regularized,
+                    regularizable=v.regularizable and ov is None,
+                    regularized=v.regularized or ov is not None,
                     clock_in_source=acc.in_source,
                     clock_out_source=None if acc.is_open else acc.out_source,
+                )
+            )
+        # Overrides for days with no session at all (e.g. an absent day forced to
+        # full/half) still need a row so the day counts in views + payroll.
+        grouped_keys = set(grouped.keys())
+        for (emp_id, day), status in overrides.items():
+            if (emp_id, day) in grouped_keys or emp_id not in ids:
+                continue
+            rows.append(
+                AttendanceDayRow(
+                    employee_id=emp_id,
+                    day=day,
+                    status=_OVERRIDE_TO_STATUS[status],
+                    login_at=None,
+                    logout_at=None,
+                    worked_minutes=0,
+                    late_login=False,
+                    regularizable=False,
+                    regularized=True,
+                    clock_in_source=None,
+                    clock_out_source=None,
                 )
             )
         rows.sort(key=lambda r: (r.day, str(r.employee_id)))

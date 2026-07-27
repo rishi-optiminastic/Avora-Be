@@ -8,6 +8,7 @@ from app.api.v1.routes import (
     activity,
     announcements,
     attendance,
+    attendance_overrides,
     attribution,
     biometric,
     browsing,
@@ -76,6 +77,7 @@ api_router.include_router(pings.router)
 api_router.include_router(insights.router)
 api_router.include_router(work_entities.router)
 api_router.include_router(attribution.router)
+api_router.include_router(attendance_overrides.router)
 api_router.include_router(category_rules.router)
 api_router.include_router(compensation.router)
 api_router.include_router(payroll.router)

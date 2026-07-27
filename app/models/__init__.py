@@ -7,6 +7,7 @@ autogenerate can see them.
 from app.models.activity import ActivitySample
 from app.models.announcement import Announcement, AnnouncementLevel
 from app.models.assignment_grant import AssignmentGrant
+from app.models.attendance_override import AttendanceOverride, AttendanceOverrideStatus
 from app.models.attendance_policy import AttendancePolicy
 from app.models.attribution_correction import AttributionCorrection, CorrectionStatus
 from app.models.audit import AuditLog
@@ -69,6 +70,8 @@ __all__ = [
     "Announcement",
     "AnnouncementLevel",
     "AssignmentGrant",
+    "AttendanceOverride",
+    "AttendanceOverrideStatus",
     "AttendancePolicy",
     "AttributionCorrection",
     "AuditLog",
