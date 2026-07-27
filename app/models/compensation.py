@@ -53,6 +53,9 @@ class Compensation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     account_number_encrypted: Mapped[str | None] = mapped_column(String(512), default=None)
     ifsc_code: Mapped[str | None] = mapped_column(String(16), default=None)
     account_type: Mapped[AccountType | None] = mapped_column(default=None)
+    # How salary is paid, for the payroll register (e.g. "Direct Deposit",
+    # "Manual Bank Transfer"). Free-form; HR-set. Defaults to a bank transfer.
+    payment_mode: Mapped[str] = mapped_column(String(64), default="Bank Transfer")
 
     # Who last set it — audit trail at a glance (full trail in the audit log).
     updated_by: Mapped[uuid.UUID | None] = mapped_column(

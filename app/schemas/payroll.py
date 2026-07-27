@@ -141,6 +141,9 @@ class PayrollLineRead(BaseModel):
     paid_leave_days: float
     lop_days: float  # loss-of-pay days = elapsed working days neither present nor paid
     payable_days: float
+    # Manual HR/Admin adjustments folded into net_minor (0 when none).
+    adjustment_earnings_minor: int = 0
+    adjustment_deductions_minor: int = 0
     net_minor: int  # the prorated take-home for the month
     missing_compensation: bool
 
@@ -175,6 +178,8 @@ class PayslipRead(BaseModel):
     paid_leave_days: float
     lop_days: float
     payable_days: float
+    adjustment_earnings_minor: int = 0
+    adjustment_deductions_minor: int = 0
     net_minor: int  # the prorated take-home for the month
     missing_compensation: bool
 

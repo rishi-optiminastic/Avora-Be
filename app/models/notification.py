@@ -23,6 +23,8 @@ class NotificationKind(StrEnum):
     LEAVE_DECISION = "leave_decision"  # your leave was approved/rejected
     RESIGNATION_SUBMITTED = "resignation_submitted"  # someone resigned — HR/Admin
     RESIGNATION_DECISION = "resignation_decision"  # your resignation was decided
+    REIMBURSEMENT_SUBMITTED = "reimbursement_submitted"  # a claim needs your review
+    REIMBURSEMENT_DECISION = "reimbursement_decision"  # your claim was decided
     TASK_ASSIGNED = "task_assigned"  # you were assigned a task
     UNDERPERFORMANCE = "underperformance"  # a person you manage is at risk
     ESCALATION = "escalation"  # a repeated issue escalated up to you

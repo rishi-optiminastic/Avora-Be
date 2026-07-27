@@ -92,6 +92,10 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # every employee has one on file, and non-India orgs won't use it at all.
     uan_number: Mapped[str | None] = mapped_column(String(12), default=None)
 
+    # Payroll-register employee code (e.g. the prior HRMS number). HR-set, free-form
+    # so it can carry leading zeros / letters; nullable until assigned.
+    employee_number: Mapped[str | None] = mapped_column(String(32), default=None)
+
     # Org tree: self-referential reporting line, set from HR.
     manager_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("employees.id", ondelete="SET NULL"),

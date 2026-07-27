@@ -56,6 +56,7 @@ from app.repositories.note import NoteRepository
 from app.repositories.notification import NotificationRepository
 from app.repositories.onboarding_config import OnboardingConfigRepository
 from app.repositories.org_settings import OrgSettingsRepository
+from app.repositories.payroll_adjustment import PayrollAdjustmentRepository
 from app.repositories.payroll_run import PayrollRunRepository
 from app.repositories.payroll_settings import PayrollSettingsRepository
 from app.repositories.payslip import PayslipRepository
@@ -63,6 +64,7 @@ from app.repositories.personal_access_token import PersonalAccessTokenRepository
 from app.repositories.ping import PingRepository
 from app.repositories.quick_meet import QuickMeetRepository
 from app.repositories.regularization import RegularizationRepository
+from app.repositories.reimbursement import ReimbursementRepository
 from app.repositories.resignation import ResignationRepository
 from app.repositories.screenshot import ScreenshotRepository
 from app.repositories.target import TargetRepository
@@ -109,10 +111,12 @@ from app.services.notification_service import NotificationService
 from app.services.onboarding_service import OnboardingService
 from app.services.org_settings_service import OrgSettingsService
 from app.services.pat_service import PatService
+from app.services.payroll_adjustment_service import PayrollAdjustmentService
 from app.services.payroll_service import PayrollService
 from app.services.ping_service import PingService
 from app.services.reconciliation_service import ReconciliationService
 from app.services.regularization_service import RegularizationService
+from app.services.reimbursement_service import ReimbursementService
 from app.services.resignation_service import ResignationService
 from app.services.screenshot_service import ScreenshotService
 from app.services.target_service import TargetService
@@ -210,6 +214,14 @@ def get_leave_repo(db: DbDep) -> LeaveRepository:
 
 def get_resignation_repo(db: DbDep) -> ResignationRepository:
     return ResignationRepository(db)
+
+
+def get_reimbursement_repo(db: DbDep) -> ReimbursementRepository:
+    return ReimbursementRepository(db)
+
+
+def get_payroll_adjustment_repo(db: DbDep) -> PayrollAdjustmentRepository:
+    return PayrollAdjustmentRepository(db)
 
 
 def get_festival_repo(db: DbDep) -> FestivalRepository:
@@ -713,6 +725,23 @@ def get_resignation_service(
     return ResignationService(resignations, employees, audit, notifications, email)
 
 
+def get_reimbursement_service(
+    reimbursements: Annotated[ReimbursementRepository, Depends(get_reimbursement_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    notifications: Annotated[NotificationService, Depends(get_notification_service)],
+) -> ReimbursementService:
+    return ReimbursementService(reimbursements, employees, audit, notifications)
+
+
+def get_payroll_adjustment_service(
+    adjustments: Annotated[PayrollAdjustmentRepository, Depends(get_payroll_adjustment_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> PayrollAdjustmentService:
+    return PayrollAdjustmentService(adjustments, employees, audit)
+
+
 def get_celebration_service(
     settings: Annotated[CelebrationSettingsRepository, Depends(get_celebration_settings_repo)],
     festivals: Annotated[FestivalRepository, Depends(get_festival_repo)],
@@ -774,6 +803,8 @@ def get_payroll_service(
     leaves: Annotated[LeaveRepository, Depends(get_leave_repo)],
     holidays: Annotated[HolidayRepository, Depends(get_holiday_repo)],
     orgs: Annotated[OrgSettingsRepository, Depends(get_org_settings_repo)],
+    reimbursements: Annotated[ReimbursementRepository, Depends(get_reimbursement_repo)],
+    adjustments: Annotated[PayrollAdjustmentRepository, Depends(get_payroll_adjustment_repo)],
     email: Annotated[EmailService, Depends(get_email_service)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
     settings: SettingsDep,
@@ -789,6 +820,8 @@ def get_payroll_service(
         leaves,
         holidays,
         orgs,
+        reimbursements,
+        adjustments,
         email,
         audit,
         settings,
@@ -838,6 +871,12 @@ TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
 TargetServiceDep = Annotated[TargetService, Depends(get_target_service)]
 LeaveServiceDep = Annotated[LeaveService, Depends(get_leave_service)]
 ResignationServiceDep = Annotated[ResignationService, Depends(get_resignation_service)]
+ReimbursementServiceDep = Annotated[
+    ReimbursementService, Depends(get_reimbursement_service)
+]
+PayrollAdjustmentServiceDep = Annotated[
+    PayrollAdjustmentService, Depends(get_payroll_adjustment_service)
+]
 CelebrationServiceDep = Annotated[CelebrationService, Depends(get_celebration_service)]
 LeavePolicyServiceDep = Annotated[LeavePolicyService, Depends(get_leave_policy_service)]
 LeaveAllocationServiceDep = Annotated[LeaveAllocationService, Depends(get_leave_allocation_service)]
