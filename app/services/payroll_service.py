@@ -13,7 +13,8 @@ lop_days`. Sends are audited (rule 5.7).
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
@@ -21,18 +22,25 @@ from app.core.config import Settings
 from app.core.exceptions import AuthorizationError, NotFoundError, ValidationError
 from app.core.payroll import (
     CalcConfig,
+    SalaryBreakdown,
     compute_breakdown,
     days_in_month,
+    employer_contributions,
     monthly_ctc_minor,
     prorate_breakdown,
     weekdays_in_month,
 )
-from app.core.payroll_export import PayrollExportRow, build_payroll_xlsx
+from app.core.payroll_export import PayrollExportRow, build_payroll_xlsx, fmt_register_date
 from app.core.payslip_pdf import PayslipPdfData, render_payslip_pdf
 from app.core.pii_crypto import decrypt_pii
 from app.models.compensation import Compensation, PayPeriod
 from app.models.employee import Employee, Role
 from app.models.leave import LeaveType
+from app.models.payroll_adjustment import (
+    PayrollAdjustment,
+    PayrollAdjustmentKind,
+    PayrollAdjustmentTarget,
+)
 from app.models.payroll_run import PayrollRun, PayrollRunSource
 from app.models.payroll_settings import PayrollSettings
 from app.models.payslip import Payslip
@@ -42,9 +50,11 @@ from app.repositories.employee import EmployeeRepository
 from app.repositories.holiday import HolidayRepository
 from app.repositories.leave import LeaveRepository
 from app.repositories.org_settings import OrgSettingsRepository
+from app.repositories.payroll_adjustment import PayrollAdjustmentRepository
 from app.repositories.payroll_run import PayrollRunRepository
 from app.repositories.payroll_settings import PayrollSettingsRepository
 from app.repositories.payslip import PayslipRepository, PayslipSnapshot
+from app.repositories.reimbursement import ReimbursementRepository
 from app.schemas.attendance_report import AttendanceMonthSummary
 from app.schemas.auth import CurrentUser
 from app.schemas.payroll import (
@@ -114,6 +124,65 @@ def _month_label(year: int, month: int) -> str:
     return f"{_MONTH_NAMES[month - 1]} {year}"
 
 
+def _lop_override(
+    adjustments: Sequence[PayrollAdjustment], computed_lop: float, total_days: int
+) -> float:
+    """An OVERRIDE/LOP_DAYS adjustment (stored as days x 100) replaces the
+    attendance-derived loss-of-pay; else the computed value stands."""
+    for a in adjustments:
+        if (
+            a.kind is PayrollAdjustmentKind.OVERRIDE
+            and a.target is PayrollAdjustmentTarget.LOP_DAYS
+        ):
+            return min(float(total_days), max(0.0, a.amount_minor / 100))
+    return computed_lop
+
+
+def _apply_adjustments(
+    prorated: SalaryBreakdown, adjustments: Sequence[PayrollAdjustment]
+) -> tuple[SalaryBreakdown, int, int]:
+    """Apply field overrides + manual earnings/deductions to a prorated slip (LOP
+    overrides are handled before proration). Returns (adjusted_breakdown,
+    earnings_total, deductions_total); the breakdown's net already folds in the
+    earnings/deductions and any NET_PAY override."""
+    basic = prorated.basic_minor
+    hra = prorated.hra_minor
+    special = prorated.special_allowance_minor
+    employee_pf = prorated.employee_pf_minor
+    net_override: int | None = None
+    for a in adjustments:
+        if a.kind is not PayrollAdjustmentKind.OVERRIDE:
+            continue
+        if a.target is PayrollAdjustmentTarget.BASIC:
+            basic = a.amount_minor
+        elif a.target is PayrollAdjustmentTarget.HRA:
+            hra = a.amount_minor
+        elif a.target is PayrollAdjustmentTarget.SPECIAL_ALLOWANCE:
+            special = a.amount_minor
+        elif a.target is PayrollAdjustmentTarget.EMPLOYEE_PF:
+            employee_pf = a.amount_minor
+        elif a.target is PayrollAdjustmentTarget.NET_PAY:
+            net_override = a.amount_minor
+    gross = basic + hra + special
+    total_deduction = employee_pf + prorated.professional_tax_minor + prorated.income_tax_minor
+    earnings = sum(a.amount_minor for a in adjustments if a.kind is PayrollAdjustmentKind.EARNING)
+    deductions = sum(
+        a.amount_minor for a in adjustments if a.kind is PayrollAdjustmentKind.DEDUCTION
+    )
+    base_net = net_override if net_override is not None else gross - total_deduction
+    adjusted = replace(
+        prorated,
+        basic_minor=basic,
+        hra_minor=hra,
+        special_allowance_minor=special,
+        employee_pf_minor=employee_pf,
+        gross_minor=gross,
+        total_deduction_minor=total_deduction,
+        net_minor=base_net + earnings - deductions,
+    )
+    return adjusted, earnings, deductions
+
+
 class PayrollService:
     def __init__(
         self,
@@ -127,6 +196,8 @@ class PayrollService:
         leaves: LeaveRepository,
         holidays: HolidayRepository,
         orgs: OrgSettingsRepository,
+        reimbursements: ReimbursementRepository,
+        adjustments: PayrollAdjustmentRepository,
         email: EmailService,
         audit: AuditRepository,
         settings: Settings,
@@ -141,6 +212,8 @@ class PayrollService:
         self._leaves = leaves
         self._holidays = holidays
         self._orgs = orgs
+        self._reimbursements = reimbursements
+        self._adjustments = adjustments
         self._email = email
         self._audit = audit
         self._settings = settings
@@ -191,15 +264,7 @@ class PayrollService:
         spec = await self._policy.spec()
         period = month or self.current_month(spec.timezone)
         cal = await self._month_calendar(period, spec.timezone, spec.working_days_per_week)
-        cfg = CalcConfig(
-            basic_pct=s.basic_pct,
-            hra_pct=s.hra_pct,
-            pf_pct=s.pf_pct,
-            pf_cap_minor=s.pf_cap_minor,
-            professional_tax_minor=s.professional_tax_minor,
-            professional_tax_feb_minor=s.professional_tax_feb_minor,
-            deduct_income_tax=s.deduct_income_tax,
-        )
+        cfg = self._calc_config(s)
 
         employees = await self._employees.all_in_scope(caller)
         ids = [e.id for e in employees]
@@ -208,6 +273,7 @@ class PayrollService:
         }
         paid_leaves = await self._leave_days_by_employee(ids, cal)
         comps = await self._compensation.get_for_employees(ids)  # one query, not N
+        adjustments = await self._adjustments.for_month(ids, period)
 
         lines: list[PayrollLineRead] = []
         total_net = 0
@@ -221,6 +287,7 @@ class PayrollService:
                 cal=cal,
                 present=_present_days(summaries.get(e.id)),
                 paid=paid_leaves.get(e.id, 0.0),
+                adjustments=adjustments.get(e.id, []),
             )
             total_net += line.net_minor
             total_ctc += line.monthly_ctc_minor
@@ -237,53 +304,138 @@ class PayrollService:
             lines=lines,
         )
 
+    @staticmethod
+    def _calc_config(s: PayrollSettings) -> CalcConfig:
+        return CalcConfig(
+            basic_pct=s.basic_pct,
+            hra_pct=s.hra_pct,
+            pf_pct=s.pf_pct,
+            pf_cap_minor=s.pf_cap_minor,
+            professional_tax_minor=s.professional_tax_minor,
+            professional_tax_feb_minor=s.professional_tax_feb_minor,
+            deduct_income_tax=s.deduct_income_tax,
+        )
+
+    def _export_row(
+        self,
+        *,
+        line: PayrollLineRead,
+        emp: Employee | None,
+        comp: Compensation | None,
+        cfg: CalcConfig,
+        month: int,
+        period_label: str,
+        reimbursement_minor: int,
+        adjustments: Sequence[PayrollAdjustment] = (),
+    ) -> PayrollExportRow:
+        """Build one 40-column register row. Earnings/PF are prorated on a fixed
+        30-day base (Base Days minus Loss Of Pay), independent of the on-screen
+        calendar-day proration; employer contributions follow standard PF rules."""
+        mctc = (
+            monthly_ctc_minor(comp.amount_minor, is_annual=comp.period is PayPeriod.ANNUAL)
+            if comp is not None
+            else 0
+        )
+        full = compute_breakdown(mctc, cfg, month=month)
+        base_days = 30.0
+        lop = min(base_days, max(0.0, line.lop_days))
+        effective = base_days - lop
+        p = prorate_breakdown(full, effective, int(base_days))  # 30-day-base proration
+        # Manual adjustments (LOP overrides already applied to `line.lop_days` above):
+        # field overrides restructure the slip; earnings/deductions fold into totals.
+        p, adj_earnings, adj_deductions = _apply_adjustments(p, adjustments)
+        has_net_override = any(
+            a.kind is PayrollAdjustmentKind.OVERRIDE
+            and a.target is PayrollAdjustmentTarget.NET_PAY
+            for a in adjustments
+        )
+        er = employer_contributions(p.basic_minor, p.employee_pf_minor)
+
+        def rupees(minor: int) -> int:
+            return round(minor / 100)
+
+        fixed_earnings = rupees(p.gross_minor)  # Basic + HRA + Fixed Allowance
+        total_earnings = fixed_earnings + rupees(adj_earnings)  # + manual earnings
+        total_deductions = rupees(p.total_deduction_minor) + rupees(adj_deductions)
+        account_number = (
+            decrypt_pii(self._settings, comp.account_number_encrypted)
+            if comp is not None and comp.account_number_encrypted
+            else ""
+        )
+        return PayrollExportRow(
+            period=period_label,
+            payroll_type="Regular Payroll",
+            employee_no=(emp.employee_number or "") if emp is not None else "",
+            employee_name=line.name,
+            department=line.department or "",
+            designation=(emp.job_title or "") if emp is not None else "",
+            work_location=(emp.location or "") if emp is not None else "",
+            date_of_joining=fmt_register_date(emp.hire_date if emp is not None else None),
+            date_of_birth=fmt_register_date(emp.date_of_birth if emp is not None else None),
+            last_working_day="",
+            payment_mode=(comp.payment_mode if comp is not None else "Bank Transfer"),
+            account_holder=(comp.account_holder_name or "") if comp is not None else "",
+            bank_name=(comp.bank_name or "") if comp is not None else "",
+            account_number=account_number,
+            ifsc=(comp.ifsc_code or "") if comp is not None else "",
+            ctc_annual=rupees(mctc * 12),
+            gross_annual=rupees(full.gross_minor * 12),
+            base_days=base_days,
+            loss_of_pay=lop,
+            effective_paid_days=effective,
+            basic=rupees(p.basic_minor),
+            hra=rupees(p.hra_minor),
+            fixed_allowance=rupees(p.special_allowance_minor),
+            reimbursement=0,
+            total_reimbursements=0,
+            fixed_monthly_earnings=fixed_earnings,
+            fixed_monthly_costs=rupees(p.ctc_minor),
+            total_earnings=total_earnings,
+            epf_employee=rupees(p.employee_pf_minor),
+            epf_employer=rupees(er.epf_employer_minor),
+            eps_employer=rupees(er.eps_minor),
+            edli_employer=rupees(er.edli_minor),
+            epf_admin_employer=rupees(er.admin_minor),
+            total_employer_contributions=rupees(er.total_minor),
+            income_tax=rupees(p.income_tax_minor),
+            professional_tax=rupees(p.professional_tax_minor),
+            total_deductions=total_deductions,
+            gross_pay=total_earnings,
+            net_pay=rupees(p.net_minor) if has_net_override else total_earnings - total_deductions,
+            business_expense_reimbursements=rupees(reimbursement_minor),
+        )
+
     async def export_xlsx(self, caller: CurrentUser, month: str | None) -> tuple[bytes, str]:
-        """HR/Admin: the month's payroll as an .xlsx — identity + bank details +
-        UAN + the LOP-adjusted salary breakdown, one row per employee. The account
+        """HR/Admin: the month's payroll as an .xlsx in the 40-column "Payrun
+        Employee Salary statement" register — identity + bank + per-annum CTC/Gross,
+        the 30-day-base earnings/PF split, statutory employer contributions, and
+        approved business-expense reimbursements, one row per employee. The account
         number is decrypted only here, for the authorized export. Audited (5.7)."""
         est = await self.estimate(caller, month)  # authorizes HR/Admin
+        year, m = _parse_month(est.month)
+        s = await self.get_settings_model()
+        cfg = self._calc_config(s)
         ids = [line.employee_id for line in est.lines]
         comps = await self._compensation.get_for_employees(ids)
         employees = {e.id: e for e in await self._employees.all_in_scope(caller)}
+        reimbursed = await self._reimbursements.approved_for_month(ids, est.month)
+        adjustments = await self._adjustments.for_month(ids, est.month)
+        period_label = _month_label(year, m)
 
-        rows: list[PayrollExportRow] = []
-        for line in est.lines:
-            comp = comps.get(line.employee_id)
-            emp = employees.get(line.employee_id)
-            account_number = (
-                decrypt_pii(self._settings, comp.account_number_encrypted)
-                if comp is not None and comp.account_number_encrypted
-                else ""
+        rows = [
+            self._export_row(
+                line=line,
+                emp=employees.get(line.employee_id),
+                comp=comps.get(line.employee_id),
+                cfg=cfg,
+                month=m,
+                period_label=period_label,
+                reimbursement_minor=reimbursed.get(line.employee_id, 0),
+                adjustments=adjustments.get(line.employee_id, []),
             )
-            p = line.prorated
-            rows.append(
-                PayrollExportRow(
-                    employee=line.name,
-                    department=line.department or "",
-                    uan=(emp.uan_number or "") if emp is not None else "",
-                    account_holder=(comp.account_holder_name or "") if comp is not None else "",
-                    bank_name=(comp.bank_name or "") if comp is not None else "",
-                    account_number=account_number,
-                    ifsc=(comp.ifsc_code or "") if comp is not None else "",
-                    account_type=(
-                        comp.account_type.value if comp is not None and comp.account_type else ""
-                    ),
-                    present_days=line.present_days,
-                    payable_days=line.payable_days,
-                    total_days=line.total_days,
-                    basic=round(p.basic_minor / 100),
-                    hra=round(p.hra_minor / 100),
-                    special_allowance=round(p.special_allowance_minor / 100),
-                    gross=round(p.gross_minor / 100),
-                    provident_fund=round(p.employee_pf_minor / 100),
-                    professional_tax=round(p.professional_tax_minor / 100),
-                    income_tax=round(p.income_tax_minor / 100),
-                    total_deductions=round(p.total_deduction_minor / 100),
-                    net_pay=round(p.net_minor / 100),
-                )
-            )
+            for line in est.lines
+        ]
 
-        year, m = _parse_month(est.month)
         xlsx = build_payroll_xlsx(rows, month_label=_month_label(year, m), currency=est.currency)
         await self._audit.append(
             actor=str(caller.employee_id), action="payroll.export", target=f"month:{est.month}"
@@ -300,6 +452,7 @@ class PayrollService:
         cal: _MonthCalendar,
         present: float,
         paid: float,
+        adjustments: Sequence[PayrollAdjustment] = (),
     ) -> PayrollLineRead:
         """One employee's slip for the month: CTC → breakdown → attendance proration.
 
@@ -320,9 +473,10 @@ class PayrollService:
         # a mid-month estimate reflects days actually missed, not the calendar ahead.
         elapsed_working = float(cal.elapsed_working_days)
         worked = min(elapsed_working, present + paid)
-        lop = max(0.0, elapsed_working - worked)
+        lop = _lop_override(adjustments, max(0.0, elapsed_working - worked), cal.total_days)
         payable = max(0.0, float(cal.total_days) - lop)
         prorated = prorate_breakdown(breakdown, payable, cal.total_days)
+        prorated, adj_earnings, adj_deductions = _apply_adjustments(prorated, adjustments)
         return PayrollLineRead(
             employee_id=employee.id,
             name=employee.full_name,
@@ -341,6 +495,8 @@ class PayrollService:
             paid_leave_days=paid,
             lop_days=lop,
             payable_days=payable,
+            adjustment_earnings_minor=adj_earnings,
+            adjustment_deductions_minor=adj_deductions,
             net_minor=prorated.net_minor,
             missing_compensation=comp is None,
         )
@@ -376,6 +532,7 @@ class PayrollService:
             r.employee_id: r for r in await self._attendance.monthly_report(caller, period)
         }
         paid_leaves = await self._leave_days_by_employee([target_id], cal)
+        adjustments = await self._adjustments.for_month([target_id], period)
         line = await self._line_for(
             employee,
             comp=await self._compensation.get_for_employee(target_id),
@@ -384,6 +541,7 @@ class PayrollService:
             cal=cal,
             present=_present_days(summaries.get(target_id)),
             paid=paid_leaves.get(target_id, 0.0),
+            adjustments=adjustments.get(target_id, []),
         )
         await self._audit.append(
             actor=str(caller.employee_id),
@@ -403,6 +561,8 @@ class PayrollService:
             paid_leave_days=line.paid_leave_days,
             lop_days=line.lop_days,
             payable_days=line.payable_days,
+            adjustment_earnings_minor=line.adjustment_earnings_minor,
+            adjustment_deductions_minor=line.adjustment_deductions_minor,
             net_minor=line.net_minor,
             missing_compensation=line.missing_compensation,
         )

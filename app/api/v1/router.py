@@ -35,7 +35,9 @@ from app.api.v1.routes import (
     org,
     pat,
     payroll,
+    payroll_adjustments,
     pings,
+    reimbursements,
     resignations,
     screenshots,
     targets,
@@ -54,6 +56,7 @@ api_router.include_router(tasks.router)
 api_router.include_router(targets.router)
 api_router.include_router(leaves.router)
 api_router.include_router(leave_allocation.router)
+api_router.include_router(reimbursements.router)
 api_router.include_router(resignations.router)
 api_router.include_router(celebrations.router)
 api_router.include_router(changelog.router)
@@ -76,6 +79,7 @@ api_router.include_router(attribution.router)
 api_router.include_router(category_rules.router)
 api_router.include_router(compensation.router)
 api_router.include_router(payroll.router)
+api_router.include_router(payroll_adjustments.router)
 api_router.include_router(documents.router)
 api_router.include_router(workspace_files.router)
 api_router.include_router(dashboard.router)

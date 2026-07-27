@@ -144,6 +144,46 @@ def monthly_ctc_minor(amount_minor: int, *, is_annual: bool) -> int:
     return round(amount_minor / 12) if is_annual else amount_minor
 
 
+# Statutory EPF wage ceiling (₹15,000/month) and the EPS employer cap (₹1,250).
+_PF_WAGE_CEILING_MINOR = 15_000_00
+_EPS_CAP_MINOR = 1_250_00
+
+
+@dataclass(frozen=True)
+class EmployerContributions:
+    """The employer's statutory PF-side costs for a month, split the way an Indian
+    payroll register reports them. All derived from (already-prorated) Basic."""
+
+    epf_employer_minor: int  # 3.67% remainder = employee PF minus EPS
+    eps_minor: int  # 8.33% of min(Basic, ceiling), capped at ₹1,250
+    edli_minor: int  # 0.5% of min(Basic, ceiling)
+    admin_minor: int  # 0.5% of Basic (EPF admin charges)
+    total_minor: int
+
+
+def employer_contributions(basic_minor: int, employee_pf_minor: int) -> EmployerContributions:
+    """Split the employer's 12% PF into EPS / EPF / EDLI / admin, from Basic.
+
+    `employee_pf_minor` is the (prorated) employee PF for the same period; the
+    employer EPF share is that minus EPS, so the two PF halves always agree.
+    """
+    basic = max(0, basic_minor)
+    wage = min(basic, _PF_WAGE_CEILING_MINOR)
+    # EPS is 8.33% of the wage, but a flat ₹1,250 at/above the ceiling (the
+    # statutory max — 8.33% of ₹15,000 is ₹1,249.50, reported as ₹1,250).
+    eps = _EPS_CAP_MINOR if basic >= _PF_WAGE_CEILING_MINOR else round(wage * 8.33 / 100)
+    epf_employer = max(0, employee_pf_minor - eps)
+    edli = round(wage * 0.5 / 100)
+    admin = round(basic * 0.5 / 100)
+    return EmployerContributions(
+        epf_employer_minor=epf_employer,
+        eps_minor=eps,
+        edli_minor=edli,
+        admin_minor=admin,
+        total_minor=epf_employer + eps + edli + admin,
+    )
+
+
 def days_in_month(year: int, month: int) -> int:
     """Total calendar days in the month — the proration denominator."""
     return calendar.monthrange(year, month)[1]

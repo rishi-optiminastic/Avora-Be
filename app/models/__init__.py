@@ -33,6 +33,11 @@ from app.models.leave_policy import LeavePolicy
 from app.models.notification import Notification, NotificationKind, NotificationLevel
 from app.models.onboarding_config import OnboardingConfig
 from app.models.org_settings import OrgSettings
+from app.models.payroll_adjustment import (
+    PayrollAdjustment,
+    PayrollAdjustmentKind,
+    PayrollAdjustmentTarget,
+)
 from app.models.payroll_run import PayrollRun, PayrollRunSource
 from app.models.payroll_settings import PayCycle, PayrollSettings
 from app.models.payslip import Payslip, PayslipStatus
@@ -40,6 +45,11 @@ from app.models.personal_access_token import PersonalAccessToken
 from app.models.ping import Ping
 from app.models.quick_meet_default import QuickMeetDefault
 from app.models.regularization import Regularization, RegularizationStatus
+from app.models.reimbursement import (
+    Reimbursement,
+    ReimbursementCategory,
+    ReimbursementStatus,
+)
 from app.models.resignation import Resignation, ResignationStatus
 from app.models.screenshot import OcrStatus, Screenshot
 from app.models.target import Target, TargetPeriod, TargetStatus
@@ -103,6 +113,9 @@ __all__ = [
     "OrgSettings",
     "PayCycle",
     "PayPeriod",
+    "PayrollAdjustment",
+    "PayrollAdjustmentKind",
+    "PayrollAdjustmentTarget",
     "PayrollRun",
     "PayrollRunSource",
     "PayrollSettings",
@@ -113,6 +126,9 @@ __all__ = [
     "QuickMeetDefault",
     "Regularization",
     "RegularizationStatus",
+    "Reimbursement",
+    "ReimbursementCategory",
+    "ReimbursementStatus",
     "Resignation",
     "ResignationStatus",
     "Role",

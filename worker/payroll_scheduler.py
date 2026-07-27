@@ -32,10 +32,12 @@ from app.repositories.employee import EmployeeRepository
 from app.repositories.holiday import HolidayRepository
 from app.repositories.leave import LeaveRepository
 from app.repositories.org_settings import OrgSettingsRepository
+from app.repositories.payroll_adjustment import PayrollAdjustmentRepository
 from app.repositories.payroll_run import PayrollRunRepository
 from app.repositories.payroll_settings import PayrollSettingsRepository
 from app.repositories.payslip import PayslipRepository
 from app.repositories.regularization import RegularizationRepository
+from app.repositories.reimbursement import ReimbursementRepository
 from app.repositories.work_session import WorkSessionRepository
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.attendance_service import AttendanceService
@@ -51,6 +53,7 @@ HEARTBEAT_ENV = "HEARTBEAT_URL_PAYROLL"
 
 def _build_service(session: AsyncSession) -> PayrollService:
     """Wire a PayrollService the same way the FastAPI DI graph does."""
+    settings = get_settings()
     audit = AuditRepository(session)
     employees = EmployeeRepository(session)
     policy = AttendancePolicyService(AttendancePolicyRepository(session), audit)
@@ -72,8 +75,11 @@ def _build_service(session: AsyncSession) -> PayrollService:
         LeaveRepository(session),
         HolidayRepository(session),
         OrgSettingsRepository(session),
-        EmailService(get_settings()),
+        ReimbursementRepository(session),
+        PayrollAdjustmentRepository(session),
+        EmailService(settings),
         audit,
+        settings,
     )
 
 

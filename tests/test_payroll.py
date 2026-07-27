@@ -8,8 +8,10 @@ no one outside HR/Admin can reach org-wide payroll.
 from __future__ import annotations
 
 from datetime import date, timedelta
+from io import BytesIO
 
 from httpx import AsyncClient
+from openpyxl import load_workbook
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
@@ -17,11 +19,13 @@ from app.core.payroll import (
     CalcConfig,
     compute_breakdown,
     days_in_month,
+    employer_contributions,
     prorate_breakdown,
     weekdays_in_month,
     working_days_between,
 )
 from app.models.employee import Employee, EmployeeStatus, Role
+from app.services.payroll_service import PayrollService
 from tests.conftest import _Seed, auth_headers
 
 # ---- pure calculator (the reference ₹50,000 structure, in paise) ----------- #
@@ -184,6 +188,17 @@ async def test_future_working_days_are_not_charged_as_lop(
     assert line["net_minor"] == line["breakdown"]["net_minor"]  # full month pay
 
 
+async def test_payroll_scheduler_build_service_matches_constructor(db: AsyncSession) -> None:
+    """The payroll worker wires PayrollService by hand (not FastAPI DI) and is not
+    covered by `mypy app`, so a constructor change can silently break the running
+    scheduler (it did: a missing `settings` arg took the worker down). Building the
+    service here fails loudly if the wiring and the constructor drift apart."""
+    from worker.payroll_scheduler import _build_service
+
+    service = _build_service(db)
+    assert isinstance(service, PayrollService)
+
+
 async def test_hr_can_read_estimate(
     client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
 ) -> None:
@@ -230,6 +245,111 @@ async def test_export_xlsx_hr_admin_only(
             "/api/v1/payroll/export?month=2026-06", headers=auth_headers(settings, actor)
         )
         assert forbidden.status_code == 403, f"{actor.work_email} must not export payroll"
+
+
+def _sheet_row_by_name(content: bytes, name: str) -> dict[str, object]:
+    """Load the register and return the {header: value} row for one employee."""
+    ws = load_workbook(BytesIO(content)).active
+    assert ws is not None
+    headers = [c.value for c in ws[1]]
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        cells = dict(zip(headers, row, strict=False))
+        if cells.get("Employee Name") == name:
+            return cells
+    raise AssertionError(f"{name} not in export")
+
+
+def test_employer_contributions_reference_split() -> None:
+    # Basic ₹15,000 (the ₹50k structure): the employer 12% splits per the register.
+    er = employer_contributions(15_000_00, 1_800_00)
+    assert er.eps_minor == 1_250_00  # 8.33% of ₹15k ceiling, capped at ₹1,250
+    assert er.epf_employer_minor == 550_00  # employee PF (1800) minus EPS (1250)
+    assert er.edli_minor == 75_00  # 0.5% of ₹15k
+    assert er.admin_minor == 75_00  # 0.5% of Basic
+    assert er.total_minor == 1_950_00
+    # A ₹9,870 basic (below the ceiling): everything scales off actual basic.
+    low = employer_contributions(9_870_00, 1_184_00)
+    assert low.eps_minor == round(9_870_00 * 8.33 / 100)
+    assert low.epf_employer_minor == 1_184_00 - low.eps_minor
+
+
+async def test_export_register_columns_and_consistency(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation",
+        json=_COMP,
+        headers=auth_headers(settings, seed.admin),
+    )
+    res = await client.get(
+        "/api/v1/payroll/export?month=2026-06", headers=auth_headers(settings, seed.admin)
+    )
+    ws = load_workbook(BytesIO(res.content)).active
+    assert ws is not None
+    headers = [c.value for c in ws[1]]
+    assert len(headers) == 40
+    assert headers[0] == "Period" and headers[-1] == "Business Expense Reimbursements"
+
+    row = _sheet_row_by_name(res.content, "Remy Report")
+    assert row["Period"] == "June 2026"
+    assert row["Payroll Type"] == "Regular Payroll"
+    assert row["CTC Amount(Per Annum)"] == 600000  # 50,000 x 12
+    assert row["Base Days"] == 30
+    # The register is internally consistent regardless of how much LOP applies.
+    assert row["Effective Paid Days"] == 30 - row["Loss Of Pay"]
+    assert (
+        row["EPF Contribution Employer"]
+        == row["EPF Contribution"] - row["EPS Contribution Employer"]
+    )
+    assert row["Total Employer Contributions"] == (
+        row["EPF Contribution Employer"]
+        + row["EPS Contribution Employer"]
+        + row["Employer EDLI Contribution Employer"]
+        + row["Employer EPF Admin Charges Employer"]
+    )
+    assert row["Total Deductions"] == (
+        row["EPF Contribution"] + row["Income Tax"] + row["Maharashtra Professional Tax"]
+    )
+    assert row["Net Pay"] == row["Gross Pay"] - row["Total Deductions"]
+    assert row["Business Expense Reimbursements"] == 0  # none approved yet
+
+
+async def test_export_includes_approved_reimbursement(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation",
+        json=_COMP,
+        headers=auth_headers(settings, seed.admin),
+    )
+    # Report submits a ₹500 claim for June; manager then HR approve it.
+    claim = await client.post(
+        "/api/v1/reimbursements",
+        json={
+            "amount_minor": 500_00,
+            "category": "travel",
+            "description": "June cab",
+            "expense_date": "2026-06-10",
+        },
+        headers=auth_headers(settings, seed.report),
+    )
+    rid = claim.json()["id"]
+    await client.post(
+        f"/api/v1/reimbursements/{rid}/manager-decision",
+        json={"approve": True},
+        headers=auth_headers(settings, seed.manager),
+    )
+    await client.post(
+        f"/api/v1/reimbursements/{rid}/hr-decision",
+        json={"approve": True},
+        headers=auth_headers(settings, seed.admin),
+    )
+
+    res = await client.get(
+        "/api/v1/payroll/export?month=2026-06", headers=auth_headers(settings, seed.admin)
+    )
+    row = _sheet_row_by_name(res.content, "Remy Report")
+    assert row["Business Expense Reimbursements"] == 500
 
 
 # ---- authorization: payroll is HR/Admin only (CLAUDE §9) ------------------- #
