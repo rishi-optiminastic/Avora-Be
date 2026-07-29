@@ -314,6 +314,37 @@ async def test_export_register_columns_and_consistency(
     assert row["Business Expense Reimbursements"] == 0  # none approved yet
 
 
+async def test_live_payslip_pdf_self_or_hr_admin(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation",
+        json=_COMP,
+        headers=auth_headers(settings, seed.admin),
+    )
+    url = "/api/v1/payroll/me/pdf?month=2026-06"
+
+    # The individual generates + downloads their OWN payslip (no finalize needed).
+    mine = await client.get(url, headers=auth_headers(settings, seed.report))
+    assert mine.status_code == 200, mine.text
+    assert mine.content[:4] == b"%PDF"
+    assert "payslip-2026-06.pdf" in mine.headers["content-disposition"]
+
+    # HR/Admin generate anyone's.
+    theirs = await client.get(
+        f"{url}&employee_id={seed.report.id}", headers=auth_headers(settings, seed.admin)
+    )
+    assert theirs.status_code == 200
+    assert theirs.content[:4] == b"%PDF"
+
+    # A manager or unrelated employee cannot generate someone else's (need-to-know).
+    for actor in (seed.manager, seed.outsider):
+        denied = await client.get(
+            f"{url}&employee_id={seed.report.id}", headers=auth_headers(settings, actor)
+        )
+        assert denied.status_code == 403, f"{actor.work_email} must not generate another's payslip"
+
+
 async def test_export_includes_approved_reimbursement(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:

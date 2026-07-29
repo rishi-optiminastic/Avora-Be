@@ -68,6 +68,26 @@ async def get_released_payslip(
     return await service.get_released_payslip(caller, employee_id, month)
 
 
+@router.get("/me/pdf")
+async def generate_payslip_pdf(
+    caller: CurrentUserDep,
+    service: PayrollServiceDep,
+    month: str | None = Query(default=None, description="YYYY-MM; defaults to the current month"),
+    employee_id: Annotated[
+        uuid.UUID | None,
+        Query(description="Whose payslip (self-or-HR/Admin); defaults to the caller"),
+    ] = None,
+) -> Response:
+    """Generate + download a payslip PDF from the LIVE slip (no finalize needed).
+    Self-or-HR/Admin: an employee generates their own; HR/Admin generate anyone's."""
+    pdf, filename = await service.live_payslip_pdf(caller, employee_id, month)
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.get("/payslips/{month}/pdf")
 async def download_payslip_pdf(
     month: str,
