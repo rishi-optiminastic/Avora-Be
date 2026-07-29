@@ -650,6 +650,47 @@ class PayrollService:
         )
         return pdf, f"payslip-{period}.pdf"
 
+    async def live_payslip_pdf(
+        self, caller: CurrentUser, employee_id: uuid.UUID | None, month: str | None
+    ) -> tuple[bytes, str]:
+        """Generate a payslip PDF from the LIVE computed slip — no finalize needed.
+        Self-or-HR/Admin (my_slip enforces it): an employee generates their own; HR/
+        Admin generate anyone's. Audited (rule 5.7)."""
+        slip = await self.my_slip(caller, employee_id, month)  # authorizes + computes
+        if slip.missing_compensation:
+            raise ValidationError("No compensation on record for this employee.")
+        target = employee_id or caller.employee_id
+        employee = await self._employees.get(target)
+        if employee is None:
+            raise NotFoundError()
+        year, m = _parse_month(slip.month)
+        data = PayslipPdfData(
+            org_name=await self._org_name(),
+            employee_name=employee.full_name,
+            job_title=employee.job_title,
+            department=employee.department,
+            location=employee.location,
+            doj_label=employee.hire_date.strftime("%d %b %Y") if employee.hire_date else None,
+            month_label=_month_label(year, m),
+            currency=slip.currency,
+            monthly_ctc_minor=slip.monthly_ctc_minor,
+            monthly=slip.breakdown.model_dump(),
+            prorated=slip.prorated.model_dump(),
+            net_payable_minor=slip.net_minor,
+            total_days=slip.total_days,
+            working_days=slip.working_days,
+            present_days=slip.present_days,
+            paid_leave_days=slip.paid_leave_days,
+            payable_days=slip.payable_days,
+            generated_label=datetime.now(UTC).strftime("%d %b %Y"),
+        )
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="payroll.payslip.generate",
+            target=f"employee:{target}:{slip.month}",
+        )
+        return render_payslip_pdf(data), f"payslip-{slip.month}.pdf"
+
     async def _release_from_estimate(
         self, est: PayrollEstimateRead, *, actor: CurrentUser | None
     ) -> tuple[int, int, int]:
