@@ -68,8 +68,13 @@ async def list_assignable_employees(
 
 @router.get("/me", response_model=EmployeeRead)
 async def get_me(caller: CurrentUserDep, service: EmployeeServiceDep) -> EmployeeRead:
-    """The caller's own record — lets the client tailor UI to their role/scope."""
-    return EmployeeRead.model_validate(await service.get_self(caller))
+    """The caller's own record — lets the client tailor UI to their role/scope.
+
+    Reports the caller's EFFECTIVE role (`caller.role`), so an `it_admin` — who is
+    treated as a full admin for authorization — gets the admin UI. Other endpoints
+    still surface the stored `it_admin` label for display/editing."""
+    me = EmployeeRead.model_validate(await service.get_self(caller))
+    return me.model_copy(update={"role": caller.role})
 
 
 @router.patch("/me/profile", response_model=EmployeeRead)

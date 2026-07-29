@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from app.models.employee import Role
 
@@ -15,6 +15,14 @@ class CurrentUser(BaseModel):
     employee_id: uuid.UUID
     role: Role
     manager_id: uuid.UUID | None
+
+    @field_validator("role")
+    @classmethod
+    def _normalize_role(cls, role: Role) -> Role:
+        # IT admins are treated as full admins for authorization (org decision):
+        # collapse the role here so every downstream check sees ADMIN. The stored
+        # employee role stays `it_admin` for display; only effective access changes.
+        return Role.ADMIN if role is Role.IT_ADMIN else role
 
     @property
     def is_admin(self) -> bool:
