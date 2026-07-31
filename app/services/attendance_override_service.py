@@ -12,7 +12,6 @@ from collections.abc import Sequence
 
 from app.core.exceptions import AuthorizationError, NotFoundError, ValidationError
 from app.models.attendance_override import AttendanceOverride
-from app.models.employee import Role
 from app.repositories.attendance_override import AttendanceOverrideRepository
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
@@ -21,7 +20,7 @@ from app.schemas.auth import CurrentUser
 
 
 def _can_manage(caller: CurrentUser) -> bool:
-    return caller.role in (Role.ADMIN, Role.HR)
+    return caller.can_manage_payroll
 
 
 class AttendanceOverrideService:

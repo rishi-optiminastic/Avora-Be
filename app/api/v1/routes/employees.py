@@ -30,6 +30,7 @@ from app.schemas.employee import (
     EmployeeRead,
     EmployeeRoleUpdate,
     EmployeeStatusUpdate,
+    PayrollManagerUpdate,
     SelfProfileUpdate,
 )
 from app.services.employee_service import MAX_AVATAR_BYTES
@@ -139,6 +140,19 @@ async def set_employee_role(
 ) -> EmployeeRead:
     """Admin-only privilege change — the sole path that sets a role (rule 5.5)."""
     employee = await service.set_role(admin, employee_id, payload.role)
+    return EmployeeRead.model_validate(employee)
+
+
+@router.put("/{employee_id}/payroll-manager", response_model=EmployeeRead)
+async def set_employee_payroll_manager(
+    employee_id: uuid.UUID,
+    payload: PayrollManagerUpdate,
+    admin: AdminDep,
+    service: EmployeeServiceDep,
+) -> EmployeeRead:
+    """Admin-only: grant/revoke payroll-cluster management for one person (a
+    finance executive doing salary processing) — orthogonal to their role."""
+    employee = await service.set_payroll_manager(admin, employee_id, payload.payroll_manager)
     return EmployeeRead.model_validate(employee)
 
 

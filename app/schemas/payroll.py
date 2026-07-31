@@ -50,6 +50,8 @@ class PayrollSettingsUpdate(BaseModel):
     currency: str = Field(min_length=3, max_length=3)
     pay_cycle: PayCycle = PayCycle.MONTHLY
     auto_send_enabled: bool = False
+    auto_release_enabled: bool = False
+    auto_release_day: int = Field(default=8, ge=1, le=28)
     recipients: list[str] = Field(default_factory=list, max_length=50)
     basic_pct: int = Field(ge=0, le=100)
     hra_pct: int = Field(ge=0, le=200)
@@ -70,6 +72,8 @@ class PayrollSettingsRead(BaseModel):
     currency: str
     pay_cycle: PayCycle
     auto_send_enabled: bool
+    auto_release_enabled: bool
+    auto_release_day: int
     recipients: list[str]
     basic_pct: int
     hra_pct: int
@@ -87,6 +91,8 @@ class PayrollSettingsRead(BaseModel):
             currency=model.currency,
             pay_cycle=model.pay_cycle,
             auto_send_enabled=model.auto_send_enabled,
+            auto_release_enabled=model.auto_release_enabled,
+            auto_release_day=model.auto_release_day,
             recipients=parse_recipients(model.recipients),
             basic_pct=model.basic_pct,
             hra_pct=model.hra_pct,

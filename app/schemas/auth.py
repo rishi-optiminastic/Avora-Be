@@ -15,6 +15,9 @@ class CurrentUser(BaseModel):
     employee_id: uuid.UUID
     role: Role
     manager_id: uuid.UUID | None
+    # Capability grant, re-derived from the DB (never the token). Lets a non-HR
+    # finance person manage the payroll cluster (payroll, adjustments, comp).
+    payroll_manager: bool = False
 
     @field_validator("role")
     @classmethod
@@ -27,6 +30,12 @@ class CurrentUser(BaseModel):
     @property
     def is_admin(self) -> bool:
         return self.role is Role.ADMIN
+
+    @property
+    def can_manage_payroll(self) -> bool:
+        """Who may manage the payroll cluster: HR/Admin, or an explicit grant
+        holder (a finance executive doing salary processing)."""
+        return self.role in (Role.ADMIN, Role.HR) or self.payroll_manager
 
     @property
     def is_manager(self) -> bool:

@@ -377,3 +377,20 @@ class EmployeeService:
             target=f"employee:{target_id}:{role.value}",
         )
         return updated
+
+    async def set_payroll_manager(
+        self, caller: CurrentUser, target_id: uuid.UUID, granted: bool
+    ) -> Employee:
+        # A capability grant is a privilege change — admin-only (rule 5.5).
+        if not caller.is_admin:
+            raise AuthorizationError()
+        employee = await self._employees.get(target_id)
+        if employee is None:
+            raise NotFoundError()
+        updated = await self._employees.set_payroll_manager(employee, granted)
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="employee.payroll_manager_change",
+            target=f"employee:{target_id}:{granted}",
+        )
+        return updated

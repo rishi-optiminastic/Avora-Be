@@ -298,3 +298,9 @@ class EmployeeRepository:
         employee.role = role
         await self._session.flush()
         return employee
+
+    async def set_payroll_manager(self, employee: Employee, granted: bool) -> Employee:
+        """Admin-only capability grant for payroll-cluster management."""
+        employee.payroll_manager = granted
+        await self._session.flush()
+        return employee

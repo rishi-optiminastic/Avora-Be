@@ -34,5 +34,6 @@ class AttendanceMonthSummary(BaseModel):
     half_days: int
     late_days: int
     absent_days: int
+    leave_days: int
     regularized_days: int
     worked_minutes: int

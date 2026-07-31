@@ -324,18 +324,23 @@ async def test_live_payslip_pdf_self_or_hr_admin(
     )
     url = "/api/v1/payroll/me/pdf?month=2026-06"
 
-    # The individual generates + downloads their OWN payslip (no finalize needed).
-    mine = await client.get(url, headers=auth_headers(settings, seed.report))
-    assert mine.status_code == 200, mine.text
-    assert mine.content[:4] == b"%PDF"
-    assert "payslip-2026-06.pdf" in mine.headers["content-disposition"]
-
-    # HR/Admin generate anyone's.
+    # HR/Admin generate anyone's live PDF before release (a preview).
     theirs = await client.get(
         f"{url}&employee_id={seed.report.id}", headers=auth_headers(settings, seed.admin)
     )
     assert theirs.status_code == 200
     assert theirs.content[:4] == b"%PDF"
+
+    # The individual can't generate their own until the month is released.
+    early = await client.get(url, headers=auth_headers(settings, seed.report))
+    assert early.status_code == 404
+    await client.post(
+        "/api/v1/payroll/finalize?month=2026-06", headers=auth_headers(settings, seed.admin)
+    )
+    mine = await client.get(url, headers=auth_headers(settings, seed.report))
+    assert mine.status_code == 200, mine.text
+    assert mine.content[:4] == b"%PDF"
+    assert "payslip-2026-06.pdf" in mine.headers["content-disposition"]
 
     # A manager or unrelated employee cannot generate someone else's (need-to-know).
     for actor in (seed.manager, seed.outsider):

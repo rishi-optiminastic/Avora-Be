@@ -12,7 +12,6 @@ import uuid
 from collections.abc import Sequence
 
 from app.core.exceptions import AuthorizationError, NotFoundError, ValidationError
-from app.models.employee import Role
 from app.models.payroll_adjustment import PayrollAdjustment
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
@@ -22,7 +21,7 @@ from app.schemas.payroll_adjustment import PayrollAdjustmentCreate
 
 
 def _can_manage(caller: CurrentUser) -> bool:
-    return caller.role in (Role.ADMIN, Role.HR)
+    return caller.can_manage_payroll
 
 
 class PayrollAdjustmentService:
