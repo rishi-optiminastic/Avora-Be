@@ -33,6 +33,35 @@ async def test_cannot_apply_for_a_past_date(
     assert resp.status_code == 422, resp.text
 
 
+async def test_backdating_window_is_configurable(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    # HR opens a 3-day backdating window.
+    set_policy = await client.put(
+        "/api/v1/leaves/policy",
+        json={"max_backdate_days": 3},
+        headers=auth_headers(settings, seed.admin),
+    )
+    assert set_policy.status_code == 200
+    assert set_policy.json()["max_backdate_days"] == 3
+
+    # A sick day that started 2 days ago is now allowed (within the window).
+    within = await client.post(
+        "/api/v1/leaves",
+        json=_body("sick", datetime.now(UTC) - timedelta(days=2)),
+        headers=auth_headers(settings, seed.report),
+    )
+    assert within.status_code == 201, within.text
+
+    # 5 days ago is beyond the window — still rejected.
+    beyond = await client.post(
+        "/api/v1/leaves",
+        json=_body("sick", datetime.now(UTC) - timedelta(days=5)),
+        headers=auth_headers(settings, seed.report),
+    )
+    assert beyond.status_code == 422
+
+
 async def test_maternity_requires_female(
     client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
 ) -> None:

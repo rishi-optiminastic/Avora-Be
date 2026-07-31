@@ -25,7 +25,8 @@ class NotificationKind(StrEnum):
     RESIGNATION_DECISION = "resignation_decision"  # your resignation was decided
     REIMBURSEMENT_SUBMITTED = "reimbursement_submitted"  # a claim needs your review
     REIMBURSEMENT_DECISION = "reimbursement_decision"  # your claim was decided
-    TASK_ASSIGNED = "task_assigned"  # you were assigned a task
+    TASK_ASSIGNED = "task_assigned"  # you were assigned a task (or added/removed as collaborator)
+    TASK_COMMENT = "task_comment"  # a new message on a task you're on
     UNDERPERFORMANCE = "underperformance"  # a person you manage is at risk
     ESCALATION = "escalation"  # a repeated issue escalated up to you
     APPRECIATION = "appreciation"  # a manager thanked you for completing a task

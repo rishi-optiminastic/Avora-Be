@@ -37,6 +37,11 @@ class LeavePolicy(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # time). Sick / unpaid / half-day / event-based leave are applicable any time.
     planned_min_notice_days: Mapped[int] = mapped_column(default=2)
 
+    # How many days AFTER a leave has started it can still be applied for — the
+    # backdating window (0 ⇒ no past dates; 3 ⇒ a leave that started up to 3 days
+    # ago can be filed, e.g. logging yesterday's sick day).
+    max_backdate_days: Mapped[int] = mapped_column(default=0)
+
     updated_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("employees.id", ondelete="SET NULL"), default=None
     )

@@ -119,10 +119,19 @@ class LeaveService:
         return datetime.now(UTC).astimezone(ZoneInfo(spec.timezone)).date()
 
     async def _enforce_not_past(self, payload: LeaveCreate) -> None:
-        """No one may apply for leave that starts before today. 'Today' is the
-        org's policy-timezone date, so it never drifts with the server's clock."""
-        if _utc_date(payload.start_date) < await self._org_today():
-            raise ValidationError("You can't apply for leave for a past date.")
+        """Leave can't start before the backdating window opens. The window is
+        `max_backdate_days` days before today (0 ⇒ no past dates at all), so HR can
+        allow filing a leave that already started (e.g. yesterday's sick day).
+        'Today' is the org's policy-timezone date, never the server's clock."""
+        backdate = (await self._policy.get_or_create()).max_backdate_days
+        earliest = await self._org_today() - timedelta(days=max(0, backdate))
+        if _utc_date(payload.start_date) < earliest:
+            if backdate <= 0:
+                raise ValidationError("You can't apply for leave for a past date.")
+            raise ValidationError(
+                f"Leave can be backdated at most {backdate} "
+                f"day{'s' if backdate != 1 else ''}."
+            )
 
     async def _enforce_min_notice(self, payload: LeaveCreate) -> None:
         """Planned / annual leave must be applied at least `planned_min_notice_days`

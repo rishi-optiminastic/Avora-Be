@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.models.activity import ActivitySample
-from app.models.employee import Role
+from app.models.employee import Employee, Gender, Role
 from app.models.eod_report import EodReport, EodStatus
 from app.models.notification import Notification
 from app.models.screenshot import Screenshot
@@ -43,9 +43,11 @@ from tests.conftest import _Seed, auth_headers
 class _StubLlm:
     def __init__(self) -> None:
         self.calls = 0
+        self.contexts: list[str] = []
 
     async def generate_eod(self, context: str) -> EodDraftContent:
         self.calls += 1
+        self.contexts.append(context)
         return EodDraftContent(
             summary="Shipped the thing.", worked_on=["Avora"], tasks_completed=["t"], confidence=80
         )
@@ -174,6 +176,32 @@ async def test_present_generates_draft(db: AsyncSession, seed: _Seed, settings: 
     assert report.status is EodStatus.DRAFT
     assert report.summary == "Shipped the thing."
     assert report.model == "test/model"
+
+
+def test_pronoun_for_maps_gender() -> None:
+    from app.services.eod_service import _pronoun_for
+
+    assert _pronoun_for(Gender.MALE) == "he/him"
+    assert _pronoun_for(Gender.FEMALE) == "she/her"
+    assert _pronoun_for(None) == "they/them"  # unknown → neutral, never a name guess
+
+
+async def test_eod_context_carries_employee_pronouns(
+    db: AsyncSession, seed: _Seed, settings: Settings
+) -> None:
+    report = await db.get(Employee, seed.report.id)
+    assert report is not None
+    report.gender = Gender.MALE
+    await db.commit()
+    await _add_activity(db, seed)
+
+    llm = _StubLlm()
+    service = _build_service(db, settings, llm=llm, email=_CapturingEmail())
+    await service.generate_for_day(_admin_caller(seed), datetime.now(UTC))
+
+    # The model is told the correct pronouns, so it can't guess 'she' from the name.
+    assert any("he/him" in ctx for ctx in llm.contexts)
+    assert not any("she/her" in ctx for ctx in llm.contexts)
 
 
 async def test_failed_llm_marks_failed(db: AsyncSession, seed: _Seed, settings: Settings) -> None:

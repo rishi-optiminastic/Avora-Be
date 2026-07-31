@@ -19,6 +19,7 @@ class LeavePolicyRead(BaseModel):
     paternity_days: int
     marriage_days: int
     planned_min_notice_days: int
+    max_backdate_days: int
     updated_at: datetime
 
     @classmethod
@@ -33,6 +34,7 @@ class LeavePolicyRead(BaseModel):
             paternity_days=m.paternity_days,
             marriage_days=m.marriage_days,
             planned_min_notice_days=m.planned_min_notice_days,
+            max_backdate_days=m.max_backdate_days,
             updated_at=m.updated_at,
         )
 
@@ -49,3 +51,4 @@ class LeavePolicyUpdate(BaseModel):
     paternity_days: int | None = Field(default=None, ge=0, le=365)
     marriage_days: int | None = Field(default=None, ge=0, le=365)
     planned_min_notice_days: int | None = Field(default=None, ge=0, le=90)
+    max_backdate_days: int | None = Field(default=None, ge=0, le=90)
