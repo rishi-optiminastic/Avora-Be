@@ -21,6 +21,50 @@ async def _create_task(client: AsyncClient, settings: Settings, seed: _Seed) -> 
     return str(resp.json()["id"])
 
 
+async def _titles(client: AsyncClient, settings: Settings, actor: object) -> list[str]:
+    resp = await client.get("/api/v1/notifications", headers=auth_headers(settings, actor))
+    assert resp.status_code == 200
+    return [n["title"] for n in resp.json()["items"]]
+
+
+async def test_comment_notifies_other_participants_not_the_author(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    task_id = await _create_task(client, settings, seed)  # manager -> report
+
+    # The report (assignee) posts a message.
+    posted = await client.post(
+        f"/api/v1/tasks/{task_id}/comments",
+        json={"body": "Quick update for the team."},
+        headers=auth_headers(settings, seed.report),
+    )
+    assert posted.status_code == 201, posted.text
+
+    # The manager (assigner) is notified; the author is NOT notified of their own.
+    assert any("New message on" in t for t in await _titles(client, settings, seed.manager))
+    assert not any("New message on" in t for t in await _titles(client, settings, seed.report))
+
+
+async def test_removing_a_collaborator_notifies_them(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    task_id = await _create_task(client, settings, seed)
+    admin = auth_headers(settings, seed.admin)
+
+    added = await client.post(
+        f"/api/v1/tasks/{task_id}/collaborators",
+        json={"employee_id": str(seed.outsider.id)},
+        headers=admin,
+    )
+    assert added.status_code == 200, added.text
+    removed = await client.delete(
+        f"/api/v1/tasks/{task_id}/collaborators/{seed.outsider.id}", headers=admin
+    )
+    assert removed.status_code == 200, removed.text
+
+    assert any("Removed from a task" in t for t in await _titles(client, settings, seed.outsider))
+
+
 async def test_assignee_and_manager_can_discuss(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:

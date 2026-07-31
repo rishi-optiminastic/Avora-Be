@@ -446,6 +446,16 @@ class TaskService:
             action="task.collaborator.remove",
             target=f"task:{task_id}:employee:{employee_id}",
         )
+        # Tell the removed person (self-remove is dropped by notify()).
+        await self._notifications.notify(
+            recipient_id=employee_id,
+            kind=NotificationKind.TASK_ASSIGNED,
+            title=f"Removed from a task: {task.title}",
+            link=f"/dashboard/goals/tasks?task={task.id}",
+            entity_type="task",
+            entity_id=task.id,
+            actor_id=caller.employee_id,
+        )
         return task
 
     # -- Discussion thread ---------------------------------------------------- #
@@ -464,7 +474,8 @@ class TaskService:
         *,
         idempotency_key: str | None = None,
     ) -> TaskComment:
-        if await self._tasks.get_in_scope(caller, task_id) is None:
+        task = await self._tasks.get_in_scope(caller, task_id)
+        if task is None:
             raise NotFoundError()
         author_id = caller.employee_id
 
@@ -500,4 +511,28 @@ class TaskService:
             action="task.comment",
             target=f"task:{task_id}",
         )
+        await self._notify_comment(task, comment, author_id)
         return comment
+
+    async def _notify_comment(
+        self, task: Task, comment: TaskComment, author_id: uuid.UUID
+    ) -> None:
+        """Ping everyone on the task (assignee, assigner, collaborators) except the
+        author when a message is posted. notify() also drops the self-case."""
+        recipients = {task.assignee_id, *task.collaborator_ids}
+        if task.assigned_by_id is not None:
+            recipients.add(task.assigned_by_id)
+        preview = comment.body if len(comment.body) <= 140 else f"{comment.body[:139]}…"
+        for recipient_id in recipients:
+            if recipient_id == author_id:
+                continue
+            await self._notifications.notify(
+                recipient_id=recipient_id,
+                kind=NotificationKind.TASK_COMMENT,
+                title=f"New message on: {task.title}",
+                body=preview,
+                link=f"/dashboard/goals/tasks?task={task.id}",
+                entity_type="task",
+                entity_id=task.id,
+                actor_id=author_id,
+            )

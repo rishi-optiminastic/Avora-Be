@@ -22,7 +22,7 @@ from app.core import storage
 from app.core.config import Settings
 from app.core.exceptions import AuthorizationError, ConflictError, NotFoundError
 from app.core.logging import get_logger
-from app.models.employee import Employee, Role
+from app.models.employee import Employee, Gender, Role
 from app.models.eod_report import EodReport, EodStatus
 from app.models.notification import NotificationKind
 from app.models.screenshot import Screenshot
@@ -637,6 +637,8 @@ class EodService:
         lines = [
             f"Employee: {employee.full_name}"
             + (f" ({employee.job_title})" if employee.job_title else ""),
+            f"Refer to them with {_pronoun_for(employee.gender)} pronouns "
+            "(use these exactly; do not infer gender from the name).",
             f"Department: {employee.department or 'n/a'}",
             f"Time worked today: {_worked_summary(agg)}",
             f"Tasks completed today: {_join(completed)}",
@@ -721,6 +723,15 @@ def _is_today_task(task: Task, start: datetime, end: datetime) -> bool:
     if task.status is TaskStatus.IN_PROGRESS:
         return True
     return _in_range(task.due_date, start, end) or _in_range(task.start_date, start, end)
+
+
+_PRONOUNS = {Gender.MALE: "he/him", Gender.FEMALE: "she/her"}
+
+
+def _pronoun_for(gender: Gender | None) -> str:
+    """Pronouns for the EOD summary, from the employee's self-reported gender.
+    Unknown/other → the neutral they/them, never a guess from the name."""
+    return _PRONOUNS.get(gender, "they/them") if gender is not None else "they/them"
 
 
 def _join(items: list[str]) -> str:
