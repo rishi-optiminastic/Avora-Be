@@ -14,7 +14,6 @@ from app.core.config import Settings
 from app.core.exceptions import AuthorizationError, NotFoundError
 from app.core.pii_crypto import decrypt_pii, encrypt_pii
 from app.models.compensation import Compensation
-from app.models.employee import Role
 from app.repositories.audit import AuditRepository
 from app.repositories.compensation import CompensationRepository
 from app.repositories.employee import EmployeeRepository
@@ -23,8 +22,9 @@ from app.schemas.compensation import BankDetailsWrite, CompensationRead, Compens
 
 
 def _can_manage(caller: CurrentUser) -> bool:
-    """HR/Admin may read anyone's and write anyone's compensation."""
-    return caller.role in (Role.ADMIN, Role.HR)
+    """HR/Admin (or a payroll-manager grant holder) may read and write anyone's
+    compensation — needed for salary processing."""
+    return caller.can_manage_payroll
 
 
 class CompensationService:

@@ -39,6 +39,8 @@ from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.eod_report import EodReportRepository
 from app.repositories.eod_settings import EodSettingsRepository
+from app.repositories.holiday import HolidayRepository
+from app.repositories.leave import LeaveRepository
 from app.repositories.notification import NotificationRepository
 from app.repositories.regularization import RegularizationRepository
 from app.repositories.screenshot import ScreenshotRepository
@@ -74,6 +76,8 @@ def _build_service(session: AsyncSession) -> EodService:
         policy,
         RegularizationRepository(session),
         AttendanceOverrideRepository(session),
+        HolidayRepository(session),
+        LeaveRepository(session),
     )
     return EodService(
         EodReportRepository(session),

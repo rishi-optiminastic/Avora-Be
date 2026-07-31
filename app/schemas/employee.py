@@ -27,6 +27,7 @@ class EmployeeRead(ORMModel):
     timezone: str | None
     manager_id: uuid.UUID | None
     role: Role
+    payroll_manager: bool = False
     status: EmployeeStatus
     is_active: bool
     tracking_mode: TrackingMode
@@ -44,6 +45,13 @@ class EmployeeRoleUpdate(BaseModel):
     """Admin-only privilege change — the ONLY way a role is ever set."""
 
     role: Role
+
+
+class PayrollManagerUpdate(BaseModel):
+    """Admin-only capability grant: turn payroll-cluster management on/off for one
+    person (e.g. a finance executive doing salary processing)."""
+
+    payroll_manager: bool
 
 
 class AssignmentGrantsUpdate(BaseModel):

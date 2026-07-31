@@ -430,9 +430,11 @@ def get_attendance_service(
     policy: Annotated[AttendancePolicyService, Depends(get_attendance_policy_service)],
     regularizations: Annotated[RegularizationRepository, Depends(get_regularization_repo)],
     overrides: Annotated[AttendanceOverrideRepository, Depends(get_attendance_override_repo)],
+    holidays: Annotated[HolidayRepository, Depends(get_holiday_repo)],
+    leaves: Annotated[LeaveRepository, Depends(get_leave_repo)],
 ) -> AttendanceService:
     return AttendanceService(
-        employees, activity, sessions, policy, regularizations, overrides
+        employees, activity, sessions, policy, regularizations, overrides, holidays, leaves
     )
 
 
@@ -1009,6 +1011,7 @@ async def get_current_user(
         employee_id=employee.id,
         role=employee.role,
         manager_id=employee.manager_id,
+        payroll_manager=employee.payroll_manager,
     )
 
 

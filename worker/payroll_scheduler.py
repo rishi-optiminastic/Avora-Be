@@ -65,6 +65,8 @@ def _build_service(session: AsyncSession) -> PayrollService:
         policy,
         RegularizationRepository(session),
         AttendanceOverrideRepository(session),
+        HolidayRepository(session),
+        LeaveRepository(session),
     )
     return PayrollService(
         PayrollSettingsRepository(session),
@@ -99,6 +101,16 @@ async def _tick() -> None:
                     )
                 else:
                     log.info("auto-send due but already sent this month (or no recipients)")
+            if await service.is_auto_release_due():
+                released = await service.release_for_system()
+                if released is not None:
+                    log.info(
+                        "payroll auto-released for %s (%d employees)",
+                        released.period_month,
+                        released.employee_count,
+                    )
+                else:
+                    log.info("auto-release due but the previous month was already released")
             await session.commit()
         except Exception:
             await session.rollback()

@@ -23,6 +23,8 @@ from app.models.employee import Employee
 from app.repositories.activity import ActivityRepository, DailyAgg, idle_minutes
 from app.repositories.attendance_override import AttendanceOverrideRepository
 from app.repositories.employee import EmployeeRepository
+from app.repositories.holiday import HolidayRepository
+from app.repositories.leave import LeaveRepository
 from app.repositories.regularization import RegularizationRepository
 from app.repositories.work_session import DaySpan, WorkSessionRepository
 from app.schemas.attendance_report import AttendanceDayRow, AttendanceMonthSummary
@@ -70,6 +72,8 @@ class AttendanceService:
         policy: AttendancePolicyService,
         regularizations: RegularizationRepository,
         overrides: AttendanceOverrideRepository,
+        holidays: HolidayRepository,
+        leaves: LeaveRepository,
     ) -> None:
         self._employees = employees
         self._activity = activity
@@ -77,6 +81,8 @@ class AttendanceService:
         self._policy = policy
         self._regs = regularizations
         self._overrides = overrides
+        self._holidays = holidays
+        self._leaves = leaves
 
     @staticmethod
     def _local_bounds(local_date: str, tz: str) -> tuple[datetime, datetime]:
@@ -87,6 +93,84 @@ class AttendanceService:
     @staticmethod
     def _local_day(dt: datetime, tz: str) -> str:
         return _aware(dt).astimezone(ZoneInfo(tz)).date().isoformat()
+
+    async def _approved_leave_dates(
+        self, ids: Sequence[uuid.UUID], start_date: str, end_date: str, spec: PolicySpec
+    ) -> dict[uuid.UUID, set[date]]:
+        """Per-employee set of local dates covered by approved paid leave in the
+        inclusive [start_date, end_date] window. Used to label an unattended day
+        as On leave rather than Absent."""
+        if not ids:
+            return {}
+        start, _ = self._local_bounds(start_date, spec.timezone)
+        _, end = self._local_bounds(end_date, spec.timezone)
+        leaves = await self._leaves.approved_paid_in_range(ids, start, end)
+        tz = ZoneInfo(spec.timezone)
+        out: dict[uuid.UUID, set[date]] = {}
+        for emp_id, spans in leaves.items():
+            days: set[date] = set()
+            for span_start, span_end, _kind in spans:
+                cursor = _aware(span_start).astimezone(tz).date()
+                last = _aware(span_end).astimezone(tz).date()
+                while cursor <= last:
+                    days.add(cursor)
+                    cursor += timedelta(days=1)
+            out[emp_id] = days
+        return out
+
+    async def _absence_rows(
+        self,
+        ids: Sequence[uuid.UUID],
+        start_date: str,
+        end_date: str,
+        spec: PolicySpec,
+        today: str,
+        existing: set[tuple[uuid.UUID, str]],
+    ) -> list[AttendanceDayRow]:
+        """Synthesize an Absent (or On leave) row for every working day with no
+        session and no override, so unattended days are visible in the range and
+        monthly report. Weekends and holidays are skipped (not working days), and
+        days after today are never marked absent (they simply haven't happened)."""
+        first = date.fromisoformat(start_date)
+        last = min(date.fromisoformat(end_date), date.fromisoformat(today))
+        if last < first:
+            return []
+        holidays = await self._holidays.dates_in_range(first, last)
+        working: list[date] = []
+        cursor = first
+        while cursor <= last:
+            if cursor.weekday() < spec.working_days_per_week and cursor not in holidays:
+                working.append(cursor)
+            cursor += timedelta(days=1)
+        if not working:
+            return []
+        leave_dates = await self._approved_leave_dates(ids, start_date, last.isoformat(), spec)
+        rows: list[AttendanceDayRow] = []
+        for emp_id in ids:
+            on_leave = leave_dates.get(emp_id, set())
+            for day in working:
+                iso = day.isoformat()
+                if (emp_id, iso) in existing:
+                    continue
+                status = (
+                    AttendanceStatus.ON_LEAVE if day in on_leave else AttendanceStatus.ABSENT
+                )
+                rows.append(
+                    AttendanceDayRow(
+                        employee_id=emp_id,
+                        day=iso,
+                        status=status,
+                        login_at=None,
+                        logout_at=None,
+                        worked_minutes=0,
+                        late_login=False,
+                        regularizable=False,
+                        regularized=False,
+                        clock_in_source=None,
+                        clock_out_source=None,
+                    )
+                )
+        return rows
 
     @staticmethod
     def _day_work_end_utc(local_date: str, spec: PolicySpec) -> datetime:
@@ -158,6 +242,8 @@ class AttendanceService:
         spans = await self._sessions.day_spans(ids, start, end)
         approved = await self._regs.approved_days(ids, local_date, local_date)
         overrides = await self._overrides.for_range(ids, local_date, local_date)
+        leave_dates = await self._approved_leave_dates(ids, local_date, local_date, spec)
+        the_day = date.fromisoformat(local_date)
         now = datetime.now(UTC)
         now_local = now.astimezone(ZoneInfo(spec.timezone))
         today = now_local.date().isoformat()
@@ -197,10 +283,17 @@ class AttendanceService:
             idle = idle_minutes(agg, worked) if agg else 0
             active = max(0, worked - idle)
             ov = overrides.get((e.id, local_date))
+            if ov is not None:
+                status = _OVERRIDE_TO_STATUS[ov]
+            elif v.status is AttendanceStatus.ABSENT and the_day in leave_dates.get(e.id, set()):
+                # No attendance, but covered by approved paid leave → On leave.
+                status = AttendanceStatus.ON_LEAVE
+            else:
+                status = v.status
             rows.append(
                 AttendanceRead(
                     employee_id=e.id,
-                    status=_OVERRIDE_TO_STATUS[ov] if ov is not None else v.status,
+                    status=status,
                     login_at=login,
                     logout_at=logout,
                     worked_minutes=worked,
@@ -334,6 +427,13 @@ class AttendanceService:
                     clock_out_source=None,
                 )
             )
+        # Working days with neither a session nor an override are real absences (or
+        # approved leave) — synthesize them so they show up everywhere, not silently
+        # vanish. Payroll is unaffected: it counts present = full+late+half only.
+        existing = {(r.employee_id, r.day) for r in rows}
+        rows.extend(
+            await self._absence_rows(ids, start_date, end_date, spec, today, existing)
+        )
         rows.sort(key=lambda r: (r.day, str(r.employee_id)))
         return rows, ids
 
@@ -375,6 +475,10 @@ class AttendanceService:
                 s.half_days += 1
             elif r.status is AttendanceStatus.LATE:
                 s.late_days += 1
+            elif r.status is AttendanceStatus.ABSENT:
+                s.absent_days += 1
+            elif r.status is AttendanceStatus.ON_LEAVE:
+                s.leave_days += 1
             if r.regularized:
                 s.regularized_days += 1
         return list(summary.values())
@@ -385,6 +489,7 @@ _ZERO = {
     "half_days": 0,
     "late_days": 0,
     "absent_days": 0,
+    "leave_days": 0,
     "regularized_days": 0,
     "worked_minutes": 0,
 }

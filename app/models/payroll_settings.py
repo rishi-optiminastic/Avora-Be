@@ -35,6 +35,12 @@ class PayrollSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Comma-separated recipient emails (validated in the schema layer).
     recipients: Mapped[str] = mapped_column(String(2000), default="")
 
+    # Auto-release: on `auto_release_day` (org tz), release the PREVIOUS month's
+    # payslips to employees automatically — a hands-off fallback to the manual
+    # "Release payslips" click, for teams whose salary lands by a fixed day.
+    auto_release_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    auto_release_day: Mapped[int] = mapped_column(default=8)
+
     # Salary-slip knobs (defaults reproduce the reference ₹50,000 structure).
     basic_pct: Mapped[int] = mapped_column(default=30)
     hra_pct: Mapped[int] = mapped_column(default=50)

@@ -105,6 +105,10 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     # Privilege — PMS-owned, NEVER set by HR.
     role: Mapped[Role] = mapped_column(default=Role.EMPLOYEE)
+    # Capability grant (orthogonal to `role`): lets a non-HR person (e.g. a finance
+    # executive) manage payroll, payroll/attendance adjustments, and compensation
+    # for salary processing, without granting org-wide HR access. Admin-set only.
+    payroll_manager: Mapped[bool] = mapped_column(Boolean, default=False)
 
     status: Mapped[EmployeeStatus] = mapped_column(default=EmployeeStatus.ACTIVE, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)

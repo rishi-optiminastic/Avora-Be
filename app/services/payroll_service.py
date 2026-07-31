@@ -106,7 +106,7 @@ class _MonthCalendar:
 
 
 def _can_manage(caller: CurrentUser) -> bool:
-    return caller.role in (Role.ADMIN, Role.HR)
+    return caller.can_manage_payroll
 
 
 def _parse_month(month: str) -> tuple[int, int]:
@@ -237,6 +237,8 @@ class PayrollService:
         s.currency = payload.currency.upper()
         s.pay_cycle = payload.pay_cycle
         s.auto_send_enabled = payload.auto_send_enabled
+        s.auto_release_enabled = payload.auto_release_enabled
+        s.auto_release_day = payload.auto_release_day
         s.recipients = ",".join(payload.recipients)
         s.basic_pct = payload.basic_pct
         s.hra_pct = payload.hra_pct
@@ -256,6 +258,11 @@ class PayrollService:
     def current_month(self, tz: str) -> str:
         now = datetime.now(UTC).astimezone(ZoneInfo(tz))
         return f"{now.year:04d}-{now.month:02d}"
+
+    def previous_month(self, tz: str) -> str:
+        now = datetime.now(UTC).astimezone(ZoneInfo(tz))
+        year, month = (now.year, now.month - 1) if now.month > 1 else (now.year - 1, 12)
+        return f"{year:04d}-{month:02d}"
 
     async def estimate(self, caller: CurrentUser, month: str | None) -> PayrollEstimateRead:
         if not _can_manage(caller):
@@ -517,6 +524,12 @@ class PayrollService:
         s = await self.get_settings_model()
         spec = await self._policy.spec()
         period = month or self.current_month(spec.timezone)
+        # Release gate: a non-manager may see their OWN slip only once the month is
+        # released (a frozen snapshot exists). HR/finance keep the live preview so
+        # they can check numbers before releasing. This also gates the live PDF,
+        # which is generated through this method.
+        if not _can_manage(caller) and await self._payslips.get(target_id, period) is None:
+            raise NotFoundError()
         cal = await self._month_calendar(period, spec.timezone, spec.working_days_per_week)
         cfg = CalcConfig(
             basic_pct=s.basic_pct,
@@ -805,6 +818,37 @@ class PayrollService:
         est = await self.estimate(SYSTEM_CALLER, period)
         await self._release_from_estimate(est, actor=None)  # release + email employees
         return await self._send(SYSTEM_CALLER, period, source=PayrollRunSource.AUTO, actor=None)
+
+    async def is_auto_release_due(self) -> bool:
+        """True when auto-release is on and today (org tz) is the configured day."""
+        s = await self.get_settings_model()
+        if not s.auto_release_enabled:
+            return False
+        spec = await self._policy.spec()
+        now_local = datetime.now(UTC).astimezone(ZoneInfo(spec.timezone))
+        return now_local.day == s.auto_release_day
+
+    async def release_for_system(self) -> PayrollRun | None:
+        """Auto-release the PREVIOUS month's payslips on the configured day
+        (idempotent): freeze + email everyone with compensation their slip. Skips a
+        month that was already released — manually or on an earlier tick — so it
+        never re-emails. The hands-off fallback to the manual "Release" click."""
+        spec = await self._policy.spec()
+        period = self.previous_month(spec.timezone)
+        if await self._runs.get_for_month(period) is not None:
+            return None  # already released
+        est = await self.estimate(SYSTEM_CALLER, period)
+        released, _emailed, _skipped = await self._release_from_estimate(est, actor=None)
+        total_net = sum(line.net_minor for line in est.lines if not line.missing_compensation)
+        return await self._runs.upsert(
+            period_month=est.month,
+            currency=est.currency,
+            total_net_minor=total_net,
+            employee_count=released,
+            recipients="",
+            source=PayrollRunSource.AUTO,
+            triggered_by=None,
+        )
 
     async def list_runs(self, caller: CurrentUser) -> list[PayrollRunRead]:
         if not _can_manage(caller):
