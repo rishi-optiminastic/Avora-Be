@@ -38,6 +38,8 @@ class PayrollAdjustmentTarget(StrEnum):
     EMPLOYEE_PF = "employee_pf"
     PROFESSIONAL_TAX = "professional_tax"
     INCOME_TAX = "income_tax"
+    PRESENT_DAYS = "present_days"
+    PAID_LEAVE_DAYS = "paid_leave_days"
     LOP_DAYS = "lop_days"
     PAYABLE_DAYS = "payable_days"
     NET_PAY = "net_pay"
