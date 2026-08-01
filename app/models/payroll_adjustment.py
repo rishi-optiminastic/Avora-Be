@@ -36,7 +36,10 @@ class PayrollAdjustmentTarget(StrEnum):
     HRA = "hra"
     SPECIAL_ALLOWANCE = "special_allowance"
     EMPLOYEE_PF = "employee_pf"
+    PROFESSIONAL_TAX = "professional_tax"
+    INCOME_TAX = "income_tax"
     LOP_DAYS = "lop_days"
+    PAYABLE_DAYS = "payable_days"
     NET_PAY = "net_pay"
 
 
