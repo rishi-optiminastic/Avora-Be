@@ -127,14 +127,26 @@ def _month_label(year: int, month: int) -> str:
 def _lop_override(
     adjustments: Sequence[PayrollAdjustment], computed_lop: float, total_days: int
 ) -> float:
-    """An OVERRIDE/LOP_DAYS adjustment (stored as days x 100) replaces the
-    attendance-derived loss-of-pay; else the computed value stands."""
+    """Resolve the effective loss-of-pay days from any OVERRIDE. Both LOP_DAYS and
+    PAYABLE_DAYS overrides (stored as days x 100) are complementary — payable +
+    lop = total_days — so a paid-days override is turned into the matching LOP.
+    LOP_DAYS wins if both are present; otherwise the computed value stands."""
+
+    def _days(a: PayrollAdjustment) -> float:
+        return min(float(total_days), max(0.0, a.amount_minor / 100))
+
     for a in adjustments:
         if (
             a.kind is PayrollAdjustmentKind.OVERRIDE
             and a.target is PayrollAdjustmentTarget.LOP_DAYS
         ):
-            return min(float(total_days), max(0.0, a.amount_minor / 100))
+            return _days(a)
+    for a in adjustments:
+        if (
+            a.kind is PayrollAdjustmentKind.OVERRIDE
+            and a.target is PayrollAdjustmentTarget.PAYABLE_DAYS
+        ):
+            return float(total_days) - _days(a)  # lop = total - payable
     return computed_lop
 
 
@@ -149,6 +161,8 @@ def _apply_adjustments(
     hra = prorated.hra_minor
     special = prorated.special_allowance_minor
     employee_pf = prorated.employee_pf_minor
+    professional_tax = prorated.professional_tax_minor
+    income_tax = prorated.income_tax_minor
     net_override: int | None = None
     for a in adjustments:
         if a.kind is not PayrollAdjustmentKind.OVERRIDE:
@@ -161,10 +175,14 @@ def _apply_adjustments(
             special = a.amount_minor
         elif a.target is PayrollAdjustmentTarget.EMPLOYEE_PF:
             employee_pf = a.amount_minor
+        elif a.target is PayrollAdjustmentTarget.PROFESSIONAL_TAX:
+            professional_tax = a.amount_minor
+        elif a.target is PayrollAdjustmentTarget.INCOME_TAX:
+            income_tax = a.amount_minor
         elif a.target is PayrollAdjustmentTarget.NET_PAY:
             net_override = a.amount_minor
     gross = basic + hra + special
-    total_deduction = employee_pf + prorated.professional_tax_minor + prorated.income_tax_minor
+    total_deduction = employee_pf + professional_tax + income_tax
     earnings = sum(a.amount_minor for a in adjustments if a.kind is PayrollAdjustmentKind.EARNING)
     deductions = sum(
         a.amount_minor for a in adjustments if a.kind is PayrollAdjustmentKind.DEDUCTION
@@ -176,6 +194,8 @@ def _apply_adjustments(
         hra_minor=hra,
         special_allowance_minor=special,
         employee_pf_minor=employee_pf,
+        professional_tax_minor=professional_tax,
+        income_tax_minor=income_tax,
         gross_minor=gross,
         total_deduction_minor=total_deduction,
         net_minor=base_net + earnings - deductions,

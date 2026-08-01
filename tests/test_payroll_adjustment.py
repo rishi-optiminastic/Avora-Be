@@ -171,3 +171,45 @@ async def test_lop_override_replaces_days(
     )
     line = await _report_line(client, settings, seed)
     assert line["lop_days"] == 5.0
+
+
+async def test_payable_days_override_sets_paid_and_lop(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    await _set_comp(client, settings, seed)
+    # Force PAID (payable) days to 20.0 — LOP becomes total_days - 20 (complementary).
+    await client.post(
+        "/api/v1/payroll/adjustments",
+        json=_adj(
+            employee_id=str(seed.report.id),
+            kind="override",
+            target="payable_days",
+            label="Agreed paid days",
+            amount_minor=20_00,
+        ),
+        headers=auth_headers(settings, seed.admin),
+    )
+    line = await _report_line(client, settings, seed)
+    assert line["payable_days"] == 20.0
+    assert line["lop_days"] == float(line["total_days"]) - 20.0
+
+
+async def test_tax_field_overrides_replace_deductions(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    await _set_comp(client, settings, seed)
+    for target, amount in (("professional_tax", 300_00), ("income_tax", 1_500_00)):
+        await client.post(
+            "/api/v1/payroll/adjustments",
+            json=_adj(
+                employee_id=str(seed.report.id),
+                kind="override",
+                target=target,
+                label=f"Corrected {target}",
+                amount_minor=amount,
+            ),
+            headers=auth_headers(settings, seed.admin),
+        )
+    line = await _report_line(client, settings, seed)
+    assert line["prorated"]["professional_tax_minor"] == 300_00
+    assert line["prorated"]["income_tax_minor"] == 1_500_00
