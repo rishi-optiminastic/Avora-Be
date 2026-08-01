@@ -13,7 +13,11 @@ from collections.abc import Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.payroll_adjustment import PayrollAdjustment
+from app.models.payroll_adjustment import (
+    PayrollAdjustment,
+    PayrollAdjustmentKind,
+    PayrollAdjustmentTarget,
+)
 from app.schemas.payroll_adjustment import PayrollAdjustmentCreate
 
 
@@ -37,6 +41,26 @@ class PayrollAdjustmentRepository:
         self._session.add(row)
         await self._session.flush()
         return row
+
+    async def delete_overrides_for(
+        self,
+        employee_id: uuid.UUID,
+        period_month: str,
+        target: PayrollAdjustmentTarget,
+    ) -> None:
+        """Drop any existing OVERRIDE of one field for (employee, month) — so a new
+        override replaces the prior one (a field has at most one override)."""
+        rows = await self._session.execute(
+            select(PayrollAdjustment).where(
+                PayrollAdjustment.employee_id == employee_id,
+                PayrollAdjustment.period_month == period_month,
+                PayrollAdjustment.kind == PayrollAdjustmentKind.OVERRIDE,
+                PayrollAdjustment.target == target,
+            )
+        )
+        for row in rows.scalars().all():
+            await self._session.delete(row)
+        await self._session.flush()
 
     async def get(self, adjustment_id: uuid.UUID) -> PayrollAdjustment | None:
         return await self._session.get(PayrollAdjustment, adjustment_id)
