@@ -12,7 +12,7 @@ import uuid
 from collections.abc import Sequence
 
 from app.core.exceptions import AuthorizationError, NotFoundError, ValidationError
-from app.models.payroll_adjustment import PayrollAdjustment
+from app.models.payroll_adjustment import PayrollAdjustment, PayrollAdjustmentKind
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.payroll_adjustment import PayrollAdjustmentRepository
@@ -50,6 +50,12 @@ class PayrollAdjustmentService:
         employee = await self._employees.get(payload.employee_id)
         if employee is None or not employee.is_active:
             raise ValidationError("Unknown or inactive employee.")
+        # A field override is single-valued: replace any prior override of the same
+        # field so inline edits are idempotent (earnings/deductions still stack).
+        if payload.kind is PayrollAdjustmentKind.OVERRIDE and payload.target is not None:
+            await self._adjustments.delete_overrides_for(
+                payload.employee_id, payload.period_month, payload.target
+            )
         row = await self._adjustments.create(payload, created_by=caller.employee_id)
         await self._audit.append(
             actor=str(caller.employee_id),
