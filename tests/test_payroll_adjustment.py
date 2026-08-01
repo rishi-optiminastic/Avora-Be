@@ -194,6 +194,29 @@ async def test_payable_days_override_sets_paid_and_lop(
     assert line["lop_days"] == float(line["total_days"]) - 20.0
 
 
+async def test_present_days_override_reduces_lop(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    await _set_comp(client, settings, seed)
+    before = await _report_line(client, settings, seed)
+    elapsed = int(before["elapsed_working_days"])  # type: ignore[arg-type]
+    # Mark them present for every elapsed working day -> no loss of pay.
+    await client.post(
+        "/api/v1/payroll/adjustments",
+        json=_adj(
+            employee_id=str(seed.report.id),
+            kind="override",
+            target="present_days",
+            label="Corrected present",
+            amount_minor=elapsed * 100,
+        ),
+        headers=auth_headers(settings, seed.admin),
+    )
+    line = await _report_line(client, settings, seed)
+    assert line["present_days"] == float(elapsed)
+    assert line["lop_days"] == 0.0
+
+
 async def test_tax_field_overrides_replace_deductions(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:

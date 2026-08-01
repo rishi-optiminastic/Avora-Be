@@ -124,6 +124,19 @@ def _month_label(year: int, month: int) -> str:
     return f"{_MONTH_NAMES[month - 1]} {year}"
 
 
+def _day_override(
+    adjustments: Sequence[PayrollAdjustment],
+    target: PayrollAdjustmentTarget,
+    computed: float,
+) -> float:
+    """A day-count OVERRIDE (stored days x 100) replaces the attendance-derived
+    value for `target` (present / paid-leave days); else the computed value stands."""
+    for a in adjustments:
+        if a.kind is PayrollAdjustmentKind.OVERRIDE and a.target is target:
+            return max(0.0, a.amount_minor / 100)
+    return computed
+
+
 def _lop_override(
     adjustments: Sequence[PayrollAdjustment], computed_lop: float, total_days: int
 ) -> float:
@@ -498,6 +511,9 @@ class PayrollService:
         # LOP is charged only over ELAPSED working days — a working day that has not
         # happened yet (later this in-progress month) is never counted as absent, so
         # a mid-month estimate reflects days actually missed, not the calendar ahead.
+        # HR/finance may override the attendance-derived day counts directly.
+        present = _day_override(adjustments, PayrollAdjustmentTarget.PRESENT_DAYS, present)
+        paid = _day_override(adjustments, PayrollAdjustmentTarget.PAID_LEAVE_DAYS, paid)
         elapsed_working = float(cal.elapsed_working_days)
         worked = min(elapsed_working, present + paid)
         lop = _lop_override(adjustments, max(0.0, elapsed_working - worked), cal.total_days)
