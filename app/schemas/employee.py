@@ -28,6 +28,7 @@ class EmployeeRead(ORMModel):
     manager_id: uuid.UUID | None
     role: Role
     payroll_manager: bool = False
+    location_check_exempt: bool = False
     status: EmployeeStatus
     is_active: bool
     tracking_mode: TrackingMode

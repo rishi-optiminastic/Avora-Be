@@ -394,3 +394,20 @@ class EmployeeService:
             target=f"employee:{target_id}:{granted}",
         )
         return updated
+
+    async def set_location_check_exempt(
+        self, caller: CurrentUser, target_id: uuid.UUID, exempt: bool
+    ) -> Employee:
+        # A geofence exemption is a policy change — admin-only (rule 5.5).
+        if not caller.is_admin:
+            raise AuthorizationError()
+        employee = await self._employees.get(target_id)
+        if employee is None:
+            raise NotFoundError()
+        updated = await self._employees.set_location_check_exempt(employee, exempt)
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="employee.location_exempt_change",
+            target=f"employee:{target_id}:{exempt}",
+        )
+        return updated

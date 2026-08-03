@@ -13,6 +13,7 @@ from app.core.deps import (
     AttendancePolicyServiceDep,
     AttendanceServiceDep,
     CurrentUserDep,
+    OfficeLocationServiceDep,
     ReconciliationServiceDep,
     RegularizationServiceDep,
     WorkSessionServiceDep,
@@ -21,6 +22,11 @@ from app.models.regularization import RegularizationStatus
 from app.schemas.attendance_policy import AttendancePolicyRead, AttendancePolicyUpdate
 from app.schemas.attendance_report import AttendanceDayRow, AttendanceMonthSummary
 from app.schemas.monitoring import AttendanceRead
+from app.schemas.office_location import (
+    ClockInRequest,
+    OfficeLocationCreate,
+    OfficeLocationRead,
+)
 from app.schemas.reconciliation import ReconciliationReport
 from app.schemas.regularization import (
     RegularizationCreate,
@@ -145,11 +151,53 @@ async def clock_in(
     request: Request,
     caller: CurrentUserDep,
     service: WorkSessionServiceDep,
+    body: ClockInRequest | None = None,
 ) -> WorkSessionRead:
-    """Start the work day (idempotent — returns the open session if already in)."""
+    """Start the work day (idempotent — returns the open session if already in).
+    When the org requires location, the body must carry the browser's GPS and it
+    must fall inside an active office geofence (422 otherwise)."""
     client_ip = request.client.host if request.client else None
-    session = await service.clock_in(caller, ip_address=client_ip)
+    coords = body or ClockInRequest()
+    session = await service.clock_in(
+        caller,
+        ip_address=client_ip,
+        latitude=coords.latitude,
+        longitude=coords.longitude,
+    )
     return WorkSessionRead.model_validate(session)
+
+
+# --------------------------------------------------------------------------- #
+# Office locations (geofences for clock-in) — HR/Admin
+# --------------------------------------------------------------------------- #
+@router.get("/office-locations", response_model=list[OfficeLocationRead])
+async def list_office_locations(
+    caller: CurrentUserDep, service: OfficeLocationServiceDep
+) -> list[OfficeLocationRead]:
+    rows = await service.list(caller)
+    return [OfficeLocationRead.from_model(r) for r in rows]
+
+
+@router.post(
+    "/office-locations",
+    response_model=OfficeLocationRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_office_location(
+    payload: OfficeLocationCreate,
+    caller: CurrentUserDep,
+    service: OfficeLocationServiceDep,
+) -> OfficeLocationRead:
+    return OfficeLocationRead.from_model(await service.create(caller, payload))
+
+
+@router.delete("/office-locations/{location_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_office_location(
+    location_id: uuid.UUID,
+    caller: CurrentUserDep,
+    service: OfficeLocationServiceDep,
+) -> None:
+    await service.delete(caller, location_id)
 
 
 @router.post("/clock-out", response_model=WorkSessionRead)

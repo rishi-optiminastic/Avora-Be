@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import ForeignKey, String
+from sqlalchemy import Boolean, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -41,6 +41,9 @@ class AttendancePolicy(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     working_days_per_week: Mapped[int] = mapped_column(default=5)
     # Office timezone for interpreting the times above (IANA name).
     timezone: Mapped[str] = mapped_column(String(64), default="Asia/Kolkata")
+    # When set, a dashboard clock-in must be inside an active office geofence
+    # (unless the employee is exempt). Enforced server-side in WorkSessionService.
+    require_location_for_clock_in: Mapped[bool] = mapped_column(Boolean, default=False)
 
     updated_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("employees.id", ondelete="SET NULL"), default=None

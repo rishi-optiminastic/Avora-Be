@@ -66,12 +66,18 @@ class WorkSessionRepository:
         clock_in_at: datetime,
         source: str,
         ip_address: str | None = None,
+        location: str | None = None,
+        latitude: float | None = None,
+        longitude: float | None = None,
     ) -> WorkSession:
         ws = WorkSession(
             employee_id=employee_id,
             clock_in_at=clock_in_at,
             source=source,
             ip_address=ip_address,
+            location=location,
+            latitude=latitude,
+            longitude=longitude,
         )
         self._session.add(ws)
         await self._session.flush()

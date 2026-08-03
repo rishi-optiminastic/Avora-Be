@@ -304,3 +304,9 @@ class EmployeeRepository:
         employee.payroll_manager = granted
         await self._session.flush()
         return employee
+
+    async def set_location_check_exempt(self, employee: Employee, exempt: bool) -> Employee:
+        """Admin-only: exempt an employee from the clock-in office geofence."""
+        employee.location_check_exempt = exempt
+        await self._session.flush()
+        return employee

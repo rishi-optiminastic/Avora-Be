@@ -30,6 +30,7 @@ class AttendancePolicyRead(BaseModel):
     monthly_regularizations: int
     working_days_per_week: int
     timezone: str
+    require_location_for_clock_in: bool
 
     @classmethod
     def from_model(cls, m: AttendancePolicy) -> AttendancePolicyRead:
@@ -44,6 +45,7 @@ class AttendancePolicyRead(BaseModel):
             monthly_regularizations=m.monthly_regularizations,
             working_days_per_week=m.working_days_per_week,
             timezone=m.timezone,
+            require_location_for_clock_in=m.require_location_for_clock_in,
         )
 
 
@@ -58,3 +60,4 @@ class AttendancePolicyUpdate(BaseModel):
     monthly_regularizations: int | None = Field(default=None, ge=0, le=31)
     working_days_per_week: int | None = Field(default=None, ge=1, le=7)
     timezone: str | None = Field(default=None, max_length=64)
+    require_location_for_clock_in: bool | None = None
