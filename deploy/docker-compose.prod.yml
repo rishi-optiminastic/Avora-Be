@@ -42,13 +42,15 @@ services:
     # /var/lib/postgresql (not /data) — mount the parent per upstream guidance.
     volumes:
       - pgdata:/var/lib/postgresql
-    # Publish on host :5433 so the Next.js frontend (Vercel / Better Auth via
+    # Publish on host :5434 so the Next.js frontend (Vercel / Better Auth via
     # Prisma) can reach this DB directly — external conns are forced through TLS +
     # scram + the least-priv `fe_app` role (see pg_hba in the pgdata volume + ufw).
     # DO NOT REMOVE: the FE's DATABASE_URL points here; dropping it 500s all auth.
-    # (Host 5433 because a separate native postgres owns 5432 on loopback.)
+    # Host port: 5432 is the native postgres on loopback, and 5433 is taken by a
+    # Coolify service on this shared box — so we use 5434. Override with the
+    # PG_HOST_PORT env var if it ever clashes again.
     ports:
-      - "5433:5432"
+      - "${PG_HOST_PORT:-5434}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 5s
