@@ -70,6 +70,20 @@ class PayslipRepository:
         )
         return rows.scalars().all()
 
+    async def released_in_range(
+        self, employee_id: uuid.UUID, start_month: str, end_month: str
+    ) -> Sequence[Payslip]:
+        """An employee's released payslips with period_month in [start, end]
+        inclusive (YYYY-MM strings sort lexicographically) — for YTD totals."""
+        rows = await self._session.execute(
+            select(Payslip).where(
+                Payslip.employee_id == employee_id,
+                Payslip.period_month >= start_month,
+                Payslip.period_month <= end_month,
+            )
+        )
+        return rows.scalars().all()
+
     async def list_for_month(self, period_month: str) -> Sequence[Payslip]:
         rows = await self._session.execute(
             select(Payslip).where(Payslip.period_month == period_month)

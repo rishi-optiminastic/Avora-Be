@@ -55,6 +55,7 @@ from app.repositories.leave_comment import LeaveCommentRepository
 from app.repositories.leave_policy import LeavePolicyRepository
 from app.repositories.note import NoteRepository
 from app.repositories.notification import NotificationRepository
+from app.repositories.office_location import OfficeLocationRepository
 from app.repositories.onboarding_config import OnboardingConfigRepository
 from app.repositories.org_settings import OrgSettingsRepository
 from app.repositories.payroll_adjustment import PayrollAdjustmentRepository
@@ -110,6 +111,7 @@ from app.services.monitoring_gate import MonitoringGateService
 from app.services.monitoring_service import MonitoringService
 from app.services.note_service import NoteService
 from app.services.notification_service import NotificationService
+from app.services.office_location_service import OfficeLocationService
 from app.services.onboarding_service import OnboardingService
 from app.services.org_settings_service import OrgSettingsService
 from app.services.pat_service import PatService
@@ -562,11 +564,30 @@ def get_attribution_correction_service(
     return AttributionCorrectionService(corrections, employees, entities, audit)
 
 
+def get_office_location_repo(db: DbDep) -> OfficeLocationRepository:
+    return OfficeLocationRepository(db)
+
+
 def get_work_session_service(
     sessions: Annotated[WorkSessionRepository, Depends(get_work_session_repo)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    offices: Annotated[OfficeLocationRepository, Depends(get_office_location_repo)],
+    policy: Annotated[AttendancePolicyService, Depends(get_attendance_policy_service)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
 ) -> WorkSessionService:
-    return WorkSessionService(sessions, audit)
+    return WorkSessionService(sessions, audit, offices, policy, employees)
+
+
+def get_office_location_service(
+    offices: Annotated[OfficeLocationRepository, Depends(get_office_location_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> OfficeLocationService:
+    return OfficeLocationService(offices, audit)
+
+
+OfficeLocationServiceDep = Annotated[
+    OfficeLocationService, Depends(get_office_location_service)
+]
 
 
 def get_monitoring_gate(

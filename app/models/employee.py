@@ -109,6 +109,9 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # executive) manage payroll, payroll/attendance adjustments, and compensation
     # for salary processing, without granting org-wide HR access. Admin-set only.
     payroll_manager: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Exempt from the office geofence on clock-in (genuine remote / field staff).
+    # Admin-set; only meaningful when the org requires location for clock-in.
+    location_check_exempt: Mapped[bool] = mapped_column(Boolean, default=False)
 
     status: Mapped[EmployeeStatus] = mapped_column(default=EmployeeStatus.ACTIVE, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)

@@ -124,6 +124,24 @@ def _month_label(year: int, month: int) -> str:
     return f"{_MONTH_NAMES[month - 1]} {year}"
 
 
+# Salary components carried into the payslip's year-to-date column.
+_YTD_KEYS = (
+    "basic_minor",
+    "hra_minor",
+    "special_allowance_minor",
+    "employee_pf_minor",
+    "professional_tax_minor",
+    "income_tax_minor",
+)
+
+
+def _fiscal_year_start(period: str) -> str:
+    """The Indian financial year (Apr-Mar) start month for a YYYY-MM period."""
+    year, month = _parse_month(period)
+    fy = year if month >= 4 else year - 1
+    return f"{fy:04d}-04"
+
+
 def _day_override(
     adjustments: Sequence[PayrollAdjustment],
     target: PayrollAdjustmentTarget,
@@ -691,7 +709,7 @@ class PayrollService:
         record = await self._payslips.get(target, period)
         if record is None:
             raise NotFoundError()
-        pdf = render_payslip_pdf(self._pdf_data_from_snapshot(record, await self._org_name()))
+        pdf = render_payslip_pdf(await self._pdf_data_from_snapshot(record))
         await self._audit.append(
             actor=str(caller.employee_id),
             action="payroll.payslip.download",
@@ -713,9 +731,13 @@ class PayrollService:
         if employee is None:
             raise NotFoundError()
         year, m = _parse_month(slip.month)
+        org_name, logo = await self._org_masthead()
+        prorated = slip.prorated.model_dump()
+        ytd = await self._ytd_totals(target, slip.month, prorated)
         data = PayslipPdfData(
-            org_name=await self._org_name(),
+            org_name=org_name,
             employee_name=employee.full_name,
+            employee_number=employee.employee_number,
             job_title=employee.job_title,
             department=employee.department,
             location=employee.location,
@@ -724,7 +746,7 @@ class PayrollService:
             currency=slip.currency,
             monthly_ctc_minor=slip.monthly_ctc_minor,
             monthly=slip.breakdown.model_dump(),
-            prorated=slip.prorated.model_dump(),
+            prorated=prorated,
             net_payable_minor=slip.net_minor,
             total_days=slip.total_days,
             working_days=slip.working_days,
@@ -732,6 +754,9 @@ class PayrollService:
             paid_leave_days=slip.paid_leave_days,
             payable_days=slip.payable_days,
             generated_label=datetime.now(UTC).strftime("%d %b %Y"),
+            pay_date_label=datetime.now(UTC).strftime("%d/%m/%Y"),
+            logo_png=logo,
+            ytd=ytd,
         )
         await self._audit.append(
             actor=str(caller.employee_id),
@@ -746,7 +771,6 @@ class PayrollService:
         """Snapshot + email each employee with compensation. Returns
         (released, emailed, skipped). Email failures don't block release — the
         employee can still download from My Pay."""
-        org_name = await self._org_name()
         year, m = _parse_month(est.month)
         label = _month_label(year, m)
         finalized_by = actor.employee_id if actor is not None else None
@@ -782,7 +806,7 @@ class PayrollService:
             employee = await self._employees.get(line.employee_id)
             if employee is None or not employee.work_email:
                 continue
-            pdf = render_payslip_pdf(self._pdf_data_from_snapshot(snapshot, org_name))
+            pdf = render_payslip_pdf(await self._pdf_data_from_snapshot(snapshot))
             try:
                 await self._email.send_payslip(
                     to=employee.work_email,
@@ -799,15 +823,43 @@ class PayrollService:
             emailed += 1
         return released, emailed, skipped
 
-    async def _org_name(self) -> str:
+    async def _org_masthead(self) -> tuple[str, bytes | None]:
+        """Org name + logo for the payslip header (logo shown top-right)."""
         org = await self._orgs.get()
-        return org.name if org is not None else "Avora"
+        if org is None:
+            return "Avora", None
+        return org.name, org.logo_content
 
-    def _pdf_data_from_snapshot(self, m: Payslip, org_name: str) -> PayslipPdfData:
+    async def _ytd_totals(
+        self, employee_id: uuid.UUID, period: str, current: dict[str, int] | None
+    ) -> dict[str, int]:
+        """Year-to-date total per salary component, summed over the employee's
+        released payslips this financial year (Apr-Mar) up to `period`. `current`
+        (the live prorated slip) is folded in when this month isn't released yet."""
+        start = _fiscal_year_start(period)
+        released = await self._payslips.released_in_range(employee_id, start, period)
+        totals = dict.fromkeys(_YTD_KEYS, 0)
+        seen = False
+        for p in released:
+            if p.period_month == period:
+                seen = True
+            prorated = p.prorated_breakdown or p.breakdown or {}
+            for k in _YTD_KEYS:
+                totals[k] += int(prorated.get(k, 0))
+        if current is not None and not seen:
+            for k in _YTD_KEYS:
+                totals[k] += int(current.get(k, 0))
+        return totals
+
+    async def _pdf_data_from_snapshot(self, m: Payslip) -> PayslipPdfData:
         year, month = _parse_month(m.period_month)
+        org_name, logo = await self._org_masthead()
+        ytd = await self._ytd_totals(m.employee_id, m.period_month, None)
+        emp = await self._employees.get(m.employee_id)
         return PayslipPdfData(
             org_name=org_name,
             employee_name=m.employee_name,
+            employee_number=emp.employee_number if emp is not None else None,
             job_title=m.job_title,
             department=m.department,
             location=m.location,
@@ -824,6 +876,9 @@ class PayrollService:
             paid_leave_days=m.paid_leave_days,
             payable_days=m.payable_days,
             generated_label=datetime.now(UTC).strftime("%d %b %Y"),
+            pay_date_label=m.released_at.strftime("%d/%m/%Y") if m.released_at else None,
+            logo_png=logo,
+            ytd=ytd,
         )
 
     # ---- send -------------------------------------------------------------- #

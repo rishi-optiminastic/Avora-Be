@@ -12,7 +12,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, func
+from sqlalchemy import DateTime, Float, ForeignKey, Index, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, _utcnow
@@ -38,4 +38,8 @@ class WorkSession(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     clock_out_source: Mapped[str | None] = mapped_column(String(32), default=None)
     # Server-observed at clock-in (spec: login IP + location for HR/attendance).
     ip_address: Mapped[str | None] = mapped_column(String(64), default=None)
+    # `location` holds the matched office name when a geofenced clock-in passes.
     location: Mapped[str | None] = mapped_column(String(128), default=None)
+    # GPS reported by the browser at clock-in (a claim — stored for the record).
+    latitude: Mapped[float | None] = mapped_column(Float, default=None)
+    longitude: Mapped[float | None] = mapped_column(Float, default=None)

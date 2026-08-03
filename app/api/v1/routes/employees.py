@@ -33,6 +33,7 @@ from app.schemas.employee import (
     PayrollManagerUpdate,
     SelfProfileUpdate,
 )
+from app.schemas.office_location import LocationExemptUpdate
 from app.services.employee_service import MAX_AVATAR_BYTES
 
 router = APIRouter(prefix="/employees", tags=["employees"])
@@ -153,6 +154,21 @@ async def set_employee_payroll_manager(
     """Admin-only: grant/revoke payroll-cluster management for one person (a
     finance executive doing salary processing) — orthogonal to their role."""
     employee = await service.set_payroll_manager(admin, employee_id, payload.payroll_manager)
+    return EmployeeRead.model_validate(employee)
+
+
+@router.put("/{employee_id}/location-exempt", response_model=EmployeeRead)
+async def set_employee_location_exempt(
+    employee_id: uuid.UUID,
+    payload: LocationExemptUpdate,
+    admin: AdminDep,
+    service: EmployeeServiceDep,
+) -> EmployeeRead:
+    """Admin-only: exempt one person from the clock-in office geofence (remote /
+    field staff who can't be on-site)."""
+    employee = await service.set_location_check_exempt(
+        admin, employee_id, payload.location_check_exempt
+    )
     return EmployeeRead.model_validate(employee)
 
 
