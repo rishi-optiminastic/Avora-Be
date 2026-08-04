@@ -1,9 +1,15 @@
 # Production stack for a single Hetzner VPS.
 #
-#   caddy ──TLS──> api (uvicorn)
-#                  ├── db        (self-hosted Postgres + named volume)
-#                  ├── migrate   (one-shot: alembic upgrade head, runs before api)
-#                  └── workers   ocr · eod · payroll · auto-checkout
+# TLS is terminated by the Coolify proxy that sits in front of this stack; it
+# forwards to the `api` service over the shared network. This compose no longer
+# ships its own caddy - Coolify owns 80/443. For Coolify to reach `api`, the api
+# service needs Coolify's routing labels + to share the proxy's network (set on
+# the Coolify side, not here).
+#
+#   api (uvicorn)
+#   ├── db        (self-hosted Postgres + named volume)
+#   ├── migrate   (one-shot: alembic upgrade head, runs before api)
+#   └── workers   ocr · eod · payroll · auto-checkout
 #
 # Build then start:
 #   docker compose -f docker-compose.prod.yml --env-file .env.prod build
@@ -13,8 +19,8 @@
 # `api` service; the schedulers + migrate just re-run it with a different command.
 # The OCR worker is a separate slim image (bundles Tesseract).
 #
-# Nothing but caddy publishes a host port — db/api are reachable only on the
-# internal `avora` network.
+# The api port is not published to the host - the Coolify proxy reaches it on the
+# internal `avora` network. Only db publishes a host port (see the db service).
 
 # Shared config for every container that runs the FastAPI app image.
 x-app-image: &app-image
@@ -121,28 +127,9 @@ services:
         condition: service_healthy
     networks: [avora]
 
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-    # Caddy reads {$DOMAIN} / {$ACME_EMAIL} from the env file at runtime and
-    # auto-provisions a Let's Encrypt cert for DOMAIN.
-    env_file: .env.prod
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - api
-    networks: [avora]
-
 networks:
   avora:
     driver: bridge
 
 volumes:
   pgdata:
-  caddy_data:
-  caddy_config:

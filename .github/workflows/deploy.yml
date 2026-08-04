@@ -1,10 +1,11 @@
 # Auto-deploy the backend to the Hetzner VPS on every push to main.
 #
 # Flow: checkout -> rsync the repo to /opt/avora/be on the VPS -> rebuild images
-# -> `up -d` (the one-shot `migrate` runs `alembic upgrade head` first, then api,
-# caddy AND the schedulers/ocr worker restart onto the new image). The server's
-# secrets file (deploy/.env.prod) is NEVER touched by CI — it lives only on the
-# VPS and is excluded from the sync.
+# -> `up -d` (the one-shot `migrate` runs `alembic upgrade head` first, then api
+# AND the schedulers/ocr worker restart onto the new image). TLS is terminated by
+# the Coolify proxy, not this stack, so there is no caddy service to restart. The
+# server's secrets file (deploy/.env.prod) is NEVER touched by CI - it lives only
+# on the VPS and is excluded from the sync.
 #
 # One-time setup — add these in GitHub:
 #   Settings -> Secrets and variables -> Actions -> New repository secret
@@ -14,9 +15,9 @@
 #     VPS_HOST      65.21.186.55
 #     VPS_USER      root
 #
-# The `up -d` at the bottom lists every service (api, caddy, all schedulers, ocr)
-# so a deploy actually restarts the workers onto the new image — a bare subset
-# leaves the schedulers running stale code. Add any new service to that line.
+# The `up -d` at the bottom lists every service (api, all schedulers, ocr) so a
+# deploy actually restarts the workers onto the new image — a bare subset leaves
+# the schedulers running stale code. Add any new service to that line.
 
 name: deploy
 
@@ -73,4 +74,4 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new \
             "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
-            'cd /opt/avora/be/deploy && docker compose -f docker-compose.prod.yml --env-file .env.prod build && docker compose -f docker-compose.prod.yml --env-file .env.prod up -d db migrate api caddy scheduler-eod scheduler-payroll scheduler-autocheckout worker-ocr && docker compose -f docker-compose.prod.yml --env-file .env.prod ps'
+            'cd /opt/avora/be/deploy && docker compose -f docker-compose.prod.yml --env-file .env.prod build && docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --force-recreate db migrate api scheduler-eod scheduler-payroll scheduler-autocheckout worker-ocr && docker compose -f docker-compose.prod.yml --env-file .env.prod ps'

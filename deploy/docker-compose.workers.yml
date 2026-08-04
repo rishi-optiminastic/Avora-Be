@@ -1,0 +1,48 @@
+# Build + push the Avora worker images to the VPS's local registry, so a Coolify
+# deploy can pull fresh code into the background workers.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# On the Coolify box the four background workers - the eod / payroll /
+# auto-checkout schedulers plus the OCR worker - run from images pulled out of
+# the local registry. A Coolify *application* deploy rebuilds the api (and the
+# frontend), but it does NOT rebuild these worker images. So after any backend
+# code change the workers keep running stale code until their images are rebuilt
+# and re-pushed. This file turns that into one command.
+#
+# There are only TWO images to build, and they feed all four workers:
+#   - avora-pms-api      backs the 3 schedulers (they share it and only differ by
+#                        the runtime command, which Coolify sets per worker).
+#   - avora-ocr-worker   backs the OCR worker (a separate slim Tesseract image).
+#
+# USAGE (on the VPS, from this deploy/ folder, after pulling the new code):
+#   export REGISTRY=<registry-host:port>        # e.g. localhost:5000
+#   docker compose -f docker-compose.workers.yml build
+#   docker compose -f docker-compose.workers.yml push
+# then redeploy (or restart) the worker resources in Coolify so they re-pull the
+# freshly pushed tags.
+#
+# CONFIRM BEFORE FIRST USE (Coolify-side facts this file cannot infer):
+#   - REGISTRY            the host:port Coolify pulls the worker images from.
+#   - the image NAMES     if Coolify expects different repo names/tags, edit the
+#                         two `image:` lines below to match exactly.
+#
+# The build contexts + Dockerfiles below are identical to docker-compose.prod.yml
+# so the images are byte-for-byte the same as the api build - only the tag (the
+# registry prefix) differs.
+
+services:
+  # Backs the 3 schedulers (eod / payroll / auto-checkout). Same Dockerfile as the
+  # api service; the schedulers just run a different command at runtime.
+  avora-pms-api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: ${REGISTRY:?set REGISTRY to the local registry host:port}/avora-pms-api:latest
+
+  # Backs the OCR worker. Separate slim image that bundles Tesseract.
+  avora-ocr-worker:
+    build:
+      context: ../worker
+      dockerfile: Dockerfile
+    image: ${REGISTRY:?set REGISTRY to the local registry host:port}/avora-ocr-worker:latest

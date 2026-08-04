@@ -1,22 +1,23 @@
 # Deploying the Avora backend to a Hetzner VPS (Docker)
 
-This stack runs the API, a self-hosted Postgres, the four background workers, and
-a Caddy reverse proxy (automatic HTTPS) on a single VPS.
+This stack runs the API, a self-hosted Postgres, and the four background workers
+on a single VPS. TLS is terminated by the Coolify proxy running in front of the
+stack (it owns 80/443 and forwards to `api`); this compose no longer ships its
+own reverse proxy.
 
 ```
-caddy (:80/:443, TLS) ──> api (uvicorn :8000)
-                          ├── db        postgres:16  (+ pgdata volume)
-                          ├── migrate   one-shot: alembic upgrade head
-                          ├── scheduler-eod
-                          ├── scheduler-payroll
-                          ├── scheduler-autocheckout
-                          └── worker-ocr   (separate Tesseract image)
+Coolify proxy (:80/:443, TLS) ──> api (uvicorn :8000)
+                                  ├── db        postgres:18  (+ pgdata volume)
+                                  ├── migrate   one-shot: alembic upgrade head
+                                  ├── scheduler-eod
+                                  ├── scheduler-payroll
+                                  ├── scheduler-autocheckout
+                                  └── worker-ocr   (separate Tesseract image)
 ```
 
 Files in this folder:
 - `docker-compose.prod.yml` — the stack.
 - `.env.prod.example` — copy to `.env.prod` and fill in (real secrets, gitignored).
-- `Caddyfile` — reverse proxy + TLS for `$DOMAIN`.
 - `backup.sh` — nightly `pg_dump` (cron).
 
 ---
