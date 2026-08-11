@@ -8,6 +8,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query, status
 
 from app.core.deps import CurrentUserDep, NotificationServiceDep
+from app.models.notification import NotificationKind
 from app.schemas.common import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Page
 from app.schemas.notification import NotificationRead, UnreadCount
 
@@ -21,10 +22,13 @@ async def list_notifications(
     page: Annotated[int, Query(ge=1)] = 1,
     size: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     unread_only: Annotated[bool, Query()] = False,
+    # Narrow the inbox to one kind — lets a surface that only cares about, say,
+    # escalations read them exactly instead of paging the whole inbox.
+    kind: Annotated[NotificationKind | None, Query()] = None,
 ) -> Page[NotificationRead]:
     offset = (page - 1) * size
     items, total = await service.list_for_caller(
-        caller, offset=offset, limit=size, unread_only=unread_only
+        caller, offset=offset, limit=size, unread_only=unread_only, kind=kind
     )
     return Page[NotificationRead](
         items=[NotificationRead.model_validate(n) for n in items],

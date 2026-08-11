@@ -7,9 +7,12 @@ no one outside HR/Admin can reach org-wide payroll.
 
 from __future__ import annotations
 
+import re
+import uuid
 from datetime import date, timedelta
 from io import BytesIO
 
+import pytest
 from httpx import AsyncClient
 from openpyxl import load_workbook
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -245,6 +248,68 @@ async def test_export_xlsx_hr_admin_only(
             "/api/v1/payroll/export?month=2026-06", headers=auth_headers(settings, actor)
         )
         assert forbidden.status_code == 403, f"{actor.work_email} must not export payroll"
+
+
+async def test_export_xlsx_selected_employees_only(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """`employee_ids` narrows the register to a chosen few, and the filename says so."""
+    for emp in (seed.report, seed.manager):
+        await client.put(
+            f"/api/v1/employees/{emp.id}/compensation",
+            json=_COMP,
+            headers=auth_headers(settings, seed.admin),
+        )
+
+    everyone = await client.get(
+        "/api/v1/payroll/export?month=2026-06", headers=auth_headers(settings, seed.admin)
+    )
+    assert everyone.status_code == 200
+    assert "payroll-2026-06.xlsx" in everyone.headers["content-disposition"]
+
+    one = await client.get(
+        f"/api/v1/payroll/export?month=2026-06&employee_ids={seed.report.id}",
+        headers=auth_headers(settings, seed.admin),
+    )
+    assert one.status_code == 200
+    assert one.content[:2] == b"PK"
+    # Named after the person, so a one-row register can't be mistaken for the org's.
+    slug = re.sub(r"[^a-z0-9]+", "-", seed.report.full_name.lower()).strip("-")
+    assert f"payroll-2026-06-{slug}.xlsx" in one.headers["content-disposition"]
+    assert _sheet_row_by_name(one.content, seed.report.full_name)
+    with pytest.raises(AssertionError):
+        _sheet_row_by_name(one.content, seed.manager.full_name)
+
+    two = await client.get(
+        f"/api/v1/payroll/export?month=2026-06"
+        f"&employee_ids={seed.report.id}&employee_ids={seed.manager.id}",
+        headers=auth_headers(settings, seed.admin),
+    )
+    assert two.status_code == 200
+    assert "payroll-2026-06-2-employees.xlsx" in two.headers["content-disposition"]
+
+
+async def test_export_xlsx_selection_cannot_widen_scope(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """Selecting someone is a filter, not a grant: a non-HR caller is still 403, and
+    an id outside the month's lines yields nothing rather than leaking a row."""
+    await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation",
+        json=_COMP,
+        headers=auth_headers(settings, seed.admin),
+    )
+    forbidden = await client.get(
+        f"/api/v1/payroll/export?month=2026-06&employee_ids={seed.report.id}",
+        headers=auth_headers(settings, seed.manager),
+    )
+    assert forbidden.status_code == 403
+
+    unknown = await client.get(
+        f"/api/v1/payroll/export?month=2026-06&employee_ids={uuid.uuid4()}",
+        headers=auth_headers(settings, seed.admin),
+    )
+    assert unknown.status_code == 404
 
 
 def _sheet_row_by_name(content: bytes, name: str) -> dict[str, object]:

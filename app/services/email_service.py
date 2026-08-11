@@ -26,10 +26,12 @@ from app.services.email_templates import (
     forgot_checkout_email,
     invite_email,
     leave_decision_email,
+    leave_request_email,
     payslip_email,
     resignation_decision_email,
     resignation_submitted_email,
     task_assigned_email,
+    task_escalated_email,
 )
 
 _SENDGRID_URL = "https://api.sendgrid.com/v3/mail/send"
@@ -235,6 +237,55 @@ class EmailService:
             task_title=task_title,
             assigned_by=assigned_by,
             due_label=due_label,
+            task_url=self._absolute(link_path),
+        )
+        await self.send(to=to, subject=subject, html=html)
+
+    async def send_leave_request(
+        self,
+        *,
+        to: str,
+        recipient_name: str,
+        requester_name: str,
+        leave_type_label: str,
+        date_range_label: str,
+        reason: str | None,
+        can_decide: bool,
+        link_path: str,
+    ) -> None:
+        """Tell an approver (or the requester's reporting manager) about a new
+        leave request."""
+        subject, html = leave_request_email(
+            recipient_name=recipient_name,
+            requester_name=requester_name,
+            leave_type_label=leave_type_label,
+            date_range_label=date_range_label,
+            reason=reason,
+            can_decide=can_decide,
+            leave_url=self._absolute(link_path),
+        )
+        await self.send(to=to, subject=subject, html=html)
+
+    async def send_task_escalated(
+        self,
+        *,
+        to: str,
+        manager_name: str,
+        assignee_name: str,
+        task_title: str,
+        escalated_by: str,
+        due_label: str | None,
+        blocked_reason: str | None,
+        link_path: str,
+    ) -> None:
+        """Tell a reporting manager that a task on one of their people was escalated."""
+        subject, html = task_escalated_email(
+            manager_name=manager_name,
+            assignee_name=assignee_name,
+            task_title=task_title,
+            escalated_by=escalated_by,
+            due_label=due_label,
+            blocked_reason=blocked_reason,
             task_url=self._absolute(link_path),
         )
         await self.send(to=to, subject=subject, html=html)

@@ -12,6 +12,7 @@ lop_days`. Sends are audited (rule 5.7).
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
@@ -179,6 +180,18 @@ def _lop_override(
         ):
             return float(total_days) - _days(a)  # lop = total - payable
     return computed_lop
+
+
+def _export_filename(month: str, lines: Sequence[PayrollLineRead], *, selected: bool) -> str:
+    """`payroll-2026-07.xlsx` for the whole org, `payroll-2026-07-sakshi-jain.xlsx`
+    for one person, `payroll-2026-07-3-employees.xlsx` for a chosen few — so a
+    partial register is never mistaken for the full one once it is on disk."""
+    if not selected:
+        return f"payroll-{month}.xlsx"
+    if len(lines) == 1:
+        slug = re.sub(r"[^a-z0-9]+", "-", lines[0].name.lower()).strip("-")
+        return f"payroll-{month}-{slug or 'employee'}.xlsx"
+    return f"payroll-{month}-{len(lines)}-employees.xlsx"
 
 
 def _apply_adjustments(
@@ -463,17 +476,33 @@ class PayrollService:
             business_expense_reimbursements=rupees(reimbursement_minor),
         )
 
-    async def export_xlsx(self, caller: CurrentUser, month: str | None) -> tuple[bytes, str]:
+    async def export_xlsx(
+        self,
+        caller: CurrentUser,
+        month: str | None,
+        employee_ids: Sequence[uuid.UUID] | None = None,
+    ) -> tuple[bytes, str]:
         """HR/Admin: the month's payroll as an .xlsx in the 40-column "Payrun
         Employee Salary statement" register — identity + bank + per-annum CTC/Gross,
         the 30-day-base earnings/PF split, statutory employer contributions, and
         approved business-expense reimbursements, one row per employee. The account
-        number is decrypted only here, for the authorized export. Audited (5.7)."""
+        number is decrypted only here, for the authorized export. Audited (5.7).
+
+        `employee_ids` narrows the register to a chosen few. It filters the lines
+        the caller can ALREADY see (estimate() scopes them first), so it can only
+        ever shrink the export — never widen it past the caller's scope.
+        """
         est = await self.estimate(caller, month)  # authorizes HR/Admin
+        lines = list(est.lines)
+        if employee_ids is not None:
+            wanted = set(employee_ids)
+            lines = [line for line in lines if line.employee_id in wanted]
+            if not lines:
+                raise NotFoundError()
         year, m = _parse_month(est.month)
         s = await self.get_settings_model()
         cfg = self._calc_config(s)
-        ids = [line.employee_id for line in est.lines]
+        ids = [line.employee_id for line in lines]
         comps = await self._compensation.get_for_employees(ids)
         employees = {e.id: e for e in await self._employees.all_in_scope(caller)}
         reimbursed = await self._reimbursements.approved_for_month(ids, est.month)
@@ -491,14 +520,23 @@ class PayrollService:
                 reimbursement_minor=reimbursed.get(line.employee_id, 0),
                 adjustments=adjustments.get(line.employee_id, []),
             )
-            for line in est.lines
+            for line in lines
         ]
 
         xlsx = build_payroll_xlsx(rows, month_label=_month_label(year, m), currency=est.currency)
-        await self._audit.append(
-            actor=str(caller.employee_id), action="payroll.export", target=f"month:{est.month}"
+        # Bank details leave the system here, so record exactly whose (§5.7) — a
+        # whole-org export and a one-person export must not look alike in the log.
+        scope = (
+            "all"
+            if employee_ids is None
+            else ",".join(sorted(str(line.employee_id) for line in lines))
         )
-        return xlsx, f"payroll-{est.month}.xlsx"
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="payroll.export",
+            target=f"month:{est.month}:{scope}",
+        )
+        return xlsx, _export_filename(est.month, lines, selected=employee_ids is not None)
 
     async def _line_for(
         self,

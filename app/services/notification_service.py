@@ -13,9 +13,12 @@ import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
+from app.core.logging import get_logger
 from app.models.notification import Notification, NotificationKind, NotificationLevel
 from app.repositories.notification import NotificationRepository
 from app.schemas.auth import CurrentUser
+
+logger = get_logger("app.notification")
 
 
 class NotificationService:
@@ -24,10 +27,20 @@ class NotificationService:
 
     # --- inbox (scoped to the caller) ------------------------------------- #
     async def list_for_caller(
-        self, caller: CurrentUser, *, offset: int, limit: int, unread_only: bool
+        self,
+        caller: CurrentUser,
+        *,
+        offset: int,
+        limit: int,
+        unread_only: bool,
+        kind: NotificationKind | None = None,
     ) -> tuple[Sequence[Notification], int]:
         return await self._notifications.list_for_recipient(
-            caller.employee_id, offset=offset, limit=limit, unread_only=unread_only
+            caller.employee_id,
+            offset=offset,
+            limit=limit,
+            unread_only=unread_only,
+            kind=kind,
         )
 
     async def unread_count(self, caller: CurrentUser) -> int:
@@ -59,7 +72,12 @@ class NotificationService:
         """Deliver a notification. Never notify someone about their own action
         (actor == recipient is dropped). With `dedupe_within`, skip if an unread
         notification with the same (recipient, kind, entity) already exists in
-        that window — returns None when skipped."""
+        that window — returns None when skipped.
+
+        Delivery is BEST-EFFORT: a notification is a side effect of the caller's
+        real work, so a failed insert is logged and swallowed (also None) rather
+        than allowed to roll the caller's own write back with it.
+        """
         if actor_id is not None and actor_id == recipient_id:
             return None
         if dedupe_within is not None:
@@ -72,7 +90,7 @@ class NotificationService:
             )
             if existing is not None:
                 return None
-        return await self._notifications.create(
+        delivered = await self._notifications.create_isolated(
             recipient_id=recipient_id,
             kind=kind,
             level=level,
@@ -83,6 +101,11 @@ class NotificationService:
             entity_id=entity_id,
             actor_id=actor_id,
         )
+        if delivered is None:
+            # Past the dedupe return above, None can only mean the insert failed.
+            # Loud enough to find in logs, quiet enough not to break the caller.
+            logger.warning("notification_delivery_failed", extra={"kind": kind.value})
+        return delivered
 
     async def recent_count(
         self, *, recipient_id: uuid.UUID, kind: NotificationKind, within: timedelta

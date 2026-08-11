@@ -6,9 +6,12 @@ user gets 404 (never leaking that the task exists), mirroring the leave thread.
 from __future__ import annotations
 
 from httpx import AsyncClient
+from pytest import MonkeyPatch
+from sqlalchemy.exc import OperationalError
 
 from app.core.config import Settings
-from tests.conftest import _Seed, auth_headers
+from app.repositories.notification import NotificationRepository
+from tests.conftest import _FakeEmailService, _Seed, auth_headers
 
 
 async def _create_task(client: AsyncClient, settings: Settings, seed: _Seed) -> str:
@@ -217,3 +220,66 @@ async def test_empty_body_rejected(client: AsyncClient, settings: Settings, seed
         headers=auth_headers(settings, seed.report),
     )
     assert resp.status_code == 422
+
+
+async def test_message_survives_a_failing_notification(
+    client: AsyncClient, settings: Settings, seed: _Seed, monkeypatch: MonkeyPatch
+) -> None:
+    """A broken notification insert must not take the message down with it.
+
+    This is the shape of the production 500 on "Text Message on Task": the
+    deployed DB's `notificationkind` enum didn't carry the value the code writes,
+    so the notification INSERT aborted the transaction and the user's comment was
+    rolled back. The notification is a side effect — the message must still land.
+    """
+    task_id = await _create_task(client, settings, seed)
+
+    async def boom(*_args: object, **_kwargs: object) -> None:
+        raise OperationalError("INSERT INTO notifications", {}, Exception("enum out of date"))
+
+    monkeypatch.setattr(NotificationRepository, "create", boom)
+
+    posted = await client.post(
+        f"/api/v1/tasks/{task_id}/comments",
+        json={"body": "This must still be saved."},
+        headers=auth_headers(settings, seed.report),
+    )
+    assert posted.status_code == 201, posted.text
+
+    thread = await client.get(
+        f"/api/v1/tasks/{task_id}/comments", headers=auth_headers(settings, seed.report)
+    )
+    assert thread.status_code == 200
+    assert [c["body"] for c in thread.json()] == ["This must still be saved."]
+
+
+async def test_escalation_emails_the_assignees_reporting_manager(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """An escalation travels UP: the assignee is notified in-app (the dashboard
+    raises it as a pop-up) and their reporting manager is emailed."""
+    task_id = await _create_task(client, settings, seed)  # manager -> report
+
+    # Admin escalates, so the report's own manager is not the actor.
+    resp = await client.post(
+        f"/api/v1/tasks/{task_id}/escalate", headers=auth_headers(settings, seed.admin)
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["escalated"] is True
+
+    assert ("task_escalated", seed.manager.work_email) in _FakeEmailService.outbox
+    assert any("Task escalated" in t for t in await _titles(client, settings, seed.report))
+
+
+async def test_escalating_your_own_report_does_not_email_you(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """No email about the button you just pressed — the reporting manager IS the
+    escalator here, so they already know."""
+    task_id = await _create_task(client, settings, seed)
+
+    resp = await client.post(
+        f"/api/v1/tasks/{task_id}/escalate", headers=auth_headers(settings, seed.manager)
+    )
+    assert resp.status_code == 200, resp.text
+    assert not [row for row in _FakeEmailService.outbox if row[0] == "task_escalated"]

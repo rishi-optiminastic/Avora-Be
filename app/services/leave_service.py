@@ -215,7 +215,51 @@ class LeaveService:
                 entity_id=leave.id,
                 actor_id=caller.employee_id,
             )
+        await self._email_request(leave, caller, admin_ids=admin_ids)
         return leave
+
+    async def _email_request(
+        self, leave: Leave, caller: CurrentUser, *, admin_ids: set[uuid.UUID]
+    ) -> None:
+        """Email a new leave request to the people who hear about it in-app: the
+        admins who can decide it, plus the requester's reporting manager.
+
+        The manager's copy is explicitly framed as visibility, not an action —
+        approval is admin-only (see `decide`), so telling a manager to "approve"
+        would send them after a button they don't have.
+
+        Best-effort per recipient: one bad address must never roll back the
+        request or stop the other emails, so failures are swallowed and logged.
+        """
+        requester = await self._employees.get(leave.employee_id)
+        if requester is None:
+            return
+        # Deliver once per person, and never back to the requester themselves —
+        # an admin applying for their own leave shouldn't email themselves.
+        recipient_ids = set(admin_ids)
+        if caller.manager_id is not None:
+            recipient_ids.add(caller.manager_id)
+        recipient_ids.discard(leave.employee_id)
+
+        leave_type_label = _leave_type_label(leave.leave_type, leave.half_day_period)
+        date_range = f"{leave.start_date:%d %b} - {leave.end_date:%d %b}"
+        for recipient_id in recipient_ids:
+            recipient = await self._employees.get(recipient_id)
+            if recipient is None or not recipient.is_active:
+                continue
+            try:
+                await self._email.send_leave_request(
+                    to=recipient.work_email,
+                    recipient_name=recipient.full_name,
+                    requester_name=requester.full_name,
+                    leave_type_label=leave_type_label,
+                    date_range_label=date_range,
+                    reason=leave.reason,
+                    can_decide=recipient_id in admin_ids,
+                    link_path=_LEAVES_LINK,
+                )
+            except EmailError:
+                logger.warning("leave_request_email_failed", extra={"leave_id": str(leave.id)})
 
     async def decide(
         self, caller: CurrentUser, leave_id: uuid.UUID, payload: LeaveDecision

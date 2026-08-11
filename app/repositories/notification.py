@@ -14,6 +14,7 @@ from typing import Any, cast
 
 from sqlalchemy import func, select, update
 from sqlalchemy.engine import CursorResult
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.notification import Notification, NotificationKind, NotificationLevel
@@ -51,12 +52,60 @@ class NotificationRepository:
         await self._session.flush()
         return row
 
+    async def create_isolated(
+        self,
+        *,
+        recipient_id: uuid.UUID,
+        kind: NotificationKind,
+        level: NotificationLevel,
+        title: str,
+        body: str | None,
+        link: str | None,
+        entity_type: str | None,
+        entity_id: uuid.UUID | None,
+        actor_id: uuid.UUID | None,
+    ) -> Notification | None:
+        """`create`, but inside a SAVEPOINT that absorbs a DB-level failure.
+
+        A notification is always a SIDE EFFECT of some primary write — a comment,
+        an assignment, a leave decision. Postgres aborts the WHOLE transaction on
+        any failed statement, so without this savepoint a single bad notification
+        INSERT rolls the primary write back too: posting a message on a task
+        became a 500 that lost the message when the deployed DB's
+        `notificationkind` enum didn't yet carry the value the code writes.
+
+        Returns None when the insert failed, so the caller can log and carry on.
+        """
+        try:
+            async with self._session.begin_nested():
+                return await self.create(
+                    recipient_id=recipient_id,
+                    kind=kind,
+                    level=level,
+                    title=title,
+                    body=body,
+                    link=link,
+                    entity_type=entity_type,
+                    entity_id=entity_id,
+                    actor_id=actor_id,
+                )
+        except SQLAlchemyError:
+            return None
+
     async def list_for_recipient(
-        self, recipient_id: uuid.UUID, *, offset: int, limit: int, unread_only: bool
+        self,
+        recipient_id: uuid.UUID,
+        *,
+        offset: int,
+        limit: int,
+        unread_only: bool,
+        kind: NotificationKind | None = None,
     ) -> tuple[Sequence[Notification], int]:
         where = Notification.recipient_id == recipient_id
         if unread_only:
             where = where & Notification.read_at.is_(None)
+        if kind is not None:
+            where = where & (Notification.kind == kind)
         total = await self._session.scalar(
             select(func.count()).select_from(Notification).where(where)
         )

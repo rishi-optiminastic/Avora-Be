@@ -112,10 +112,16 @@ async def export_payroll_xlsx(
     caller: CurrentUserDep,
     service: PayrollServiceDep,
     month: str | None = Query(default=None, description="YYYY-MM; defaults to the current month"),
+    employee_ids: Annotated[
+        list[uuid.UUID] | None,
+        Query(description="Restrict the register to these employees; omit for everyone"),
+    ] = None,
 ) -> Response:
     """HR/Admin: download the month's payroll as an .xlsx (identity + bank details
-    + UAN + the LOP-adjusted salary breakdown, one row per employee)."""
-    xlsx, filename = await service.export_xlsx(caller, month)
+    + UAN + the LOP-adjusted salary breakdown, one row per employee). Pass
+    `employee_ids` to export only a selection — it narrows the rows the caller can
+    already see, so it never widens scope."""
+    xlsx, filename = await service.export_xlsx(caller, month, employee_ids)
     return Response(
         content=xlsx,
         media_type=_XLSX_MEDIA_TYPE,

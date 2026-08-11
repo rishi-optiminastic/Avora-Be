@@ -313,10 +313,15 @@ class TaskService:
     async def escalate(self, caller: CurrentUser, task_id: uuid.UUID) -> Task:
         """Flag a task for attention (overdue/blocked). Manager-only, scoped.
 
+        Two people hear about it: the assignee gets an in-app notification (the
+        dashboard raises it as a pop-up), and the assignee's reporting manager
+        gets an email so the escalation travels up the line, not just sideways.
+
         Repeatable by design: a manager can escalate the same task more than
         once to keep drawing attention. There is no "already escalated" guard —
-        the flag simply stays set and the assignee is re-notified each time (no
-        dedupe), so a second escalation still lands in their inbox.
+        the flag simply stays set and both the notification and the manager email
+        fire again (deliberately no dedupe or throttle), so a second escalation
+        still lands.
         """
         if not caller.is_manager:
             raise AuthorizationError()
@@ -325,9 +330,9 @@ class TaskService:
             raise NotFoundError()
         task.escalated = True
         await self._tasks.flush()
-        # Ping the assignee every time (deliberately no dedupe) so each repeated
-        # escalation is felt. notify() drops the self-case if a manager escalates
-        # a task assigned to themselves.
+        # Ping the assignee every time so each repeated escalation is felt.
+        # notify() drops the self-case if a manager escalates a task assigned to
+        # themselves.
         await self._notifications.notify(
             recipient_id=task.assignee_id,
             kind=NotificationKind.ESCALATION,
@@ -338,12 +343,47 @@ class TaskService:
             entity_id=task.id,
             actor_id=caller.employee_id,
         )
+        await self._email_escalation(task, caller)
         await self._audit.append(
             actor=str(caller.employee_id),
             action="task.escalate",
             target=f"task:{task.id}",
         )
         return task
+
+    async def _email_escalation(self, task: Task, caller: CurrentUser) -> None:
+        """Email the assignee's reporting manager that the task was escalated.
+
+        Skipped when the assignee has no manager on file, or when the reporting
+        manager is the one escalating — telling someone by email about the button
+        they just pressed is noise, and mirrors the actor==recipient drop in
+        `notify()`. Best-effort: a delivery failure must never roll back the
+        escalation, so we swallow and log it.
+        """
+        assignee = await self._employees.get(task.assignee_id)
+        if assignee is None or assignee.manager_id is None:
+            logger.info("task_escalation_no_manager", extra={"task_id": str(task.id)})
+            return
+        if assignee.manager_id == caller.employee_id:
+            return
+        manager = await self._employees.get(assignee.manager_id)
+        if manager is None or not manager.is_active:
+            return
+        actor = await self._employees.get(caller.employee_id)
+        due_label = f"{task.due_date:%d %b %Y}" if task.due_date is not None else None
+        try:
+            await self._email.send_task_escalated(
+                to=manager.work_email,
+                manager_name=manager.full_name,
+                assignee_name=assignee.full_name,
+                task_title=task.title,
+                escalated_by=actor.full_name if actor is not None else "A manager",
+                due_label=due_label,
+                blocked_reason=task.blocked_reason,
+                link_path=f"/dashboard/goals/tasks?task={task.id}",
+            )
+        except EmailError:
+            logger.warning("task_escalated_email_failed", extra={"task_id": str(task.id)})
 
     async def appreciate(self, caller: CurrentUser, task_id: uuid.UUID, note: str | None) -> Task:
         """Send the assignee a kudos for completing a task. Manager (or the

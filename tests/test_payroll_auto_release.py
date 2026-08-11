@@ -8,6 +8,8 @@ month that was already released.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,8 +35,18 @@ from app.services.attendance_service import AttendanceService
 from app.services.payroll_service import PayrollService
 from tests.conftest import _FakeEmailService, _Seed, auth_headers
 
-# Today is 2026-07-31 in the suite -> the previous month is June.
-_PREV = "2026-06"
+
+def _previous_month() -> str:
+    """The month `release_for_system` targets — always the one before today's.
+
+    Derived from the clock rather than hardcoded: pinning it to a literal month
+    made this test start failing the moment the calendar rolled past it.
+    """
+    today = datetime.now(UTC).date()
+    return f"{today.replace(day=1) - timedelta(days=1):%Y-%m}"
+
+
+_PREV = _previous_month()
 _COMP = {"amount_minor": 50_000_00, "currency": "inr", "period": "monthly"}
 _SETTINGS = {
     "pay_day_of_month": 1,

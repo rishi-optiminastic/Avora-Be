@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from typing import ClassVar
 
 import jwt
 import pytest
@@ -69,7 +70,20 @@ class _FakeJwksClient:
 
 
 class _FakeEmailService:
-    """No-op email service for tests — never touches the network (Testing §9)."""
+    """No-op email service for tests — never touches the network (Testing §9).
+
+    Every send is appended to the class-level `outbox` so a test can assert WHO
+    was mailed. The `client` fixture clears it per test; a class attribute (not
+    an instance one) is what makes that work, since the DI override builds a
+    fresh instance per resolution.
+    """
+
+    outbox: ClassVar[list[tuple[str, str]]] = []
+
+    def _record(self, kwargs: dict[str, object], method: str) -> None:
+        to = kwargs.get("to")
+        if isinstance(to, str):
+            type(self).outbox.append((method, to))
 
     async def send(self, *, to: str, subject: str, html: str) -> None:
         return None
@@ -79,6 +93,12 @@ class _FakeEmailService:
 
     async def send_leave_decision(self, **kwargs: object) -> None:
         return None
+
+    async def send_leave_request(self, **kwargs: object) -> None:
+        self._record(kwargs, "leave_request")
+
+    async def send_task_escalated(self, **kwargs: object) -> None:
+        self._record(kwargs, "task_escalated")
 
     async def send_agent_reinstall(self, **kwargs: object) -> None:
         return None
@@ -174,6 +194,7 @@ async def client(
     app.dependency_overrides[get_db] = _override_db
     app.dependency_overrides[get_jwks_client] = lambda: _FakeJwksClient()
     app.dependency_overrides[get_email_service] = lambda: _FakeEmailService()
+    _FakeEmailService.outbox.clear()
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:

@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from httpx import AsyncClient
 
 from app.core.config import Settings
-from tests.conftest import _Seed, auth_headers
+from tests.conftest import _FakeEmailService, _Seed, auth_headers
 
 
 def _apply_body() -> dict[str, object]:
@@ -194,3 +194,29 @@ async def test_outsider_cannot_read_or_post_comments(
             headers=auth_headers(settings, seed.outsider),
         )
     ).status_code == 404
+
+
+async def test_applying_emails_the_approvers_and_the_reporting_manager(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """Applying for leave mails the people who must act on it.
+
+    Admins can decide (approval is admin-only — see `test_admin_approves_manager_cannot`),
+    so they get the "review it" copy; the requester's reporting manager gets a
+    visibility copy. The requester is never mailed about their own request.
+    """
+    await _apply_as(client, settings, seed.report)
+
+    mailed = {to for kind, to in _FakeEmailService.outbox if kind == "leave_request"}
+    assert seed.admin.work_email in mailed
+    assert seed.manager.work_email in mailed
+    assert seed.report.work_email not in mailed
+
+
+async def test_an_admin_applying_does_not_email_themselves(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    await _apply_as(client, settings, seed.admin)
+
+    mailed = {to for kind, to in _FakeEmailService.outbox if kind == "leave_request"}
+    assert seed.admin.work_email not in mailed

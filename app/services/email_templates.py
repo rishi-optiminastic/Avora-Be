@@ -10,6 +10,7 @@ most email clients can't load a custom web font.
 
 from __future__ import annotations
 
+from html import escape
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -290,6 +291,108 @@ def task_assigned_email(
 <p style="margin:0 0 4px;">{_button("Open task", task_url)}</p>"""
     return subject, _layout(
         preheader=f"{assigned_by} assigned you a task: {task_title}",
+        content_html=content,
+        footer=_ACTIVITY_FOOTER,
+    )
+
+
+def leave_request_email(
+    *,
+    recipient_name: str,
+    requester_name: str,
+    leave_type_label: str,
+    date_range_label: str,
+    reason: str | None,
+    can_decide: bool,
+    leave_url: str,
+) -> tuple[str, str]:
+    """Render the (subject, html) telling an approver/manager that someone applied
+    for leave.
+
+    `can_decide` splits the ask: approvers get "review it", a reporting manager
+    who can only see the request gets told it's for visibility — so nobody is
+    sent chasing a button they don't have.
+    """
+    subject = f"Leave request: {requester_name} — {date_range_label}"
+    reason_html = _note_block(escape(reason)) if reason else ""
+    ask = (
+        "It's waiting on your approval."
+        if can_decide
+        else "It's with the approvers — this is for your visibility as their manager."
+    )
+    content = f"""\
+<div style="font-size:11px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:{_MUTED};">
+  Leave request
+</div>
+<h1 style="margin:8px 0 16px;font-family:{_SERIF};font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
+  {escape(requester_name)} applied for leave
+</h1>
+<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:{_INK};">
+  Hi {escape(recipient_name)}, {escape(requester_name)} has applied for
+  {_chip(escape(leave_type_label))} on {_chip(escape(date_range_label))}. {ask}
+</p>
+{reason_html}
+<p style="margin:0 0 4px;">{_button("Review the request" if can_decide else "Open leaves", leave_url)}</p>"""
+    return subject, _layout(
+        preheader=f"{requester_name} applied for {leave_type_label} ({date_range_label}).",
+        content_html=content,
+        footer=_ACTIVITY_FOOTER,
+    )
+
+
+def task_escalated_email(
+    *,
+    manager_name: str,
+    assignee_name: str,
+    task_title: str,
+    escalated_by: str,
+    due_label: str | None,
+    blocked_reason: str | None,
+    task_url: str,
+) -> tuple[str, str]:
+    """Render the (subject, html) telling a reporting manager that a task on one
+    of their people has been escalated.
+
+    Escaped, unlike the older templates: the task title and blocker text are
+    free-form employee input and must never reach the HTML body raw.
+    """
+    title = escape(task_title)
+    who = escape(assignee_name)
+    subject = f"Escalated: {task_title} ({assignee_name})"
+    due_html = (
+        f'<p style="margin:0 0 14px;font-size:14px;line-height:1.6;color:{_MUTED};">'
+        f"Due {_chip(escape(due_label))}</p>"
+        if due_label
+        else ""
+    )
+    # The blocker is why it stalled — give it the amber treatment so it reads
+    # before the button, the same way the EOD email flags blockers.
+    reason_html = (
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        f'style="margin:0 0 20px;"><tr><td style="background:{_AMBER_SOFT};'
+        f"border:1px solid {_AMBER_LINE};border-radius:8px;padding:13px 16px;"
+        f'font-size:13.5px;line-height:1.6;color:{_AMBER_INK};">'
+        f'<strong style="color:{_AMBER};">Blocked:</strong> {escape(blocked_reason)}'
+        f"</td></tr></table>"
+        if blocked_reason
+        else ""
+    )
+    content = f"""\
+<div style="font-size:11px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:{_AMBER};">
+  Escalation
+</div>
+<h1 style="margin:8px 0 16px;font-family:{_SERIF};font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
+  {title}
+</h1>
+<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:{_INK};">
+  Hi {escape(manager_name)}, <strong>{escape(escalated_by)}</strong> escalated this task
+  on <strong>{who}</strong>, who reports to you. It needs a push.
+</p>
+{due_html}
+{reason_html}
+<p style="margin:0 0 4px;">{_button("Open task", task_url)}</p>"""
+    return subject, _layout(
+        preheader=f"{escalated_by} escalated {task_title} on {assignee_name}.",
         content_html=content,
         footer=_ACTIVITY_FOOTER,
     )
