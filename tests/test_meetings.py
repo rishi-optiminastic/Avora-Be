@@ -16,6 +16,7 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
+from app.core.deps import get_settings
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.quick_meet import QuickMeetRepository
@@ -103,3 +104,33 @@ async def test_quick_defaults_are_self_scoped(
     )
     assert other.status_code == 200
     assert other.json()["invitee_emails"] == []
+
+
+async def test_malformed_sa_key_is_a_clean_503_not_a_500(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """A key that is present but unreadable must fail as "misconfigured".
+
+    `quick_meet_configured` only checks the env vars are non-empty, so a PEM with
+    half-unescaped newlines sails past it and PyJWT then rejects it. That used to
+    escape as an opaque 500 ("Could not start the meeting" with no reason); it now
+    names the offending env var.
+    """
+    broken = settings.model_copy(
+        update={
+            "google_sa_client_email": "avora-meet@proj.iam.gserviceaccount.com",
+            "google_sa_private_key": "-----BEGIN PRIVATE KEY-----\nnot-a-real-key\n",
+        }
+    )
+    app = client._transport.app  # type: ignore[attr-defined]
+    app.dependency_overrides[get_settings] = lambda: broken
+    try:
+        resp = await client.post(
+            "/api/v1/meetings/quick", headers=auth_headers(settings, seed.admin)
+        )
+    finally:
+        app.dependency_overrides[get_settings] = lambda: settings
+
+    assert resp.status_code == 503, resp.text
+    assert resp.json()["error"]["code"] == "integration_unavailable"
+    assert "GOOGLE_SA_PRIVATE_KEY" in resp.json()["error"]["message"]

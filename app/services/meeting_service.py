@@ -123,9 +123,29 @@ class MeetingService:
         return jwt.encode(claims, key, algorithm="RS256")
 
     async def _access_token(self, subject: str) -> str:
+        # Signing is the likeliest thing to break on a fresh setup — the SA private
+        # key is pasted through an env var, so a stray quote or half-unescaped
+        # newline leaves a PEM that `quick_meet_configured` (a non-empty check)
+        # happily accepts and PyJWT then rejects. Uncaught that surfaced as an
+        # opaque 500; as a 503 it reads as "the integration is misconfigured",
+        # which is what it is.
+        try:
+            assertion = self._build_assertion(subject)
+        except Exception as exc:
+            logger.warning(
+                "google_sa_key_unusable",
+                extra={
+                    "reason": type(exc).__name__,
+                    "sa_client_email": self._settings.google_sa_client_email,
+                },
+            )
+            raise IntegrationError(
+                "The Google service-account key is unreadable — check "
+                "GOOGLE_SA_PRIVATE_KEY is a full PEM with escaped newlines."
+            ) from exc
         payload = {
             "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
-            "assertion": self._build_assertion(subject),
+            "assertion": assertion,
         }
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:

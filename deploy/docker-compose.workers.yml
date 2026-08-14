@@ -1,0 +1,51 @@
+# Build + push the four Avora worker images to the VPS's local registry, so a
+# Coolify deploy pulls fresh code into the background workers.
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# On the Coolify box the four background workers - the eod / payroll /
+# auto-checkout schedulers plus the OCR worker - each run as their own Coolify
+# resource, pulling a per-worker image out of the local registry at
+# 127.0.0.1:5000. A Coolify *application* deploy rebuilds the api from git, but it
+# does NOT rebuild these worker images. So after any backend code change the
+# workers keep running stale code until their images are rebuilt and re-pushed.
+# This turns that into one command.
+#
+# The three schedulers share the api Dockerfile (they only differ by the command
+# Coolify runs per resource); the OCR worker is a separate slim Tesseract image.
+# Four image names, matching what the registry already holds:
+#   avora-worker-eod   avora-worker-payroll   avora-worker-autocheckout   avora-worker-ocr
+#
+# USAGE (on the VPS, from this deploy/ folder, after pulling the new code):
+#   export REGISTRY=127.0.0.1:5000
+#   docker compose -f docker-compose.workers.yml build
+#   docker compose -f docker-compose.workers.yml push
+# then redeploy (or restart) the four worker resources in Coolify so they re-pull.
+#
+# NOTE: the registry also holds mangled repos ending in "atest" from an earlier
+# push where a ":latest" tag got fused into the repo name. Ignore / prune those -
+# the four tags below are the correct ones.
+
+x-app-build: &app-build       # 3 schedulers: same build as the api, different runtime command
+  build:
+    context: ..
+    dockerfile: Dockerfile
+
+services:
+  avora-worker-eod:
+    <<: *app-build
+    image: ${REGISTRY:?set REGISTRY, e.g. 127.0.0.1:5000}/avora-worker-eod:latest
+
+  avora-worker-payroll:
+    <<: *app-build
+    image: ${REGISTRY:?set REGISTRY, e.g. 127.0.0.1:5000}/avora-worker-payroll:latest
+
+  avora-worker-autocheckout:
+    <<: *app-build
+    image: ${REGISTRY:?set REGISTRY, e.g. 127.0.0.1:5000}/avora-worker-autocheckout:latest
+
+  avora-worker-ocr:
+    build:
+      context: ../worker
+      dockerfile: Dockerfile
+    image: ${REGISTRY:?set REGISTRY, e.g. 127.0.0.1:5000}/avora-worker-ocr:latest
