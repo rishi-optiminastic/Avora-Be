@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Awaitable, Sequence
-from datetime import date
+from datetime import date, timedelta
 
 from app.core.exceptions import AuthorizationError, NotFoundError
 from app.core.logging import get_logger
@@ -22,6 +22,7 @@ from app.repositories.audit import AuditRepository
 from app.repositories.celebration_settings import CelebrationSettingsRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.festival import FestivalRepository
+from app.repositories.holiday import HolidayRepository
 from app.schemas.auth import CurrentUser
 from app.schemas.celebration import (
     CelebrationSettingsUpdate,
@@ -59,12 +60,14 @@ class CelebrationService:
         employees: EmployeeRepository,
         email: EmailService,
         audit: AuditRepository,
+        holidays: HolidayRepository,
     ) -> None:
         self._settings = settings
         self._festivals = festivals
         self._employees = employees
         self._email = email
         self._audit = audit
+        self._holidays = holidays
 
     async def get_or_create_settings(self) -> CelebrationSettings:
         return await self._settings.get() or await self._settings.create_default()
@@ -130,21 +133,32 @@ class CelebrationService:
             sent += await self._run_anniversaries(team, recipients, today)
         if settings.festival_enabled:
             sent += await self._run_festivals(recipients, today)
+        if settings.holiday_reminder_enabled:
+            sent += await self._run_holiday_reminders(recipients, today)
         settings.last_run_on = today
         await self._settings.flush()
         logger.info("celebration_run_done", extra={"date": str(today), "emails": sent})
         return sent
 
-    async def _run_birthdays(
-        self, team: list[Employee], recipients: list[str], today: date
-    ) -> int:
+    async def _run_birthdays(self, team: list[Employee], recipients: list[str], today: date) -> int:
+        """One email per birthday: addressed TO the person, with the team CC'd.
+
+        Previously this sent the whole team a separate copy each, so nobody could
+        see the wish was collective and the birthday person got a mail addressed to
+        themselves. It also burned one send per employee per birthday, which on
+        Gmail's daily cap is what actually runs out.
+        """
         sent = 0
         for person in team:
-            if person.date_of_birth and _same_month_day(person.date_of_birth, today):
-                for to in recipients:
-                    sent += await self._safe_send(
-                        self._email.send_birthday(to=to, person_name=person.full_name)
-                    )
+            if not person.work_email or not person.date_of_birth:
+                continue
+            if not _same_month_day(person.date_of_birth, today):
+                continue
+            sent += await self._safe_send(
+                self._email.send_birthday(
+                    to=person.work_email, person_name=person.full_name, audience=recipients
+                )
+            )
         return sent
 
     async def _run_anniversaries(
@@ -152,26 +166,53 @@ class CelebrationService:
     ) -> int:
         sent = 0
         for person in team:
-            if not person.hire_date or not _same_month_day(person.hire_date, today):
+            if not person.work_email or not person.hire_date:
+                continue
+            if not _same_month_day(person.hire_date, today):
                 continue
             years = _years_between(person.hire_date, today)
             if years < 1:  # a same-year joiner has no anniversary yet
                 continue
-            for to in recipients:
-                sent += await self._safe_send(
-                    self._email.send_anniversary(to=to, person_name=person.full_name, years=years)
+            sent += await self._safe_send(
+                self._email.send_anniversary(
+                    to=person.work_email,
+                    person_name=person.full_name,
+                    years=years,
+                    audience=recipients,
                 )
+            )
         return sent
 
     async def _run_festivals(self, recipients: list[str], today: date) -> int:
         sent = 0
         for festival in await self._festivals.list_active_on(today):
-            for to in recipients:
-                sent += await self._safe_send(
-                    self._email.send_festival(
-                        to=to, festival_name=festival.name, message=festival.message
-                    )
+            sent += await self._safe_send(
+                self._email.send_festival(
+                    festival_name=festival.name,
+                    message=festival.message,
+                    audience=recipients,
                 )
+            )
+        return sent
+
+    async def _run_holiday_reminders(self, recipients: list[str], today: date) -> int:
+        """Tell everyone the day BEFORE a holiday that the office is closed.
+
+        Goes to the whole active roster — people already on leave included. "The
+        office is closed tomorrow" is just as relevant to someone away as to
+        someone due in, and filtering by leave status would mean the people most
+        likely to be planning their return are the ones who don't hear.
+        """
+        tomorrow = today + timedelta(days=1)
+        sent = 0
+        for holiday in await self._holidays.list_between(tomorrow, tomorrow):
+            sent += await self._safe_send(
+                self._email.send_holiday_reminder(
+                    holiday_name=holiday.name,
+                    day_label=f"{holiday.date:%A, %d %b %Y}",
+                    audience=recipients,
+                )
+            )
         return sent
 
     @staticmethod

@@ -30,6 +30,7 @@ from app.repositories.audit import AuditRepository
 from app.repositories.celebration_settings import CelebrationSettingsRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.festival import FestivalRepository
+from app.repositories.holiday import HolidayRepository
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.celebration_service import CelebrationService
 from app.services.email_service import EmailService
@@ -48,6 +49,7 @@ def _build_service(session: AsyncSession) -> CelebrationService:
         EmployeeRepository(session),
         EmailService(get_settings()),
         AuditRepository(session),
+        HolidayRepository(session),
     )
 
 

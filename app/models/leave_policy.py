@@ -33,6 +33,12 @@ class LeavePolicy(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     paternity_days: Mapped[int] = mapped_column(default=15)
     marriage_days: Mapped[int] = mapped_column(default=5)
 
+    # How long probation lasts, in months from the joining date. Drives the
+    # tenure band (see `core/tenure.py`), which in turn selects the entitlement
+    # row in `leave_tier_quotas`. Configurable because probation length is an org
+    # decision, not a constant.
+    probation_months: Mapped[int] = mapped_column(default=6)
+
     # Minimum days' notice required to apply for PLANNED / ANNUAL leave (0 ⇒ any
     # time). Sick / unpaid / half-day / event-based leave are applicable any time.
     planned_min_notice_days: Mapped[int] = mapped_column(default=2)

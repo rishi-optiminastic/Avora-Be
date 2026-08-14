@@ -84,6 +84,14 @@ class _FakeEmailService:
         to = kwargs.get("to")
         if isinstance(to, str):
             type(self).outbox.append((method, to))
+        # CC recipients count as delivered too — a test asserting "the manager
+        # was mailed" must pass whether they were on the To or the Cc line.
+        for key in ("cc", "audience"):
+            value = kwargs.get(key)
+            if isinstance(value, list):
+                for address in value:
+                    if isinstance(address, str):
+                        type(self).outbox.append((method, address))
 
     async def send(self, *, to: str, subject: str, html: str) -> None:
         return None
@@ -99,6 +107,12 @@ class _FakeEmailService:
 
     async def send_task_escalated(self, **kwargs: object) -> None:
         self._record(kwargs, "task_escalated")
+
+    async def send_announcement(self, **kwargs: object) -> None:
+        self._record(kwargs, "announcement")
+
+    async def send_holiday_reminder(self, **kwargs: object) -> None:
+        self._record(kwargs, "holiday_reminder")
 
     async def send_agent_reinstall(self, **kwargs: object) -> None:
         return None

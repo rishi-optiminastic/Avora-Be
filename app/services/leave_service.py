@@ -22,6 +22,7 @@ from app.core.exceptions import (
 )
 from app.core.logging import get_logger
 from app.core.payroll import working_days_between
+from app.core.tenure import TenureStatus, accrued_units, probation_end, tenure_status
 from app.models.employee import Gender, Role
 from app.models.leave import HalfDayPeriod, Leave, LeaveStatus, LeaveType
 from app.models.leave_comment import LeaveComment
@@ -32,6 +33,7 @@ from app.repositories.holiday import HolidayRepository
 from app.repositories.leave import LeaveRepository
 from app.repositories.leave_allocation import LeaveAllocationRepository
 from app.repositories.leave_comment import LeaveCommentRepository
+from app.repositories.leave_tier_quota import LeaveTierQuotaRepository
 from app.schemas.auth import CurrentUser
 from app.schemas.leave import (
     LeaveBalanceRead,
@@ -89,6 +91,7 @@ class LeaveService:
         holidays: HolidayRepository,
         allocations: LeaveAllocationRepository,
         attendance_policy: AttendancePolicyService,
+        tiers: LeaveTierQuotaRepository,
     ) -> None:
         self._leaves = leaves
         self._comments = comments
@@ -100,6 +103,7 @@ class LeaveService:
         self._holidays = holidays
         self._allocations = allocations
         self._attendance_policy = attendance_policy
+        self._tiers = tiers
 
     async def list_for_caller(
         self, caller: CurrentUser, *, offset: int, limit: int, status: LeaveStatus | None = None
@@ -129,8 +133,7 @@ class LeaveService:
             if backdate <= 0:
                 raise ValidationError("You can't apply for leave for a past date.")
             raise ValidationError(
-                f"Leave can be backdated at most {backdate} "
-                f"day{'s' if backdate != 1 else ''}."
+                f"Leave can be backdated at most {backdate} day{'s' if backdate != 1 else ''}."
             )
 
     async def _enforce_min_notice(self, payload: LeaveCreate) -> None:
@@ -376,11 +379,52 @@ class LeaveService:
         policy = await self._policy.get_or_create()
         allocation = await self._allocations.get_for_employee(target_id)
 
-        def quota(policy_attr: str, alloc_attr: str) -> float:
-            """The employee's effective annual quota: their per-employee override
-            when set, else the org policy default."""
+        # Which entitlement band this person is in today, and when they leave (or
+        # left) probation. Derived from the hire date every time — never stored,
+        # so it can't go stale on the day someone crosses a boundary.
+        #
+        # Banding uses the REAL hire date only, not the created_at fallback the
+        # leave-year window uses. A missing hire date means we genuinely don't
+        # know when someone joined, and guessing "today" would put long-serving
+        # staff on probation and silently zero their planned leave. Unknown
+        # therefore reads as fully tenured: they keep the org policy, exactly as
+        # they did before tenure banding existed.
+        org_today = await self._org_today()
+        hired_on = employee.hire_date
+        confirmed_on = probation_end(hired_on or anchor, policy.probation_months)
+        tier = (
+            tenure_status(hired_on, org_today, probation_months=policy.probation_months)
+            if hired_on is not None
+            else TenureStatus.TENURED
+        )
+        all_rows = await self._tiers.seed_defaults()
+        tier_rows = {row.leave_type: row for row in all_rows if row.tier is tier}
+        # Accrual restarts at the leave-year boundary (carryforward is within the
+        # year), and can't begin before the person is actually eligible.
+        accrual_start = max(year_start, confirmed_on)
+        accruing: list[LeaveType] = []
+
+        def quota(leave_type: LeaveType, policy_attr: str, alloc_attr: str) -> float:
+            """The employee's effective entitlement for the current leave year.
+
+            Resolution order, most specific first: their per-employee override,
+            then their tenure band's rule, then the org policy default. A band row
+            of 0 is a real answer ("this band gets none") — only an ABSENT row
+            falls through to the policy.
+            """
             override = getattr(allocation, alloc_attr) if allocation is not None else None
-            return float(override if override is not None else getattr(policy, policy_attr))
+            if override is not None:
+                return float(override)
+            row = tier_rows.get(leave_type)
+            if row is not None:
+                if row.monthly_accrual_days is not None:
+                    accruing.append(leave_type)
+                    return accrued_units(
+                        accrual_start, org_today, per_month=float(row.monthly_accrual_days)
+                    )
+                if row.annual_days is not None:
+                    return float(row.annual_days)
+            return float(getattr(policy, policy_attr))
 
         def bucket(
             rows: list[tuple[datetime, datetime, LeaveType, LeaveStatus]],
@@ -398,7 +442,7 @@ class LeaveService:
 
         balances: list[LeaveTypeBalance] = []
         for leave_type, policy_attr, alloc_attr, types in _TRACKED_LEAVE:
-            allocated = quota(policy_attr, alloc_attr)
+            allocated = quota(leave_type, policy_attr, alloc_attr)
             used = bucket(approved, types)
             pend = bucket(pending, types)
             balances.append(
@@ -429,7 +473,12 @@ class LeaveService:
             target=f"employee:{target_id}",
         )
         return LeaveBalanceRead(
-            leave_year_start=year_start, leave_year_end=year_end, balances=balances
+            leave_year_start=year_start,
+            leave_year_end=year_end,
+            balances=balances,
+            tenure_status=tier,
+            probation_end_date=confirmed_on,
+            accruing_types=accruing,
         )
 
     async def list_comments(
@@ -456,8 +505,16 @@ class LeaveService:
         return comment
 
 
+# Display names that don't follow the "title-case the enum value" rule. Bereavement
+# is granted specifically for the loss of a parent, so it is named for that rather
+# than reading as general compassionate leave.
+_LEAVE_TYPE_LABELS: dict[LeaveType, str] = {
+    LeaveType.BEREAVEMENT: "Parent Bereavement",
+}
+
+
 def _leave_type_label(leave_type: LeaveType, half_day_period: HalfDayPeriod | None) -> str:
-    label = leave_type.value.replace("_", " ").title()
+    label = _LEAVE_TYPE_LABELS.get(leave_type, leave_type.value.replace("_", " ").title())
     if leave_type is LeaveType.HALF_DAY and half_day_period is not None:
         return f"{label} ({half_day_period.value.replace('_', ' ').title()})"
     return label

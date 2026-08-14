@@ -21,9 +21,11 @@ from app.core.config import Settings
 from app.services.email_templates import (
     agent_reinstall_email,
     anniversary_email,
+    announcement_email,
     birthday_email,
     festival_email,
     forgot_checkout_email,
+    holiday_reminder_email,
     invite_email,
     leave_decision_email,
     leave_request_email,
@@ -35,6 +37,30 @@ from app.services.email_templates import (
 )
 
 _SENDGRID_URL = "https://api.sendgrid.com/v3/mail/send"
+
+# Recipients (beyond the To) allowed on a single message. Gmail SMTP — the current
+# transport — rejects a message over ~100 recipients outright, so a company-wide
+# CC has to be chunked. Kept well under the cap to leave room for the To line.
+MAX_CC_PER_MESSAGE = 90
+
+
+def _dedupe_cc(to: str, cc: list[str] | None) -> list[str]:
+    """CC list with blanks, duplicates and the To address removed.
+
+    Case-insensitive: an address that differs only in case is the same mailbox,
+    and mailing someone twice on one message looks like a bug to the recipient.
+    """
+    if not cc:
+        return []
+    seen = {to.strip().lower()}
+    out: list[str] = []
+    for address in cc:
+        key = address.strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(address.strip())
+    return out
 
 
 @dataclass(frozen=True)
@@ -61,13 +87,50 @@ class EmailService:
         to: str,
         subject: str,
         html: str,
+        cc: list[str] | None = None,
         attachments: list[EmailAttachment] | None = None,
     ) -> None:
-        """Deliver one HTML email through the configured provider."""
+        """Deliver one HTML email through the configured provider.
+
+        `cc` puts the rest of the audience on the same message rather than sending
+        one mail each — the difference between a visible "everyone was wished" and
+        a hundred identical private emails, and (on Gmail SMTP) the difference
+        between one send and a hundred against the daily cap.
+        """
+        recipients = _dedupe_cc(to, cc)
         if self._settings.uses_smtp:
-            await self._send_smtp(to=to, subject=subject, html=html, attachments=attachments)
+            await self._send_smtp(
+                to=to, subject=subject, html=html, cc=recipients, attachments=attachments
+            )
         else:
-            await self._send_sendgrid(to=to, subject=subject, html=html, attachments=attachments)
+            await self._send_sendgrid(
+                to=to, subject=subject, html=html, cc=recipients, attachments=attachments
+            )
+
+    async def send_broadcast(
+        self,
+        *,
+        to: str,
+        audience: list[str],
+        subject: str,
+        html: str,
+    ) -> None:
+        """One message to `to`, CC'ing `audience`, split across as many messages as
+        the provider's per-message recipient cap requires.
+
+        Gmail SMTP caps a message at ~100 recipients, so a company-wide send has to
+        be chunked or it is silently rejected. `to` repeats on every chunk so the
+        subject of the mail (the birthday person) always receives it, whichever
+        chunk they land in.
+        """
+        others = [address for address in _dedupe_cc(to, audience) if address]
+        if not others:
+            await self.send(to=to, subject=subject, html=html)
+            return
+        for start in range(0, len(others), MAX_CC_PER_MESSAGE):
+            await self.send(
+                to=to, subject=subject, html=html, cc=others[start : start + MAX_CC_PER_MESSAGE]
+            )
 
     async def _send_sendgrid(
         self,
@@ -75,10 +138,14 @@ class EmailService:
         to: str,
         subject: str,
         html: str,
+        cc: list[str] | None = None,
         attachments: list[EmailAttachment] | None = None,
     ) -> None:
+        personalization: dict[str, object] = {"to": [{"email": to}]}
+        if cc:
+            personalization["cc"] = [{"email": address} for address in cc]
         payload: dict[str, object] = {
-            "personalizations": [{"to": [{"email": to}]}],
+            "personalizations": [personalization],
             "from": {
                 "email": self._settings.email_from,
                 "name": self._settings.email_from_name,
@@ -115,11 +182,16 @@ class EmailService:
         to: str,
         subject: str,
         html: str,
+        cc: list[str] | None = None,
         attachments: list[EmailAttachment] | None = None,
     ) -> None:
         message = EmailMessage()
         message["From"] = formataddr((self._settings.email_from_name, self._settings.email_from))
         message["To"] = to
+        if cc:
+            # smtplib's send_message reads To/Cc off the headers, so setting the
+            # header is what actually delivers to them — no separate envelope list.
+            message["Cc"] = ", ".join(cc)
         message["Subject"] = subject
         # HTML with a minimal plaintext fallback for non-HTML clients.
         message.set_content("This email requires an HTML-capable email client to view.")
@@ -270,17 +342,16 @@ class EmailService:
         self,
         *,
         to: str,
-        manager_name: str,
         assignee_name: str,
         task_title: str,
         escalated_by: str,
         due_label: str | None,
         blocked_reason: str | None,
         link_path: str,
+        cc: list[str] | None = None,
     ) -> None:
-        """Tell a reporting manager that a task on one of their people was escalated."""
+        """Tell the assignee a task was escalated, CC'ing their reporting manager."""
         subject, html = task_escalated_email(
-            manager_name=manager_name,
             assignee_name=assignee_name,
             task_title=task_title,
             escalated_by=escalated_by,
@@ -288,7 +359,7 @@ class EmailService:
             blocked_reason=blocked_reason,
             task_url=self._absolute(link_path),
         )
-        await self.send(to=to, subject=subject, html=html)
+        await self.send(to=to, subject=subject, html=html, cc=cc)
 
     async def send_forgot_checkout(
         self, *, to: str, employee_name: str, day_label: str, checkout_label: str
@@ -347,14 +418,44 @@ class EmailService:
         )
         await self.send(to=to, subject=subject, html=html)
 
-    async def send_birthday(self, *, to: str, person_name: str) -> None:
+    async def send_birthday(self, *, to: str, person_name: str, audience: list[str]) -> None:
+        """Wish one person, with the team CC'd so the wish is visibly public."""
         subject, html = birthday_email(person_name=person_name)
-        await self.send(to=to, subject=subject, html=html)
+        await self.send_broadcast(to=to, audience=audience, subject=subject, html=html)
 
-    async def send_anniversary(self, *, to: str, person_name: str, years: int) -> None:
+    async def send_anniversary(
+        self, *, to: str, person_name: str, years: int, audience: list[str]
+    ) -> None:
         subject, html = anniversary_email(person_name=person_name, years=years)
-        await self.send(to=to, subject=subject, html=html)
+        await self.send_broadcast(to=to, audience=audience, subject=subject, html=html)
 
-    async def send_festival(self, *, to: str, festival_name: str, message: str) -> None:
+    async def send_festival(
+        self, *, festival_name: str, message: str, audience: list[str]
+    ) -> None:
+        """A festival has no one subject, so the workspace address takes the To line
+        and the whole team is CC'd."""
         subject, html = festival_email(festival_name=festival_name, message=message)
-        await self.send(to=to, subject=subject, html=html)
+        await self.send_broadcast(
+            to=self._settings.email_from, audience=audience, subject=subject, html=html
+        )
+
+    async def send_announcement(
+        self, *, message: str, posted_by: str, level: str, audience: list[str]
+    ) -> None:
+        subject, html = announcement_email(
+            message=message,
+            posted_by=posted_by,
+            level=level,
+            dashboard_url=self._absolute("/dashboard"),
+        )
+        await self.send_broadcast(
+            to=self._settings.email_from, audience=audience, subject=subject, html=html
+        )
+
+    async def send_holiday_reminder(
+        self, *, holiday_name: str, day_label: str, audience: list[str]
+    ) -> None:
+        subject, html = holiday_reminder_email(holiday_name=holiday_name, day_label=day_label)
+        await self.send_broadcast(
+            to=self._settings.email_from, audience=audience, subject=subject, html=html
+        )

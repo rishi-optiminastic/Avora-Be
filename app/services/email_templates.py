@@ -342,7 +342,6 @@ def leave_request_email(
 
 def task_escalated_email(
     *,
-    manager_name: str,
     assignee_name: str,
     task_title: str,
     escalated_by: str,
@@ -357,8 +356,7 @@ def task_escalated_email(
     free-form employee input and must never reach the HTML body raw.
     """
     title = escape(task_title)
-    who = escape(assignee_name)
-    subject = f"Escalated: {task_title} ({assignee_name})"
+    subject = f"Escalated: {task_title}"
     due_html = (
         f'<p style="margin:0 0 14px;font-size:14px;line-height:1.6;color:{_MUTED};">'
         f"Due {_chip(escape(due_label))}</p>"
@@ -385,14 +383,14 @@ def task_escalated_email(
   {title}
 </h1>
 <p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:{_INK};">
-  Hi {escape(manager_name)}, <strong>{escape(escalated_by)}</strong> escalated this task
-  on <strong>{who}</strong>, who reports to you. It needs a push.
+  Hi {escape(assignee_name)}, <strong>{escape(escalated_by)}</strong> escalated this task.
+  It needs a push — your reporting manager is copied here.
 </p>
 {due_html}
 {reason_html}
 <p style="margin:0 0 4px;">{_button("Open task", task_url)}</p>"""
     return subject, _layout(
-        preheader=f"{escalated_by} escalated {task_title} on {assignee_name}.",
+        preheader=f"{escalated_by} escalated {task_title}.",
         content_html=content,
         footer=_ACTIVITY_FOOTER,
     )
@@ -718,6 +716,60 @@ def anniversary_email(*, person_name: str, years: int) -> tuple[str, str]:
             f"<strong>{years} {label}</strong> with us! Thank you for everything you bring to the "
             "team — here's to many more. 🎊"
         ),
+    )
+
+
+def announcement_email(
+    *, message: str, posted_by: str, level: str, dashboard_url: str
+) -> tuple[str, str]:
+    """Render the (subject, html) mirroring an HR announcement to inboxes.
+
+    Escaped — the message is free-form text typed by a person, and it is about to
+    be sent to the whole company.
+    """
+    urgent = level in ("warning", "critical")
+    subject = f"{'Important — ' if urgent else ''}Announcement from {posted_by}"
+    accent = _AMBER if urgent else _MUTED
+    content = f"""\
+<div style="font-size:11px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:{accent};">
+  {"Important" if urgent else "Announcement"}
+</div>
+<h1 style="margin:8px 0 16px;font-family:{_SERIF};font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
+  {escape(message)}
+</h1>
+<p style="margin:0 0 20px;font-size:14px;line-height:1.6;color:{_MUTED};">
+  Posted by {escape(posted_by)}.
+</p>
+<p style="margin:0 0 4px;">{_button("Open Avora", dashboard_url)}</p>"""
+    return subject, _layout(
+        preheader=message[:120],
+        content_html=content,
+        footer=_ACTIVITY_FOOTER,
+    )
+
+
+def holiday_reminder_email(*, holiday_name: str, day_label: str) -> tuple[str, str]:
+    """Render the (subject, html) reminding everyone of tomorrow's holiday.
+
+    Sent to the whole team — people on leave included, since "the office is closed
+    tomorrow" is exactly as relevant to someone already away as to someone due in.
+    """
+    subject = f"Holiday tomorrow — {holiday_name}"
+    content = f"""\
+<div style="font-size:11px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:{_MUTED};">
+  Time off
+</div>
+<h1 style="margin:8px 0 16px;font-family:{_SERIF};font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
+  🎉 {escape(holiday_name)} — the office is closed tomorrow
+</h1>
+<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:{_INK};">
+  A reminder that {_chip(escape(day_label))} is a company holiday. No need to clock
+  in — enjoy the day.
+</p>"""
+    return subject, _layout(
+        preheader=f"{holiday_name} is tomorrow ({day_label}) — the office is closed.",
+        content_html=content,
+        footer=_ACTIVITY_FOOTER,
     )
 
 

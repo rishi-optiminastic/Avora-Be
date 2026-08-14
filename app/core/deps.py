@@ -53,6 +53,7 @@ from app.repositories.leave import LeaveRepository
 from app.repositories.leave_allocation import LeaveAllocationRepository
 from app.repositories.leave_comment import LeaveCommentRepository
 from app.repositories.leave_policy import LeavePolicyRepository
+from app.repositories.leave_tier_quota import LeaveTierQuotaRepository
 from app.repositories.note import NoteRepository
 from app.repositories.notification import NotificationRepository
 from app.repositories.office_location import OfficeLocationRepository
@@ -242,6 +243,10 @@ def get_leave_policy_repo(db: DbDep) -> LeavePolicyRepository:
 
 def get_leave_allocation_repo(db: DbDep) -> LeaveAllocationRepository:
     return LeaveAllocationRepository(db)
+
+
+def get_leave_tier_quota_repo(db: DbDep) -> LeaveTierQuotaRepository:
+    return LeaveTierQuotaRepository(db)
 
 
 def get_note_repo(db: DbDep) -> NoteRepository:
@@ -740,6 +745,7 @@ def get_leave_service(
     holidays: Annotated[HolidayRepository, Depends(get_holiday_repo)],
     allocations: Annotated[LeaveAllocationRepository, Depends(get_leave_allocation_repo)],
     attendance_policy: Annotated[AttendancePolicyService, Depends(get_attendance_policy_service)],
+    tiers: Annotated[LeaveTierQuotaRepository, Depends(get_leave_tier_quota_repo)],
 ) -> LeaveService:
     return LeaveService(
         leaves,
@@ -752,6 +758,7 @@ def get_leave_service(
         holidays,
         allocations,
         attendance_policy,
+        tiers,
     )
 
 
@@ -788,8 +795,9 @@ def get_celebration_service(
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     email: Annotated[EmailService, Depends(get_email_service)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    holidays: Annotated[HolidayRepository, Depends(get_holiday_repo)],
 ) -> CelebrationService:
-    return CelebrationService(settings, festivals, employees, email, audit)
+    return CelebrationService(settings, festivals, employees, email, audit, holidays)
 
 
 def get_leave_allocation_service(
@@ -812,8 +820,10 @@ def get_announcement_service(
     holidays: Annotated[HolidayRepository, Depends(get_holiday_repo)],
     policy: Annotated[AttendancePolicyService, Depends(get_attendance_policy_service)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    email: Annotated[EmailService, Depends(get_email_service)],
 ) -> AnnouncementService:
-    return AnnouncementService(announcements, holidays, policy, audit)
+    return AnnouncementService(announcements, holidays, policy, audit, employees, email)
 
 
 def get_changelog_service(

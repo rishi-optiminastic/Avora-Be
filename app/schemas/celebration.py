@@ -15,6 +15,7 @@ class CelebrationSettingsRead(BaseModel):
     birthday_enabled: bool
     anniversary_enabled: bool
     festival_enabled: bool
+    holiday_reminder_enabled: bool
     updated_at: datetime
 
     @classmethod
@@ -23,6 +24,7 @@ class CelebrationSettingsRead(BaseModel):
             birthday_enabled=m.birthday_enabled,
             anniversary_enabled=m.anniversary_enabled,
             festival_enabled=m.festival_enabled,
+            holiday_reminder_enabled=m.holiday_reminder_enabled,
             updated_at=m.updated_at,
         )
 
@@ -33,6 +35,7 @@ class CelebrationSettingsUpdate(BaseModel):
     birthday_enabled: bool | None = None
     anniversary_enabled: bool | None = None
     festival_enabled: bool | None = None
+    holiday_reminder_enabled: bool | None = None
 
 
 class FestivalCreate(BaseModel):

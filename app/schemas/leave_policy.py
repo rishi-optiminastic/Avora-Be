@@ -20,6 +20,7 @@ class LeavePolicyRead(BaseModel):
     marriage_days: int
     planned_min_notice_days: int
     max_backdate_days: int
+    probation_months: int
     updated_at: datetime
 
     @classmethod
@@ -35,6 +36,7 @@ class LeavePolicyRead(BaseModel):
             marriage_days=m.marriage_days,
             planned_min_notice_days=m.planned_min_notice_days,
             max_backdate_days=m.max_backdate_days,
+            probation_months=m.probation_months,
             updated_at=m.updated_at,
         )
 
@@ -52,3 +54,6 @@ class LeavePolicyUpdate(BaseModel):
     marriage_days: int | None = Field(default=None, ge=0, le=365)
     planned_min_notice_days: int | None = Field(default=None, ge=0, le=90)
     max_backdate_days: int | None = Field(default=None, ge=0, le=90)
+    # Probation length in months. Capped at 2 years — anything longer is a data
+    # entry mistake, and it would keep someone on the lowest band indefinitely.
+    probation_months: int | None = Field(default=None, ge=0, le=24)

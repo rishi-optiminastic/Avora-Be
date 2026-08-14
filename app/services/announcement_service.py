@@ -14,14 +14,19 @@ from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app.core.exceptions import AuthorizationError, NotFoundError
+from app.core.logging import get_logger
 from app.models.announcement import AnnouncementLevel
 from app.models.employee import Role
 from app.repositories.announcement import AnnouncementRepository
 from app.repositories.audit import AuditRepository
+from app.repositories.employee import EmployeeRepository
 from app.repositories.holiday import HolidayRepository
 from app.schemas.announcement import AnnouncementCreate, AnnouncementKind, AnnouncementRead
 from app.schemas.auth import CurrentUser
 from app.services.attendance_policy_service import AttendancePolicyService
+from app.services.email_service import EmailError, EmailService
+
+logger = get_logger("app.announcement")
 
 
 def _can_manage(caller: CurrentUser) -> bool:
@@ -35,11 +40,15 @@ class AnnouncementService:
         holidays: HolidayRepository,
         policy: AttendancePolicyService,
         audit: AuditRepository,
+        employees: EmployeeRepository,
+        email: EmailService,
     ) -> None:
         self._announcements = announcements
         self._holidays = holidays
         self._policy = policy
         self._audit = audit
+        self._employees = employees
+        self._email = email
 
     async def list_current(self, caller: CurrentUser) -> list[AnnouncementRead]:
         """Every authenticated employee sees the same bar: HR announcements first,
@@ -61,7 +70,35 @@ class AnnouncementService:
             action="announcement.create",
             target=f"announcement:{row.id}",
         )
+        await self._email_announcement(row.message, row.level, caller)
         return AnnouncementRead.from_model(row)
+
+    async def _email_announcement(
+        self, message: str, level: AnnouncementLevel, caller: CurrentUser
+    ) -> None:
+        """Mirror a new announcement to everyone's inbox.
+
+        The in-app bar only reaches people who happen to open the dashboard, which
+        is the wrong assumption for the things announcements are used for. Sent as
+        one CC'd broadcast (chunked by the email service) rather than a mail each.
+
+        Best-effort: a delivery failure must never roll back the announcement —
+        it is already posted and visible in-app.
+        """
+        team = await self._employees.list_all_active()
+        audience = [e.work_email for e in team if e.work_email]
+        if not audience:
+            return
+        poster = await self._employees.get(caller.employee_id)
+        try:
+            await self._email.send_announcement(
+                message=message,
+                posted_by=poster.full_name if poster is not None else "Avora",
+                level=level.value,
+                audience=audience,
+            )
+        except EmailError:
+            logger.warning("announcement_email_failed")
 
     async def deactivate(self, caller: CurrentUser, announcement_id: uuid.UUID) -> None:
         if not _can_manage(caller):

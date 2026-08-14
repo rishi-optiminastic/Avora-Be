@@ -13,6 +13,7 @@ from app.repositories.audit import AuditRepository
 from app.repositories.celebration_settings import CelebrationSettingsRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.festival import FestivalRepository
+from app.repositories.holiday import HolidayRepository
 from app.services.celebration_service import CelebrationService
 from app.services.email_service import EmailService
 from tests.conftest import _Seed, auth_headers
@@ -90,12 +91,21 @@ async def test_run_daily_broadcasts_and_is_idempotent(
         EmployeeRepository(db),
         EmailService(get_settings()),
         AuditRepository(db),
+        HolidayRepository(db),
     )
 
-    # 4 active employees in the seed → the birthday is broadcast to all of them.
+    # ONE email now: addressed to the birthday person, with the rest of the team
+    # CC'd — not a separate copy each (which is what `sent == 4` used to mean).
     sent = await service.run_daily(today)
-    assert sent == 4
+    assert sent == 1
+    assert len(calls) == 1
     assert all("Birthday" in str(c["subject"]) for c in calls)
+    assert calls[0]["to"] == seed.report.work_email
+    cc = calls[0]["cc"]
+    assert isinstance(cc, list)
+    # Everyone else is copied, and the birthday person is not double-mailed.
+    assert seed.report.work_email not in cc
+    assert seed.manager.work_email in cc
 
     # Same day again → nothing re-sent (idempotent via last_run_on).
     assert await service.run_daily(today) == 0

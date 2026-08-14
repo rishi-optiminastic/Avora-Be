@@ -7,6 +7,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.core.tenure import TenureStatus
 from app.models.leave import HalfDayPeriod, LeaveStatus, LeaveType
 from app.schemas.common import ORMModel
 
@@ -59,6 +60,15 @@ class LeaveRead(ORMModel):
     comment_count: int = 0
 
 
+class TierQuotaRead(BaseModel):
+    """One tenure band's entitlement for one leave type."""
+
+    tier: TenureStatus
+    leave_type: LeaveType
+    annual_days: int | None
+    monthly_accrual_days: float | None
+
+
 class LeaveTypeBalance(BaseModel):
     """The entitlement picture for one paid leave type, in working days."""
 
@@ -75,6 +85,14 @@ class LeaveBalanceRead(BaseModel):
     leave_year_start: date
     leave_year_end: date
     balances: list[LeaveTypeBalance]
+    # Which entitlement band the employee is in right now, and the date they
+    # leave (or left) probation — so the UI can explain WHY a quota is what it is
+    # instead of showing an unexplained number.
+    tenure_status: TenureStatus
+    probation_end_date: date
+    # Leave types whose allocation accrues monthly rather than being granted up
+    # front, so the UI can label them "1/month, carries forward".
+    accruing_types: list[LeaveType] = Field(default_factory=list)
 
 
 class LeaveCommentCreate(BaseModel):

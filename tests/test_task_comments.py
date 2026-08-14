@@ -271,15 +271,18 @@ async def test_escalation_emails_the_assignees_reporting_manager(
     assert any("Task escalated" in t for t in await _titles(client, settings, seed.report))
 
 
-async def test_escalating_your_own_report_does_not_email_you(
+async def test_escalating_your_own_report_still_reaches_the_assignee_not_you(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:
-    """No email about the button you just pressed — the reporting manager IS the
-    escalator here, so they already know."""
+    """The person who pressed the button is never mailed about their own action —
+    but the assignee, who has to act on it, still is."""
     task_id = await _create_task(client, settings, seed)
 
     resp = await client.post(
         f"/api/v1/tasks/{task_id}/escalate", headers=auth_headers(settings, seed.manager)
     )
     assert resp.status_code == 200, resp.text
-    assert not [row for row in _FakeEmailService.outbox if row[0] == "task_escalated"]
+
+    mailed = {to for kind, to in _FakeEmailService.outbox if kind == "task_escalated"}
+    assert seed.report.work_email in mailed  # the assignee must hear about it
+    assert seed.manager.work_email not in mailed  # they pressed the button

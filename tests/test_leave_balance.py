@@ -66,8 +66,12 @@ def _dt(d: date) -> datetime:
 async def _seed_leaves(db: AsyncSession, seed: _Seed) -> dict[str, float]:
     """Give the report a fixed hire date and a few leaves; return expected counts."""
     now = datetime.now(UTC)
-    # A hire date ~90 days back keeps the current leave-year window over `now`.
-    seed.report.hire_date = (now - timedelta(days=90)).date()
+    # ~13 months back, for two reasons: the current leave-year window still covers
+    # `now` (the anniversary was ~5 weeks ago, before this week's leaves), AND the
+    # employee lands in the TENURED band so these tests exercise the org policy
+    # defaults rather than a tenure-band quota. Band-specific entitlement is
+    # covered separately in test_leave_tenure.py.
+    seed.report.hire_date = (now - timedelta(days=400)).date()
     monday = now.date() - timedelta(days=now.weekday())  # this week's Monday
     planned_start, planned_end = monday, monday + timedelta(days=2)  # Mon..Wed
     holiday_date = monday + timedelta(days=1)  # Tue — excluded from the count

@@ -352,35 +352,51 @@ class TaskService:
         return task
 
     async def _email_escalation(self, task: Task, caller: CurrentUser) -> None:
-        """Email the assignee's reporting manager that the task was escalated.
+        """Email an escalation to the assignee AND their reporting manager.
 
-        Skipped when the assignee has no manager on file, or when the reporting
-        manager is the one escalating — telling someone by email about the button
-        they just pressed is noise, and mirrors the actor==recipient drop in
-        `notify()`. Best-effort: a delivery failure must never roll back the
-        escalation, so we swallow and log it.
+        The assignee is the one who has to act, so they get it directly rather
+        than relying on being logged in to see the pop-up. The manager is CC'd so
+        the escalation visibly travels up the line instead of sideways — and so
+        neither of them has to forward it to the other.
+
+        Whoever pressed the button is dropped from both lines: telling someone by
+        email about their own action is noise, mirroring the actor==recipient drop
+        in `notify()`. Best-effort — a delivery failure must never roll back the
+        escalation.
         """
         assignee = await self._employees.get(task.assignee_id)
-        if assignee is None or assignee.manager_id is None:
-            logger.info("task_escalation_no_manager", extra={"task_id": str(task.id)})
-            return
-        if assignee.manager_id == caller.employee_id:
-            return
-        manager = await self._employees.get(assignee.manager_id)
-        if manager is None or not manager.is_active:
+        if assignee is None or not assignee.work_email:
+            logger.info("task_escalation_no_assignee_email", extra={"task_id": str(task.id)})
             return
         actor = await self._employees.get(caller.employee_id)
+        manager = (
+            await self._employees.get(assignee.manager_id)
+            if assignee.manager_id is not None
+            else None
+        )
+        cc = [
+            manager.work_email
+            for manager in (manager,)
+            if manager is not None
+            and manager.is_active
+            and manager.work_email
+            and manager.id != caller.employee_id
+        ]
+        if assignee.id == caller.employee_id and not cc:
+            # A manager escalating their own task with nobody above them: the only
+            # possible recipients are the person who pressed the button.
+            return
         due_label = f"{task.due_date:%d %b %Y}" if task.due_date is not None else None
         try:
             await self._email.send_task_escalated(
-                to=manager.work_email,
-                manager_name=manager.full_name,
+                to=assignee.work_email,
                 assignee_name=assignee.full_name,
                 task_title=task.title,
                 escalated_by=actor.full_name if actor is not None else "A manager",
                 due_label=due_label,
                 blocked_reason=task.blocked_reason,
                 link_path=f"/dashboard/goals/tasks?task={task.id}",
+                cc=cc,
             )
         except EmailError:
             logger.warning("task_escalated_email_failed", extra={"task_id": str(task.id)})

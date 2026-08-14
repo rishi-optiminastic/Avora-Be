@@ -24,6 +24,8 @@ class CelebrationSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     birthday_enabled: Mapped[bool] = mapped_column(default=True)
     anniversary_enabled: Mapped[bool] = mapped_column(default=True)
     festival_enabled: Mapped[bool] = mapped_column(default=True)
+    # A day-before "office is closed tomorrow" mail to the whole active roster.
+    holiday_reminder_enabled: Mapped[bool] = mapped_column(default=True)
     # The last date (org timezone) the daily run processed — idempotency marker.
     last_run_on: Mapped[date | None] = mapped_column(Date, default=None)
 
