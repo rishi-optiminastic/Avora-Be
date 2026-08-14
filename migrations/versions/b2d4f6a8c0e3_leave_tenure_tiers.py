@@ -11,6 +11,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 revision: str = "b2d4f6a8c0e3"
 down_revision: str | Sequence[str] | None = "e7f9a1c3b5d8"
@@ -28,27 +29,24 @@ def upgrade() -> None:
         sa.Column("probation_months", sa.Integer(), nullable=False, server_default="6"),
     )
 
+    # Create the type up front, then reference it in the table as an EXISTING type.
+    # Both halves matter: `create_table` emits its own CREATE TYPE for any Enum
+    # column unless told the type is already there, which fails the migration with
+    # "type tenurestatus already exists". `postgresql.ENUM(create_type=False)` is
+    # the dialect-level way to say that — the generic `sa.Enum` does not carry the
+    # flag reliably. Same pattern as the reimbursements migration.
     _TENURE.create(op.get_bind(), checkfirst=True)
     op.create_table(
         "leave_tier_quotas",
         sa.Column("id", sa.Uuid(), nullable=False),
-        sa.Column("tier", _TENURE, nullable=False),
+        sa.Column(
+            "tier",
+            postgresql.ENUM(name="tenurestatus", create_type=False),
+            nullable=False,
+        ),
         sa.Column(
             "leave_type",
-            sa.Enum(
-                "planned",
-                "annual",
-                "sick",
-                "bereavement",
-                "birthday",
-                "maternity",
-                "paternity",
-                "marriage",
-                "unpaid",
-                "half_day",
-                name="leavetype",
-                create_type=False,
-            ),
+            postgresql.ENUM(name="leavetype", create_type=False),
             nullable=False,
         ),
         # NULL means "inherit the org LeavePolicy"; 0 means "this band gets none".
