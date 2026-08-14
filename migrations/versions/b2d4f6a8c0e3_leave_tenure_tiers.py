@@ -20,7 +20,12 @@ depends_on: str | Sequence[str] | None = None
 
 # Bands are derived from hire_date, never stored on the employee — this enum only
 # labels the quota rows.
-_TENURE = sa.Enum("probation", "confirmed", "tenured", name="tenurestatus")
+#
+# Labels are the Python enum MEMBER NAMES, uppercase. SQLAlchemy writes a Python
+# Enum column by name, not value, so lowercase labels create a type nothing can
+# ever be inserted into (see d4f6b8c0e2a5, which repairs the databases where this
+# already shipped).
+_TENURE = sa.Enum("PROBATION", "CONFIRMED", "TENURED", name="tenurestatus")
 
 
 def upgrade() -> None:

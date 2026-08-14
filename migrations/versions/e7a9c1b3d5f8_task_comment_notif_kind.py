@@ -18,7 +18,10 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.execute("ALTER TYPE notificationkind ADD VALUE IF NOT EXISTS 'task_comment'")
+    # The label is the enum MEMBER NAME — SQLAlchemy writes Enum columns by name,
+    # so a lowercase label is one the ORM can never insert. This shipped lowercase
+    # originally; d4f6b8c0e2a5 repairs databases that already ran it.
+    op.execute("ALTER TYPE notificationkind ADD VALUE IF NOT EXISTS 'TASK_COMMENT'")
 
 
 def downgrade() -> None:
