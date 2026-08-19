@@ -139,13 +139,24 @@ class LeaveService:
     async def _enforce_min_notice(self, payload: LeaveCreate) -> None:
         """Planned / annual leave must be applied at least `planned_min_notice_days`
         before it starts (configurable in the leave policy). Other types can be
-        applied any time. 'Today' is the org's policy-timezone date."""
+        applied any time. 'Today' is the org's policy-timezone date.
+
+        Notice is about warning people BEFORE you go, so it only applies to leave
+        that hasn't started yet. A backdated request is governed by the backdating
+        window instead (`_enforce_not_past`, already run) — without this carve-out
+        the two rules contradict each other: a past date can never be "2 days in
+        advance", so any backdating window at all would be unusable for planned
+        and annual leave.
+        """
         if payload.leave_type not in _NOTICE_TYPES:
             return
         required = (await self._policy.get_or_create()).planned_min_notice_days
         if required <= 0:
             return
-        if (_utc_date(payload.start_date) - await self._org_today()).days < required:
+        days_ahead = (_utc_date(payload.start_date) - await self._org_today()).days
+        if days_ahead < 0:
+            return
+        if days_ahead < required:
             raise ValidationError(
                 f"This leave must be applied at least {required} "
                 f"day{'s' if required != 1 else ''} in advance. "
