@@ -118,8 +118,7 @@ class MeetingService:
             "iat": now,
             "exp": now + 3600,
         }
-        # Env stores the PEM with literal "\n"; turn them back into real newlines.
-        key = self._settings.google_sa_private_key.replace("\\n", "\n")
+        key = _normalise_pem(self._settings.google_sa_private_key)
         return jwt.encode(claims, key, algorithm="RS256")
 
     async def _access_token(self, subject: str) -> str:
@@ -140,8 +139,10 @@ class MeetingService:
                 },
             )
             raise IntegrationError(
-                "The Google service-account key is unreadable — check "
-                "GOOGLE_SA_PRIVATE_KEY is a full PEM with escaped newlines."
+                "GOOGLE_SA_PRIVATE_KEY is unreadable: "
+                f"{_describe_pem(self._settings.google_sa_private_key)}. "
+                "Paste the private_key value from the service-account JSON, "
+                "without wrapping quotes."
             ) from exc
         payload = {
             "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
@@ -227,3 +228,48 @@ class MeetingService:
         except httpx.HTTPError:
             return False  # the meeting still works even if Slack is down
         return resp.status_code < 400
+
+
+def _normalise_pem(raw: str) -> str:
+    """Coax a pasted private key into a real PEM.
+
+    The key reaches us through an env-var text box, and the same three mistakes
+    happen every time: the JSON's escaped ``\\n`` sequences survive verbatim, the
+    surrounding quotes get pasted along with the value, or the deploy UI expands
+    the escapes into genuine newlines. All three describe the same key, so accept
+    all three rather than making somebody guess which one the parser wanted.
+
+    Only formatting is normalised — a truncated or wrong key still fails to parse,
+    which is the point.
+    """
+    key = raw.strip()
+    # Paired wrapping quotes, e.g. VALUE="-----BEGIN...". Unpaired quotes are left
+    # alone: they are part of a genuinely malformed value, not decoration.
+    for quote in ('"', "'"):
+        if len(key) >= 2 and key.startswith(quote) and key.endswith(quote):
+            key = key[1:-1].strip()
+            break
+    # Escaped newlines (single-line form) become real ones. A key that already has
+    # real newlines is unaffected — there is nothing to replace.
+    return key.replace("\\n", "\n")
+
+
+def _describe_pem(raw: str) -> str:
+    """Why a key looks unusable, in terms the person pasting it can act on.
+
+    Deliberately reports SHAPE only — length and which markers are present. The
+    key itself is a secret and never reaches a log or an API response.
+    """
+    key = _normalise_pem(raw)
+    if not key:
+        return "it is empty"
+    problems: list[str] = []
+    if "-----BEGIN" not in key:
+        problems.append("no BEGIN line")
+    if "-----END" not in key:
+        problems.append("no END line")
+    if "\n" not in key:
+        problems.append("no line breaks (escaped \\n may have been stripped)")
+    if not problems:
+        problems.append(f"markers present but the body did not parse ({len(key)} chars)")
+    return ", ".join(problems)

@@ -10,6 +10,7 @@ caller's default invitees are strictly self-scoped.
 from __future__ import annotations
 
 import jwt
+import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from httpx import AsyncClient
@@ -20,7 +21,7 @@ from app.core.deps import get_settings
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.quick_meet import QuickMeetRepository
-from app.services.meeting_service import MeetingService
+from app.services.meeting_service import MeetingService, _describe_pem
 from tests.conftest import _Seed, auth_headers
 
 
@@ -134,3 +135,65 @@ async def test_malformed_sa_key_is_a_clean_503_not_a_500(
     assert resp.status_code == 503, resp.text
     assert resp.json()["error"]["code"] == "integration_unavailable"
     assert "GOOGLE_SA_PRIVATE_KEY" in resp.json()["error"]["message"]
+
+
+def _pem() -> str:
+    """A real, parseable RSA private key in canonical multi-line PEM form."""
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    return key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+
+
+def _signs(settings: Settings, db: AsyncSession, private_key: str) -> bool:
+    """Can the service build a signed assertion from this pasted key?"""
+    configured = settings.model_copy(
+        update={
+            "google_sa_client_email": "avora-meet@proj.iam.gserviceaccount.com",
+            "google_sa_private_key": private_key,
+        }
+    )
+    service = MeetingService(
+        configured, EmployeeRepository(db), AuditRepository(db), QuickMeetRepository(db)
+    )
+    return bool(service._build_assertion("alice@corp.test"))
+
+
+def test_key_pasted_with_escaped_newlines_is_accepted(settings: Settings, db: AsyncSession) -> None:
+    """The form straight out of the service-account JSON."""
+    assert _signs(settings, db, _pem().replace("\n", "\\n"))
+
+
+def test_key_pasted_with_real_newlines_is_accepted(settings: Settings, db: AsyncSession) -> None:
+    """What you get when the deploy UI expands the escapes for you."""
+    assert _signs(settings, db, _pem())
+
+
+def test_key_pasted_with_wrapping_quotes_is_accepted(settings: Settings, db: AsyncSession) -> None:
+    """VALUE="-----BEGIN..." — the quotes come along for the ride."""
+    assert _signs(settings, db, f'"{_pem()}"')
+    assert _signs(settings, db, f"'{_pem().replace(chr(10), chr(92) + 'n')}'")
+
+
+def test_key_with_surrounding_whitespace_is_accepted(settings: Settings, db: AsyncSession) -> None:
+    assert _signs(settings, db, f"  \n{_pem()}\n  ")
+
+
+def test_a_truncated_key_still_fails(settings: Settings, db: AsyncSession) -> None:
+    """Normalising formatting must not paper over a genuinely broken key."""
+    with pytest.raises((ValueError, jwt.exceptions.PyJWTError)):
+        _signs(settings, db, "-----BEGIN PRIVATE KEY-----\nnot-a-key\n-----END PRIVATE KEY-----\n")
+
+
+def test_describe_pem_names_the_actual_defect_without_leaking_the_key() -> None:
+    secret = _pem()
+    assert _describe_pem("") == "it is empty"
+    assert "no BEGIN line" in _describe_pem("MIIEvgIBADANBg")
+    assert "no line breaks" in _describe_pem(
+        "-----BEGIN PRIVATE KEY----- MIIE -----END PRIVATE KEY-----"
+    )
+    # A well-formed key that simply didn't parse must not have its body echoed.
+    described = _describe_pem(secret)
+    assert "MII" not in described
