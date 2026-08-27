@@ -26,7 +26,10 @@ class ReimbursementRepository:
         self._session = session
 
     def _scope_clause(self, caller: CurrentUser) -> ColumnElement[bool] | None:
-        if caller.role in (Role.ADMIN, Role.HR):
+        # HR and payroll-grant holders see every claim; Admin deliberately does
+        # not (see CurrentUser.can_review_reimbursements) and falls through to the
+        # own-claims clause below like any other employee.
+        if caller.can_review_reimbursements:
             return None
         reviewed_by_me = Reimbursement.manager_reviewer_id == caller.employee_id
         if caller.role is Role.SENIOR_MANAGER:

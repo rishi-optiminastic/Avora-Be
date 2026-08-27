@@ -175,3 +175,42 @@ async def test_policy_read_open_write_admin_only(
     assert ok.status_code == 200
     assert ok.json()["work_start"] == "10:00"
     assert ok.json()["monthly_regularizations"] == 3
+
+
+def test_arriving_past_the_window_can_still_be_contested() -> None:
+    """The narrow window was the bug: someone an hour late had no way to ask.
+
+    Arriving after the regularization window is exactly when a person has a story
+    worth telling (traffic, a client visit, a doctor). The monthly credit cap —
+    enforced when a request is approved — is what limits this, not eligibility.
+    """
+    v = classify_day(login_at=_at(10, 30), worked_minutes=500, regularized=False, policy=_POLICY)
+    assert v.status is AttendanceStatus.HALF_DAY
+    assert v.regularizable is True
+
+
+def test_a_day_with_no_punch_can_be_contested() -> None:
+    """A missed biometric scan is the single most common reason to regularize, and
+    it used to be the one case the option was hidden for."""
+    v = classify_day(login_at=None, worked_minutes=0, regularized=False, policy=_POLICY)
+    assert v.status is AttendanceStatus.ABSENT
+    assert v.regularizable is True
+
+
+def test_short_hours_can_be_contested() -> None:
+    v = classify_day(
+        login_at=_at(9, 5), worked_minutes=100, regularized=False, day_complete=True, policy=_POLICY
+    )
+    assert v.status is AttendanceStatus.HALF_DAY
+    assert v.regularizable is True
+
+
+def test_a_clean_full_day_has_nothing_to_contest() -> None:
+    v = classify_day(login_at=_at(9, 5), worked_minutes=500, regularized=False, policy=_POLICY)
+    assert v.status is AttendanceStatus.FULL_DAY
+    assert v.regularizable is False
+
+
+def test_an_already_regularized_day_is_not_offered_again() -> None:
+    v = classify_day(login_at=None, worked_minutes=0, regularized=True, policy=_POLICY)
+    assert v.regularizable is False

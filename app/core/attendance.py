@@ -47,6 +47,13 @@ class PolicySpec:
         return max(0, self.full_day_min_minutes - self.full_day_grace_minutes)
 
 
+# Day outcomes an employee may ask to have corrected. A clean full day (or one
+# still in progress and on track) has nothing to contest.
+_CONTESTABLE = frozenset(
+    {AttendanceStatus.LATE, AttendanceStatus.HALF_DAY, AttendanceStatus.ABSENT}
+)
+
+
 @dataclass(frozen=True)
 class DayVerdict:
     status: AttendanceStatus
@@ -81,7 +88,13 @@ def classify_day(
     facts (arriving after the reg window) still count immediately.
     """
     if login_at is None:
-        return DayVerdict(AttendanceStatus.ABSENT, False, False, regularized, False, None)
+        # No punch at all. This is the case people MOST need to contest — a missed
+        # biometric scan, a forgotten clock-in — so it is regularizable, not a dead
+        # end. It was previously excluded, which is why "the option isn't there"
+        # was reported by exactly the people who needed it.
+        return DayVerdict(
+            AttendanceStatus.ABSENT, False, not regularized, regularized, False, None
+        )
 
     arrival = _local_minute(login_at, policy.timezone)
     on_time = arrival <= policy.on_time_cutoff
@@ -110,7 +123,12 @@ def classify_day(
     return DayVerdict(
         status=status,
         late_login=not on_time,
-        regularizable=in_reg_window and not regularized,
+        # Any day that didn't land clean can be contested; the monthly credit cap
+        # (enforced on approval) is what limits abuse, not an arbitrarily narrow
+        # arrival window. Restricting this to `in_reg_window` meant someone who
+        # arrived an hour late — or worked too few hours — had no way to ask,
+        # while someone twenty minutes late did.
+        regularizable=not regularized and status in _CONTESTABLE,
         regularized=regularized,
         early_logout=early_logout,
         arrival_minute=arrival,

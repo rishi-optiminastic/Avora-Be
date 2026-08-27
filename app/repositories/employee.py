@@ -89,6 +89,7 @@ class EmployeeRepository:
             "date_of_birth",
             "gender",
             "biometric_id",
+            "probation_months",
         }
     )
 
@@ -237,6 +238,16 @@ class EmployeeRepository:
         rows = await self._session.execute(
             select(Employee)
             .where(Employee.role == role, Employee.is_active.is_(True))
+            .order_by(Employee.full_name)
+        )
+        return rows.scalars().all()
+
+    async def list_payroll_managers(self) -> Sequence[Employee]:
+        """Active holders of the payroll-manager grant — the finance people who
+        process pay and reimbursements without being HR."""
+        rows = await self._session.execute(
+            select(Employee)
+            .where(Employee.payroll_manager.is_(True), Employee.is_active.is_(True))
             .order_by(Employee.full_name)
         )
         return rows.scalars().all()

@@ -29,7 +29,9 @@ _LINK = "/dashboard/time/reimbursements"
 
 
 def _can_review_hr(caller: CurrentUser) -> bool:
-    return caller.role in (Role.ADMIN, Role.HR)
+    """The final-approval step. HR and payroll-grant holders only — Admin is
+    deliberately excluded (see CurrentUser.can_review_reimbursements)."""
+    return caller.can_review_reimbursements
 
 
 def _money(amount_minor: int) -> str:
@@ -97,8 +99,8 @@ class ReimbursementService:
             recipients = [
                 r.id
                 for r in (
-                    *await self._employees.list_by_role(Role.ADMIN),
                     *await self._employees.list_by_role(Role.HR),
+                    *await self._employees.list_payroll_managers(),
                 )
             ]
         seen: set[uuid.UUID] = set()
@@ -217,8 +219,8 @@ class ReimbursementService:
         body = f"{who} · {_money(row.amount_minor)} · manager-approved"
         seen: set[uuid.UUID] = set()
         for reviewer in (
-            *await self._employees.list_by_role(Role.ADMIN),
             *await self._employees.list_by_role(Role.HR),
+            *await self._employees.list_payroll_managers(),
         ):
             if reviewer.id in seen or reviewer.id == row.employee_id:
                 continue

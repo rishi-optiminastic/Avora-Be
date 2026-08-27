@@ -86,6 +86,11 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # for older records / invite-provisioned people; the leave-balance logic falls
     # back to `created_at` when this is unset.
     hire_date: Mapped[date | None] = mapped_column(Date, default=None)
+    # Probation length for THIS person, in months. NULL = use the org-wide
+    # `LeavePolicy.probation_months`. A per-person override exists because
+    # probation is negotiated at offer stage — a senior hire may get three months
+    # where the default is six — and the leave band derives from it.
+    probation_months: Mapped[int | None] = mapped_column(default=None)
 
     # EPF Universal Account Number — the 12-digit PF identifier. HR-operational
     # data, set by HR/admin (never by the agent or self-service). Nullable: not

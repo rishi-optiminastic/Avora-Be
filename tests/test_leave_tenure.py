@@ -173,3 +173,31 @@ async def test_a_per_employee_override_still_beats_the_band(
     assert payload["tenure_status"] == TenureStatus.PROBATION.value
     assert _allocated(payload, LeaveType.SICK) == 20.0  # override wins
     assert _allocated(payload, LeaveType.BIRTHDAY) == 1.0  # band still applies elsewhere
+
+
+async def test_a_personal_probation_length_overrides_the_org_default(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """Probation is negotiated per offer, so a person can carry their own length.
+
+    Joined 4 months ago: still on probation under the org's 6-month default, but
+    confirmed under a negotiated 3-month one.
+    """
+    hire = add_months(datetime.now(UTC).date(), -4)
+    await _set_hire_date(db, seed.report.id, hire)
+
+    on_default = await _balance(client, settings, seed.report)
+    assert on_default["tenure_status"] == TenureStatus.PROBATION.value
+
+    granted = await client.patch(
+        f"/api/v1/employees/{seed.report.id}",
+        json={"full_name": seed.report.full_name, "probation_months": 3},
+        headers=auth_headers(settings, seed.admin),
+    )
+    assert granted.status_code == 200, granted.text
+
+    overridden = await _balance(client, settings, seed.report)
+    assert overridden["tenure_status"] == TenureStatus.CONFIRMED.value
+    # The confirmation date must move with it, or the badge and the entitlement
+    # would tell the employee two different stories.
+    assert overridden["probation_end_date"] == add_months(hire, 3).isoformat()

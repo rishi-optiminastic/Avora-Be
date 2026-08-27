@@ -416,7 +416,7 @@ async def test_live_payslip_pdf_self_or_hr_admin(
 
 
 async def test_export_includes_approved_reimbursement(
-    client: AsyncClient, settings: Settings, seed: _Seed
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
 ) -> None:
     await client.put(
         f"/api/v1/employees/{seed.report.id}/compensation",
@@ -440,11 +440,24 @@ async def test_export_includes_approved_reimbursement(
         json={"approve": True},
         headers=auth_headers(settings, seed.manager),
     )
-    await client.post(
+    # HR, not Admin: reimbursement approval is HR's (and payroll-grant holders'),
+    # since a claim is personal spending data.
+    reviewer = Employee(
+        hr_external_id="hr-export-reviewer",
+        work_email="export-reviewer@corp.test",
+        full_name="Hana HR",
+        role=Role.HR,
+        status=EmployeeStatus.ACTIVE,
+        is_active=True,
+    )
+    db.add(reviewer)
+    await db.commit()
+    approved = await client.post(
         f"/api/v1/reimbursements/{rid}/hr-decision",
         json={"approve": True},
-        headers=auth_headers(settings, seed.admin),
+        headers=auth_headers(settings, reviewer),
     )
+    assert approved.status_code == 200, approved.text
 
     res = await client.get(
         "/api/v1/payroll/export?month=2026-06", headers=auth_headers(settings, seed.admin)

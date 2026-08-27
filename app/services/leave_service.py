@@ -402,9 +402,13 @@ class LeaveService:
         # they did before tenure banding existed.
         org_today = await self._org_today()
         hired_on = employee.hire_date
-        confirmed_on = probation_end(hired_on or anchor, policy.probation_months)
+        # Their own negotiated probation length wins over the org default; the
+        # band and the confirmation date must both use the same number or the
+        # badge and the entitlement would disagree.
+        probation_months = employee.probation_months or policy.probation_months
+        confirmed_on = probation_end(hired_on or anchor, probation_months)
         tier = (
-            tenure_status(hired_on, org_today, probation_months=policy.probation_months)
+            tenure_status(hired_on, org_today, probation_months=probation_months)
             if hired_on is not None
             else TenureStatus.TENURED
         )

@@ -34,6 +34,7 @@ class EmployeeRead(ORMModel):
     tracking_mode: TrackingMode
     biometric_id: str | None
     hire_date: date | None
+    probation_months: int | None = None
     uan_number: str | None
     date_of_birth: date | None
     gender: Gender | None
@@ -115,6 +116,10 @@ class AdminProfileUpdate(BaseModel):
     date_of_birth: date | None = None
     gender: Gender | None = None
     biometric_id: str | None = Field(default=None, max_length=64)
+    # Probation length negotiated for this person. None clears the override and
+    # falls back to the org-wide leave policy. Capped at 2 years — longer is a
+    # data-entry slip that would pin someone to the lowest leave band.
+    probation_months: int | None = Field(default=None, ge=0, le=24)
 
     @field_validator("uan_number")
     @classmethod

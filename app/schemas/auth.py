@@ -38,6 +38,18 @@ class CurrentUser(BaseModel):
         return self.role in (Role.ADMIN, Role.HR) or self.payroll_manager
 
     @property
+    def can_review_reimbursements(self) -> bool:
+        """Who sees and decides everyone's expense claims: HR, or a payroll-manager
+        grant holder (the finance person who actually pays them out).
+
+        Admin is deliberately NOT here. A claim is personal spending data, and
+        running the workspace is not a reason to read it — the people who process
+        reimbursements are HR and finance. Admins still see their own, like anyone
+        else. Note this also covers `it_admin`, which normalises to ADMIN above.
+        """
+        return self.role is Role.HR or self.payroll_manager
+
+    @property
     def is_manager(self) -> bool:
         return self.role in (Role.MANAGER, Role.SENIOR_MANAGER, Role.ADMIN, Role.HR)
 
