@@ -16,6 +16,7 @@ from app.core import storage
 from app.core.config import Settings
 from app.core.exceptions import (
     AuthorizationError,
+    ConflictError,
     NotFoundError,
     StorageError,
     ValidationError,
@@ -28,7 +29,7 @@ from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.ping import PingRepository
 from app.schemas.auth import CurrentUser
-from app.schemas.employee import AdminProfileUpdate, SelfProfileUpdate
+from app.schemas.employee import AdminProfileUpdate, EmployeeCreate, SelfProfileUpdate
 
 logger = get_logger("app.employee")
 
@@ -39,6 +40,17 @@ _MODE_COMMAND = {
 
 ALLOWED_AVATAR_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
 MAX_AVATAR_BYTES = 2 * 1024 * 1024  # 2 MB — matches the UI hint.
+
+
+def _clean_profile_fields(fields: dict[str, object]) -> None:
+    """Normalise profile text in place: trim names, and collapse blank strings to
+    NULL so an emptied input clears the column instead of storing ''."""
+    if "full_name" in fields:
+        fields["full_name"] = str(fields["full_name"]).strip()
+    for key in ("department", "location", "job_title", "timezone", "biometric_id"):
+        value = fields.get(key)
+        if isinstance(value, str):
+            fields[key] = value.strip() or None
 
 
 class EmployeeService:
@@ -244,6 +256,40 @@ class EmployeeService:
         if caller.role not in (Role.ADMIN, Role.HR):
             raise AuthorizationError()
 
+    async def create_direct(self, caller: CurrentUser, payload: EmployeeCreate) -> Employee:
+        """Admin/HR adds a person to the roster directly — no invite, no email.
+
+        For people we only need a record of. The row is an ordinary employee in
+        every respect; the only difference from the invite path is that nobody was
+        asked to accept anything. Setting the role here is admin-authorised and
+        in-PMS, which is what rule 5.5 permits (the HR webhook still may not).
+        """
+        self._require_user_manager(caller)
+        work_email = payload.work_email.strip().lower()
+        if await self._employees.get_by_work_email(work_email) is not None:
+            # Covers offboarded rows too: reactivating an existing person is a
+            # different, deliberate action (status endpoint), not a silent create.
+            raise ConflictError("Someone with that work email is already on the roster.")
+
+        fields = payload.model_dump(exclude_unset=True, exclude={"work_email", "role"})
+        full_name = str(fields.pop("full_name", "")).strip()
+        if not full_name:
+            raise ValidationError("Name is required.")
+        manager_id = fields.get("manager_id")
+        if manager_id is not None and await self._employees.get(manager_id) is None:
+            raise ValidationError("Manager not found.")
+        _clean_profile_fields(fields)
+
+        employee = await self._employees.create_direct(
+            work_email=work_email, full_name=full_name, role=payload.role, profile=fields
+        )
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="employee.create_direct",
+            target=f"employee:{employee.id}",
+        )
+        return employee
+
     async def admin_update_profile(
         self, caller: CurrentUser, target_id: uuid.UUID, payload: AdminProfileUpdate
     ) -> Employee:
@@ -261,11 +307,7 @@ class EmployeeService:
                 raise ValidationError("An employee cannot report to themselves.")
             if await self._employees.get(manager_id) is None:
                 raise ValidationError("Manager not found.")
-        if "full_name" in fields:
-            fields["full_name"] = str(fields["full_name"]).strip()
-        for key in ("department", "location", "job_title", "timezone", "biometric_id"):
-            if key in fields and isinstance(fields[key], str):
-                fields[key] = fields[key].strip() or None
+        _clean_profile_fields(fields)
         await self._employees.admin_update_profile(employee, fields)
         await self._audit.append(
             actor=str(caller.employee_id),

@@ -105,6 +105,11 @@ class PayslipPdfData:
     payable_days: float
     generated_label: str
     # Optional extras for the register-style slip (default-safe).
+    # Approved expense claims paid out with this month's salary. Shown as its own
+    # earnings row and folded into Gross Earnings so the slip's stated formula
+    # (Net = Gross - Deductions) still adds up. Not part of `prorated`, because a
+    # reimbursement repays money already spent and must not be taxed or PF'd.
+    reimbursement_minor: int = 0
     org_address: str | None = None
     employee_number: str | None = None
     pay_date_label: str | None = None
@@ -367,10 +372,13 @@ def _earnings_rows(data: PayslipPdfData) -> list[tuple[str, int, int | None]]:
     pro, ytd = data.prorated, data.ytd
     fixed = pro.get("hra_minor", 0) + pro.get("special_allowance_minor", 0)
     fixed_ytd = ytd.get("hra_minor", 0) + ytd.get("special_allowance_minor", 0)
-    return [
+    rows: list[tuple[str, int, int | None]] = [
         ("Basic", pro.get("basic_minor", 0), ytd.get("basic_minor") if ytd else None),
         ("Fixed Allowance", fixed, fixed_ytd if ytd else None),
     ]
+    if data.reimbursement_minor > 0:
+        rows.append(("Reimbursements", data.reimbursement_minor, None))
+    return rows
 
 
 def _deduction_rows(data: PayslipPdfData) -> list[tuple[str, int, int | None]]:
@@ -456,7 +464,7 @@ def render_payslip_pdf(data: PayslipPdfData) -> bytes:
         "Earnings",
         _earnings_rows(data),
         "Gross Earnings",
-        data.prorated.get("gross_minor", 0),
+        data.prorated.get("gross_minor", 0) + data.reimbursement_minor,
         data,
     )
     deductions = _ledger(

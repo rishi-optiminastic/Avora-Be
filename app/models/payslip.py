@@ -62,6 +62,10 @@ class Payslip(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     monthly_ctc_minor: Mapped[int] = mapped_column(BigInteger, default=0)
     gross_minor: Mapped[int] = mapped_column(BigInteger, default=0)
     net_minor: Mapped[int] = mapped_column(BigInteger, default=0)  # prorated take-home
+    # Approved expense claims paid out with this month's salary. Frozen here so a
+    # released slip's Gross - Deductions still equals its Net years later; kept
+    # out of `gross_minor`/`prorated_breakdown` because it is not taxed earnings.
+    reimbursement_minor: Mapped[int] = mapped_column(BigInteger, default=0)
 
     # The full-month salary breakdown and its prorated counterpart (both are
     # SalaryBreakdownRead fields), frozen at release time.

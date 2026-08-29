@@ -8,7 +8,7 @@ and we return the schema, never the ORM object (Golden rule #5).
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Header, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
@@ -19,6 +19,8 @@ from app.core.deps import (
     AdminOrHrDep,
     CurrentUserDep,
     EmployeeServiceDep,
+    IdempotencyKeyHeader,
+    IdempotencyServiceDep,
     UploadRateLimitDep,
 )
 from app.core.exceptions import NotFoundError
@@ -27,6 +29,7 @@ from app.schemas.common import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Page
 from app.schemas.employee import (
     AdminProfileUpdate,
     AssignmentGrantsUpdate,
+    EmployeeCreate,
     EmployeeRead,
     EmployeeRoleUpdate,
     EmployeeStatusUpdate,
@@ -53,6 +56,31 @@ async def list_employees(
         page=page,
         size=size,
         total=total,
+    )
+
+
+@router.post("", response_model=EmployeeRead, status_code=status.HTTP_201_CREATED)
+async def create_employee(
+    payload: EmployeeCreate,
+    caller: AdminOrHrDep,
+    service: EmployeeServiceDep,
+    idem: IdempotencyServiceDep,
+    idempotency_key: IdempotencyKeyHeader = None,
+) -> Any:
+    """Admin/HR: add a person to the roster directly — no invite, no email, no
+    account. For people we only need a record of. The row is an ordinary employee
+    everywhere else in the product."""
+
+    async def _op() -> EmployeeRead:
+        return EmployeeRead.model_validate(await service.create_direct(caller, payload))
+
+    return await idem.run(
+        principal_id=caller.employee_id,
+        scope="employees.create",
+        key=idempotency_key,
+        request=payload,
+        operation=_op,
+        success_status=201,
     )
 
 

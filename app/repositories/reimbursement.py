@@ -109,6 +109,23 @@ class ReimbursementRepository:
         )
         return list(rows.scalars().all()), int(total or 0)
 
+    async def set_receipt(
+        self,
+        row: Reimbursement,
+        *,
+        object_key: str | None,
+        content: bytes | None,
+        content_type: str,
+        filename: str | None,
+    ) -> None:
+        """Replace the attached invoice. Exactly one of `object_key`/`content` is
+        set by the caller, mirroring how screenshots and workspace files store."""
+        row.receipt_object_key = object_key
+        row.receipt_content = content
+        row.receipt_content_type = content_type
+        row.receipt_filename = filename
+        await self._session.flush()
+
     async def approved_for_month(
         self, employee_ids: Sequence[uuid.UUID], period_month: str
     ) -> dict[uuid.UUID, int]:

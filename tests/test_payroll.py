@@ -180,9 +180,7 @@ async def test_future_working_days_are_not_charged_as_lop(
         "/api/v1/payroll/estimate?month=2099-06", headers=auth_headers(settings, seed.admin)
     )
     assert resp.status_code == 200
-    line = next(
-        line for line in resp.json()["lines"] if line["employee_id"] == str(seed.report.id)
-    )
+    line = next(line for line in resp.json()["lines"] if line["employee_id"] == str(seed.report.id))
     # The month has working days, but none have elapsed, so none are loss-of-pay.
     assert line["working_days"] > 0
     assert line["elapsed_working_days"] == 0
@@ -530,3 +528,70 @@ async def test_send_requires_recipients_then_records_run(
     runs = await client.get("/api/v1/payroll/runs", headers=auth_headers(settings, seed.admin))
     assert runs.status_code == 200
     assert any(r["period_month"] == "2026-06" for r in runs.json())
+
+
+async def test_approved_reimbursement_lands_in_the_payroll_breakdown(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """An approved claim is paid with that month's salary, so it must be visible
+    on the line — not only in the register export.
+
+    It is added AFTER PF and tax and stays out of `prorated`: repaying an expense
+    is not earnings and must never inflate gross or be taxed.
+    """
+    await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation",
+        json=_COMP,
+        headers=auth_headers(settings, seed.admin),
+    )
+    month = date.today().strftime("%Y-%m")
+
+    before = await client.get(
+        f"/api/v1/payroll/estimate?month={month}", headers=auth_headers(settings, seed.admin)
+    )
+    assert before.status_code == 200, before.text
+    base = next(r for r in before.json()["lines"] if r["employee_id"] == str(seed.report.id))
+    assert base["reimbursement_minor"] == 0
+
+    claim = await client.post(
+        "/api/v1/reimbursements",
+        json={
+            "amount_minor": 500_00,
+            "category": "travel",
+            "description": "Client cab",
+            "expense_date": f"{month}-05",
+        },
+        headers=auth_headers(settings, seed.report),
+    )
+    rid = claim.json()["id"]
+    await client.post(
+        f"/api/v1/reimbursements/{rid}/manager-decision",
+        json={"approve": True},
+        headers=auth_headers(settings, seed.manager),
+    )
+    reviewer = Employee(
+        hr_external_id="hr-breakdown-reviewer",
+        work_email="breakdown-reviewer@corp.test",
+        full_name="Hana HR",
+        role=Role.HR,
+        status=EmployeeStatus.ACTIVE,
+        is_active=True,
+    )
+    db.add(reviewer)
+    await db.commit()
+    approved = await client.post(
+        f"/api/v1/reimbursements/{rid}/hr-decision",
+        json={"approve": True},
+        headers=auth_headers(settings, reviewer),
+    )
+    assert approved.status_code == 200, approved.text
+
+    after = await client.get(
+        f"/api/v1/payroll/estimate?month={month}", headers=auth_headers(settings, seed.admin)
+    )
+    line = next(r for r in after.json()["lines"] if r["employee_id"] == str(seed.report.id))
+    assert line["reimbursement_minor"] == 500_00
+    assert line["net_minor"] == base["net_minor"] + 500_00
+    # Untouched: taxes and PF are computed on salary alone.
+    assert line["prorated"]["gross_minor"] == base["prorated"]["gross_minor"]
+    assert line["prorated"]["employee_pf_minor"] == base["prorated"]["employee_pf_minor"]

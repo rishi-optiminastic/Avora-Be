@@ -135,6 +135,27 @@ class AdminProfileUpdate(BaseModel):
         return cleaned
 
 
+class EmployeeCreate(AdminProfileUpdate):
+    """Admin/HR adding a person straight to the roster — no invite, no email, no
+    account. Used for people we only need a *record* of (contractors, staff who
+    never sign in), and for backfilling the existing team.
+
+    Inherits every profile field (and the UAN validator) from `AdminProfileUpdate`
+    so a directly-added person is describable exactly like anyone else, and adds
+    the three things an invite would otherwise have supplied: their email (the
+    identity key), their name (no Google profile to derive it from), and their
+    role. Role is set here for the same reason it is on invite accept — this is an
+    admin-authorised in-PMS path, not the HR webhook (rule 5.5).
+
+    The resulting row is a completely ordinary employee: it appears in the
+    directory, attendance, leave and payroll like any other, and if the person
+    ever does sign in with this email the invite-only gate lets them through.
+    """
+
+    work_email: EmailStr
+    role: Role = Role.EMPLOYEE
+
+
 class EmployeeStatusUpdate(BaseModel):
     """Admin/HR activating or deactivating (soft-delete / offboard) an employee."""
 

@@ -118,6 +118,31 @@ class EmployeeRepository:
         employee.avatar_content_type = content_type
         await self._session.flush()
 
+    async def create_direct(
+        self, *, work_email: str, full_name: str, role: Role, profile: dict[str, object]
+    ) -> Employee:
+        """Create an employee that admin/HR entered by hand — no invite, no HR sync.
+
+        Produces exactly the same row `create_from_invite` does (active, role set,
+        synthetic external id so a later HR sync can still claim the person); the
+        `manual:` prefix is what distinguishes the two provenances. The remaining
+        profile fields go through `admin_update_profile`, so the same whitelist
+        that guards an edit guards a create — there is no second way in.
+        """
+        employee = Employee(
+            hr_external_id=f"manual:{uuid.uuid4()}",
+            work_email=work_email,
+            full_name=full_name,
+            role=role,
+            status=EmployeeStatus.ACTIVE,
+            is_active=True,
+        )
+        self._session.add(employee)
+        await self._session.flush()
+        if profile:
+            await self.admin_update_profile(employee, profile)
+        return employee
+
     async def create_from_invite(
         self, *, work_email: str, full_name: str, role: Role, department: str | None = None
     ) -> Employee:

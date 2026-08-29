@@ -259,3 +259,94 @@ async def test_an_admin_still_sees_their_own_claim(
         f"/api/v1/reimbursements/{claim_id}", headers=auth_headers(settings, seed.admin)
     )
     assert fetched.status_code == 200
+
+
+_PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 64
+
+
+async def test_claimant_attaches_an_invoice_and_a_reviewer_can_read_it(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    claim_id = (await _submit(client, settings, seed.report))["id"]
+
+    attached = await client.post(
+        f"/api/v1/reimbursements/{claim_id}/receipt",
+        files={"file": ("invoice.png", _PNG, "image/png")},
+        headers=auth_headers(settings, seed.report),
+    )
+    assert attached.status_code == 200, attached.text
+    assert attached.json()["has_receipt"] is True
+
+    # A reviewer must be able to see what they're approving.
+    got = await client.get(
+        f"/api/v1/reimbursements/{claim_id}/receipt",
+        headers=auth_headers(settings, await _hr(db)),
+    )
+    assert got.status_code == 200
+    assert got.content == _PNG
+
+
+async def test_someone_else_cannot_attach_to_your_claim(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    claim_id = (await _submit(client, settings, seed.report))["id"]
+    resp = await client.post(
+        f"/api/v1/reimbursements/{claim_id}/receipt",
+        files={"file": ("invoice.png", _PNG, "image/png")},
+        headers=auth_headers(settings, seed.manager),
+    )
+    assert resp.status_code == 403
+
+
+async def test_an_outsider_cannot_read_the_invoice(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    claim_id = (await _submit(client, settings, seed.report))["id"]
+    await client.post(
+        f"/api/v1/reimbursements/{claim_id}/receipt",
+        files={"file": ("invoice.png", _PNG, "image/png")},
+        headers=auth_headers(settings, seed.report),
+    )
+    # 404, never 403 — revealing existence would leak scope (§7).
+    resp = await client.get(
+        f"/api/v1/reimbursements/{claim_id}/receipt",
+        headers=auth_headers(settings, seed.outsider),
+    )
+    assert resp.status_code == 404
+
+
+async def test_an_executable_upload_is_rejected(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """An invoice is a PDF or a photo. Anything else never reaches storage."""
+    claim_id = (await _submit(client, settings, seed.report))["id"]
+    resp = await client.post(
+        f"/api/v1/reimbursements/{claim_id}/receipt",
+        files={"file": ("payload.html", b"<script>alert(1)</script>", "text/html")},
+        headers=auth_headers(settings, seed.report),
+    )
+    assert resp.status_code == 422
+
+
+async def test_the_invoice_is_frozen_once_the_claim_is_approved(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """After final approval the attachment is part of a paid record."""
+    claim_id = (await _submit(client, settings, seed.report))["id"]
+    await client.post(
+        f"/api/v1/reimbursements/{claim_id}/manager-decision",
+        json={"approve": True},
+        headers=auth_headers(settings, seed.manager),
+    )
+    await client.post(
+        f"/api/v1/reimbursements/{claim_id}/hr-decision",
+        json={"approve": True},
+        headers=auth_headers(settings, await _hr(db)),
+    )
+
+    resp = await client.post(
+        f"/api/v1/reimbursements/{claim_id}/receipt",
+        files={"file": ("swapped.png", _PNG, "image/png")},
+        headers=auth_headers(settings, seed.report),
+    )
+    assert resp.status_code == 422

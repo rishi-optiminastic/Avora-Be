@@ -150,6 +150,11 @@ class PayrollLineRead(BaseModel):
     # Manual HR/Admin adjustments folded into net_minor (0 when none).
     adjustment_earnings_minor: int = 0
     adjustment_deductions_minor: int = 0
+    # Fully-approved expense claims for this month, paid with the salary. Added to
+    # `net_minor` but deliberately NOT to `breakdown`/`prorated`: a reimbursement
+    # repays money already spent, so it must not inflate gross, PF or tax. The
+    # register keeps it in its own column for the same reason.
+    reimbursement_minor: int = 0
     net_minor: int  # the prorated take-home for the month
     missing_compensation: bool
 
@@ -186,6 +191,10 @@ class PayslipRead(BaseModel):
     payable_days: float
     adjustment_earnings_minor: int = 0
     adjustment_deductions_minor: int = 0
+    # Approved expense claims paid out with this month's salary. Included in
+    # `net_minor` but kept out of `prorated`, so the slip can name the extra
+    # money instead of leaving an unexplained gap against the gross.
+    reimbursement_minor: int = 0
     net_minor: int  # the prorated take-home for the month
     missing_compensation: bool
 
@@ -236,6 +245,8 @@ class ReleasedPayslipRead(BaseModel):
     paid_leave_days: float
     payable_days: float
     net_payable_minor: int  # prorated take-home
+    # Approved expense claims paid with this month's salary, frozen at release.
+    reimbursement_minor: int = 0
     released_at: datetime
     emailed: bool
 
@@ -259,6 +270,7 @@ class ReleasedPayslipRead(BaseModel):
             paid_leave_days=m.paid_leave_days,
             payable_days=m.payable_days,
             net_payable_minor=m.net_minor,
+            reimbursement_minor=m.reimbursement_minor,
             released_at=m.released_at,
             emailed=m.emailed_at is not None,
         )

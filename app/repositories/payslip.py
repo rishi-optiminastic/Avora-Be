@@ -38,6 +38,7 @@ class PayslipSnapshot:
     monthly_ctc_minor: int
     gross_minor: int
     net_minor: int
+    reimbursement_minor: int
     breakdown: dict[str, int]
     prorated_breakdown: dict[str, int]
     total_days: int
@@ -105,6 +106,7 @@ class PayslipRepository:
         record.monthly_ctc_minor = snapshot.monthly_ctc_minor
         record.gross_minor = snapshot.gross_minor
         record.net_minor = snapshot.net_minor
+        record.reimbursement_minor = snapshot.reimbursement_minor
         record.breakdown = snapshot.breakdown
         record.prorated_breakdown = snapshot.prorated_breakdown
         record.total_days = snapshot.total_days

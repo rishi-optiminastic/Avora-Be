@@ -11,9 +11,17 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Query, status
+from fastapi import APIRouter, File, Query, Response, UploadFile, status
+from fastapi.responses import RedirectResponse
 
-from app.core.deps import CurrentUserDep, ReimbursementServiceDep
+from app.core import storage
+from app.core.deps import (
+    CurrentUserDep,
+    DownloadRateLimitDep,
+    ReimbursementServiceDep,
+    UploadRateLimitDep,
+)
+from app.core.exceptions import NotFoundError
 from app.models.reimbursement import ReimbursementStatus
 from app.schemas.common import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Page
 from app.schemas.reimbursement import (
@@ -23,6 +31,12 @@ from app.schemas.reimbursement import (
 )
 
 router = APIRouter(prefix="/reimbursements", tags=["reimbursements"])
+
+
+def _safe_filename(name: str) -> str:
+    """Strip path separators and quotes so a filename can't break the header."""
+    cleaned = name.replace("\\", "/").split("/")[-1].replace('"', "").strip()
+    return cleaned or "invoice"
 
 
 @router.get("", response_model=Page[ReimbursementRead])
@@ -99,3 +113,51 @@ async def withdraw_reimbursement(
     return ReimbursementRead.model_validate(
         await service.withdraw(caller, reimbursement_id)
     )
+
+
+@router.post("/{reimbursement_id}/receipt", response_model=ReimbursementRead)
+async def attach_receipt(
+    reimbursement_id: uuid.UUID,
+    caller: UploadRateLimitDep,
+    service: ReimbursementServiceDep,
+    file: Annotated[UploadFile, File()],
+) -> ReimbursementRead:
+    """Attach the invoice to your own claim, while it can still be edited.
+
+    PDF or image, 10 MB max. The claimant uploads; reviewers read it via the
+    download route below.
+    """
+    data = await file.read()
+    row = await service.attach_receipt(
+        caller,
+        reimbursement_id,
+        data,
+        filename=file.filename,
+        content_type=file.content_type or "application/octet-stream",
+    )
+    return ReimbursementRead.model_validate(row)
+
+
+@router.get("/{reimbursement_id}/receipt")
+async def download_receipt(
+    reimbursement_id: uuid.UUID,
+    caller: DownloadRateLimitDep,
+    service: ReimbursementServiceDep,
+) -> Response:
+    """The attached invoice, scoped to whoever may see the claim (404 otherwise).
+
+    Served as a neutral-type attachment — an uploaded file is never handed back
+    with a type a browser will execute.
+    """
+    row = await service.get_receipt(caller, reimbursement_id)
+    safe = _safe_filename(row.receipt_filename or "invoice")
+    if row.receipt_object_key:
+        url = storage.presigned_get_url(row.receipt_object_key, download_filename=safe)
+        return RedirectResponse(url, status_code=307)
+    if row.receipt_content is not None:
+        return Response(
+            content=row.receipt_content,
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": f'attachment; filename="{safe}"'},
+        )
+    raise NotFoundError()

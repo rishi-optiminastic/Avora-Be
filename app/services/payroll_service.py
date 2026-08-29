@@ -345,6 +345,7 @@ class PayrollService:
         paid_leaves = await self._leave_days_by_employee(ids, cal)
         comps = await self._compensation.get_for_employees(ids)  # one query, not N
         adjustments = await self._adjustments.for_month(ids, period)
+        reimbursed = await self._reimbursements.approved_for_month(ids, period)
 
         lines: list[PayrollLineRead] = []
         total_net = 0
@@ -359,6 +360,7 @@ class PayrollService:
                 present=_present_days(summaries.get(e.id)),
                 paid=paid_leaves.get(e.id, 0.0),
                 adjustments=adjustments.get(e.id, []),
+                reimbursement_minor=reimbursed.get(e.id, 0),
             )
             total_net += line.net_minor
             total_ctc += line.monthly_ctc_minor
@@ -549,6 +551,7 @@ class PayrollService:
         present: float,
         paid: float,
         adjustments: Sequence[PayrollAdjustment] = (),
+        reimbursement_minor: int = 0,
     ) -> PayrollLineRead:
         """One employee's slip for the month: CTC → breakdown → attendance proration.
 
@@ -596,7 +599,11 @@ class PayrollService:
             payable_days=payable,
             adjustment_earnings_minor=adj_earnings,
             adjustment_deductions_minor=adj_deductions,
-            net_minor=prorated.net_minor,
+            reimbursement_minor=reimbursement_minor,
+            # Added after PF and tax: an expense repayment is not earnings, so it
+            # must not be taxed. `prorated.net_minor` stays the salary-only figure
+            # the register's own net column is built from — no double count.
+            net_minor=prorated.net_minor + reimbursement_minor,
             missing_compensation=comp is None,
         )
 
@@ -638,6 +645,7 @@ class PayrollService:
         }
         paid_leaves = await self._leave_days_by_employee([target_id], cal)
         adjustments = await self._adjustments.for_month([target_id], period)
+        reimbursed = await self._reimbursements.approved_for_month([target_id], period)
         line = await self._line_for(
             employee,
             comp=await self._compensation.get_for_employee(target_id),
@@ -647,6 +655,7 @@ class PayrollService:
             present=_present_days(summaries.get(target_id)),
             paid=paid_leaves.get(target_id, 0.0),
             adjustments=adjustments.get(target_id, []),
+            reimbursement_minor=reimbursed.get(target_id, 0),
         )
         await self._audit.append(
             actor=str(caller.employee_id),
@@ -668,6 +677,7 @@ class PayrollService:
             payable_days=line.payable_days,
             adjustment_earnings_minor=line.adjustment_earnings_minor,
             adjustment_deductions_minor=line.adjustment_deductions_minor,
+            reimbursement_minor=line.reimbursement_minor,
             net_minor=line.net_minor,
             missing_compensation=line.missing_compensation,
         )
@@ -786,6 +796,7 @@ class PayrollService:
             monthly=slip.breakdown.model_dump(),
             prorated=prorated,
             net_payable_minor=slip.net_minor,
+            reimbursement_minor=slip.reimbursement_minor,
             total_days=slip.total_days,
             working_days=slip.working_days,
             present_days=slip.present_days,
@@ -830,6 +841,7 @@ class PayrollService:
                     monthly_ctc_minor=line.monthly_ctc_minor,
                     gross_minor=line.breakdown.gross_minor,
                     net_minor=line.net_minor,
+                    reimbursement_minor=line.reimbursement_minor,
                     breakdown=line.breakdown.model_dump(),
                     prorated_breakdown=line.prorated.model_dump(),
                     total_days=line.total_days,
@@ -908,6 +920,7 @@ class PayrollService:
             monthly=m.breakdown,
             prorated=m.prorated_breakdown or m.breakdown,
             net_payable_minor=m.net_minor,
+            reimbursement_minor=m.reimbursement_minor,
             total_days=m.total_days,
             working_days=m.working_days,
             present_days=m.present_days,
