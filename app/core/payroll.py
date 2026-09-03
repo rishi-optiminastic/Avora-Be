@@ -80,6 +80,10 @@ class CalcConfig:
     professional_tax_minor: int = 20_000  # flat ₹200, most months
     professional_tax_feb_minor: int = 30_000  # ₹300 in February
     deduct_income_tax: bool = True  # withhold estimated new-regime TDS monthly
+    # Whether Provident Fund applies at all. Off means the employer share is not
+    # carved out of CTC (so gross == CTC) AND nothing is deducted, which is why
+    # take-home rises by about twice the PF figure rather than once.
+    deduct_pf: bool = True
 
 
 @dataclass(frozen=True)
@@ -116,8 +120,8 @@ def compute_breakdown(
         return SalaryBreakdown(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 
     basic = round(ctc * cfg.basic_pct / 100)
-    pf = min(round(basic * cfg.pf_pct / 100), cfg.pf_cap_minor)
-    gross = ctc - pf  # CTC less employer PF
+    pf = min(round(basic * cfg.pf_pct / 100), cfg.pf_cap_minor) if cfg.deduct_pf else 0
+    gross = ctc - pf  # CTC less employer PF (== CTC when PF does not apply)
     hra = round(basic * cfg.hra_pct / 100)
     special = gross - basic - hra  # the balancing figure
     prof_tax = cfg.professional_tax_feb_minor if month == 2 else cfg.professional_tax_minor

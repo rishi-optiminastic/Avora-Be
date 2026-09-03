@@ -27,6 +27,9 @@ class CompensationWrite(BaseModel):
     currency: str = Field(default="USD", min_length=3, max_length=3)
     period: PayPeriod = PayPeriod.ANNUAL
     effective_date: date | None = None
+    # Whether Provident Fund applies to this person. Defaults to True so an
+    # older client that omits the field can never silently switch PF off.
+    pf_enabled: bool = True
     note: str | None = Field(default=None, max_length=500)
 
 
@@ -80,6 +83,7 @@ class CompensationRead(ORMModel):
     currency: str
     period: PayPeriod
     effective_date: date | None
+    pf_enabled: bool
     note: str | None
     account_holder_name: str | None
     bank_name: str | None
@@ -99,6 +103,7 @@ class CompensationRead(ORMModel):
             currency=model.currency,
             period=model.period,
             effective_date=model.effective_date,
+            pf_enabled=model.pf_enabled,
             note=model.note,
             account_holder_name=model.account_holder_name,
             bank_name=model.bank_name,

@@ -941,3 +941,96 @@ async def test_a_payable_days_override_above_the_window_is_capped_not_negative(
     assert line["payable_days"] == 16.0  # capped at their window
     full = line["breakdown"]["gross_minor"]
     assert line["prorated"]["gross_minor"] == round(full * 16 / 30)
+
+
+# --- per-employee Provident Fund -------------------------------------------- #
+def test_switching_pf_off_removes_it_from_both_sides_of_the_slip() -> None:
+    """PF sits on BOTH sides: the employer share is carved out of CTC to reach
+    gross, and the employee share is deducted from it. Switching it off must undo
+    both, so take-home rises by about twice the PF figure, not once."""
+    on = compute_breakdown(50_000_00, CalcConfig(), month=6)
+    off = compute_breakdown(50_000_00, CalcConfig(deduct_pf=False), month=6)
+
+    assert on.employee_pf_minor == 1_800_00
+    assert on.employer_pf_minor == 1_800_00
+    assert on.gross_minor == 48_200_00  # CTC less employer PF
+    assert on.net_minor == 46_200_00
+
+    assert off.employee_pf_minor == 0
+    assert off.employer_pf_minor == 0
+    assert off.gross_minor == 50_000_00  # the whole CTC is now gross
+    assert off.net_minor == 49_800_00
+    assert off.net_minor - on.net_minor == 2 * on.employee_pf_minor
+
+    # Basic and HRA are shares of CTC, so they must not move.
+    assert off.basic_minor == on.basic_minor
+    assert off.hra_minor == on.hra_minor
+    # Professional tax is statutory and unaffected either way.
+    assert off.professional_tax_minor == on.professional_tax_minor
+
+
+async def test_pf_can_be_turned_off_for_one_employee_without_touching_anyone_else(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """The switch lives on the person's compensation record, so it must change
+    only their line — and it must reach the register, not just the screen."""
+    for who in (seed.report, seed.manager):
+        await client.put(
+            f"/api/v1/employees/{who.id}/compensation",
+            json=_COMP,
+            headers=auth_headers(settings, seed.admin),
+        )
+    await client.put(
+        "/api/v1/payroll/settings", json=_SETTINGS, headers=auth_headers(settings, seed.admin)
+    )
+
+    # Same payload, PF switched off — for the report only.
+    off = await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation",
+        json={**_COMP, "pf_enabled": False},
+        headers=auth_headers(settings, seed.admin),
+    )
+    assert off.status_code in (200, 201), off.text
+    assert off.json()["pf_enabled"] is False
+
+    est = await client.get(
+        "/api/v1/payroll/estimate?month=2099-06", headers=auth_headers(settings, seed.admin)
+    )
+    lines = {r["employee_id"]: r for r in est.json()["lines"]}
+    exempt = lines[str(seed.report.id)]
+    normal = lines[str(seed.manager.id)]
+
+    assert exempt["breakdown"]["employee_pf_minor"] == 0
+    assert exempt["breakdown"]["employer_pf_minor"] == 0
+    assert normal["breakdown"]["employee_pf_minor"] > 0  # unchanged for everyone else
+    assert exempt["breakdown"]["gross_minor"] > normal["breakdown"]["gross_minor"]
+    assert exempt["net_minor"] > normal["net_minor"]
+
+    # The register is what actually gets paid, so it has to agree.
+    export = await client.get(
+        "/api/v1/payroll/export?month=2099-06", headers=auth_headers(settings, seed.admin)
+    )
+    sheet = load_workbook(BytesIO(export.content)).active
+    assert sheet is not None
+    header = [c.value for c in sheet[1]]
+    rows = {
+        r[header.index("Employee Name")]: r for r in sheet.iter_rows(min_row=2, values_only=True)
+    }
+    epf = header.index("EPF Contribution")
+    epf_er = header.index("EPF Contribution Employer")
+    assert rows[seed.report.full_name][epf] == pytest.approx(0.0)
+    assert rows[seed.report.full_name][epf_er] == pytest.approx(0.0)
+    assert rows[seed.manager.full_name][epf] > 0
+
+
+async def test_pf_defaults_to_on_when_the_field_is_omitted(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """An older client that doesn't send the field must never switch PF off."""
+    resp = await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation",
+        json=_COMP,  # no pf_enabled key at all
+        headers=auth_headers(settings, seed.admin),
+    )
+    assert resp.status_code in (200, 201), resp.text
+    assert resp.json()["pf_enabled"] is True

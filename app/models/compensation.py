@@ -43,6 +43,14 @@ class Compensation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     currency: Mapped[str] = mapped_column(String(3), default="USD")
     period: Mapped[PayPeriod] = mapped_column(default=PayPeriod.ANNUAL)
     effective_date: Mapped[date | None] = mapped_column(Date, default=None)
+    # Whether Provident Fund applies to this person. PF sits on BOTH sides of the
+    # slip — the employer share is carved out of CTC to reach gross, and the
+    # employee share is deducted from it — so switching it off raises take-home
+    # by roughly twice the PF amount. Per-employee because whether someone is
+    # covered is a fact about their contract (consultants, and staff above the
+    # wage ceiling who opted out), not an org-wide policy. Defaults to True so
+    # every existing record keeps deducting PF exactly as it does today.
+    pf_enabled: Mapped[bool] = mapped_column(default=True, server_default="true")
     note: Mapped[str | None] = mapped_column(String(500), default=None)
 
     # Bank details for salary disbursal. The account number is the sensitive PII,

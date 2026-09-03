@@ -50,6 +50,7 @@ class CompensationRepository:
         record.currency = data.currency.upper()
         record.period = data.period
         record.effective_date = data.effective_date
+        record.pf_enabled = data.pf_enabled
         record.note = data.note
         record.updated_by = updated_by
         await self._session.flush()

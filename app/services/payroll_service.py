@@ -396,6 +396,19 @@ class PayrollService:
             deduct_income_tax=s.deduct_income_tax,
         )
 
+    @staticmethod
+    def _config_for(cfg: CalcConfig, comp: Compensation | None) -> CalcConfig:
+        """The org's calculation config, narrowed to one person.
+
+        Provident Fund is per-contract, not org-wide: a consultant or someone who
+        opted out above the wage ceiling has it switched off on their compensation
+        record. Everyone else — and anyone with no record at all — keeps the org
+        default, so this can only ever remove PF, never silently add it.
+        """
+        if comp is not None and not comp.pf_enabled:
+            return replace(cfg, deduct_pf=False)
+        return cfg
+
     def _export_row(
         self,
         *,
@@ -416,7 +429,7 @@ class PayrollService:
             if comp is not None
             else 0
         )
-        full = compute_breakdown(mctc, cfg, month=month)
+        full = compute_breakdown(mctc, self._config_for(cfg, comp), month=month)
         # The register keeps its fixed 30-day base (the payrun convention), but in
         # the month someone JOINS it is only their share of it: 15 Aug ⇒ 17 of 31
         # days ⇒ 30 x 17/31 = 16.45 base days. Without this the register — the file
@@ -586,7 +599,7 @@ class PayrollService:
             if comp is not None
             else 0
         )
-        breakdown = compute_breakdown(mctc, cfg, month=cal.month)
+        breakdown = compute_breakdown(mctc, self._config_for(cfg, comp), month=cal.month)
         # Weekends and holidays are auto-paid: only working days that were neither
         # present nor paid leave are loss-of-pay, so payable = payroll days - LOP.
         # LOP is charged only over ELAPSED working days — a working day that has not
@@ -667,15 +680,7 @@ class PayrollService:
         if not _can_manage(caller) and await self._payslips.get(target_id, period) is None:
             raise NotFoundError()
         cal = await self._month_calendar(period, spec.timezone, spec.working_days_per_week)
-        cfg = CalcConfig(
-            basic_pct=s.basic_pct,
-            hra_pct=s.hra_pct,
-            pf_pct=s.pf_pct,
-            pf_cap_minor=s.pf_cap_minor,
-            professional_tax_minor=s.professional_tax_minor,
-            professional_tax_feb_minor=s.professional_tax_feb_minor,
-            deduct_income_tax=s.deduct_income_tax,
-        )
+        cfg = self._calc_config(s)
         # Self-scoped reads: monthly_report/leave lookups for just this employee.
         summaries = {
             r.employee_id: r for r in await self._attendance.monthly_report(caller, period)
