@@ -110,12 +110,32 @@ class PayslipPdfData:
     # (Net = Gross - Deductions) still adds up. Not part of `prorated`, because a
     # reimbursement repays money already spent and must not be taxed or PF'd.
     reimbursement_minor: int = 0
+    # Calendar days this person was on the payroll this month — the full month
+    # for everyone already on the roster, but only the days from their hire date
+    # onward in the month they joined. LOP is measured against THIS, not the
+    # month length, or a mid-month joiner with perfect attendance would be shown
+    # a fortnight of loss-of-pay they never took. 0 means "use total_days".
+    payable_base_days: int = 0
     org_address: str | None = None
     employee_number: str | None = None
     pay_date_label: str | None = None
     bank_account: str | None = None
     logo_png: bytes | None = None
     ytd: dict[str, int] = field(default_factory=dict)
+
+
+def payslip_lop_days(data: PayslipPdfData) -> float:
+    """Loss-of-pay to print on the slip: the days of the employee's OWN payroll
+    window that went unpaid.
+
+    Measured against `payable_base_days` (their window), never the month length —
+    a 15-August joiner is on the payroll for 17 of 31 days, so being paid all 17
+    is zero loss of pay, not the fourteen days the month-length subtraction would
+    claim. Falls back to the month length for slips released before the window
+    was recorded, which is correct for anyone already on the roster.
+    """
+    base = data.payable_base_days or data.total_days
+    return max(0.0, base - data.payable_days)
 
 
 def _money(minor: int, currency: str) -> str:
@@ -264,7 +284,7 @@ def _summary_block(data: PayslipPdfData) -> Table:
         )
     )
 
-    lop = max(0.0, data.total_days - data.payable_days)
+    lop = payslip_lop_days(data)
     net_box = Table(
         [
             [

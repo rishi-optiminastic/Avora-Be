@@ -23,6 +23,7 @@ from app.core.payroll import (
     compute_breakdown,
     days_in_month,
     employer_contributions,
+    payable_base_days,
     prorate_breakdown,
     weekdays_in_month,
     working_days_between,
@@ -432,6 +433,7 @@ async def test_export_includes_approved_reimbursement(
         },
         headers=auth_headers(settings, seed.report),
     )
+    assert claim.status_code == 201, claim.text
     rid = claim.json()["id"]
     await client.post(
         f"/api/v1/reimbursements/{rid}/manager-decision",
@@ -559,10 +561,11 @@ async def test_approved_reimbursement_lands_in_the_payroll_breakdown(
             "amount_minor": 500_00,
             "category": "travel",
             "description": "Client cab",
-            "expense_date": f"{month}-05",
+            "expense_date": date.today().isoformat(),
         },
         headers=auth_headers(settings, seed.report),
     )
+    assert claim.status_code == 201, claim.text
     rid = claim.json()["id"]
     await client.post(
         f"/api/v1/reimbursements/{rid}/manager-decision",
@@ -595,3 +598,346 @@ async def test_approved_reimbursement_lands_in_the_payroll_breakdown(
     # Untouched: taxes and PF are computed on salary alone.
     assert line["prorated"]["gross_minor"] == base["prorated"]["gross_minor"]
     assert line["prorated"]["employee_pf_minor"] == base["prorated"]["employee_pf_minor"]
+
+
+# --- month of joining -------------------------------------------------------- #
+def test_payroll_window_starts_at_the_hire_date_only_in_the_joining_month() -> None:
+    from app.core.payroll import payroll_window
+
+    # Joined mid-August: on the payroll for 15-31 Aug = 17 of 31 days.
+    assert payroll_window(2026, 8, date(2026, 8, 15)) == (date(2026, 8, 15), date(2026, 8, 31))
+    assert payable_base_days(2026, 8, date(2026, 8, 15)) == 17
+
+    # Every later month is whole, and so is a month before nothing changed.
+    assert payable_base_days(2026, 9, date(2026, 8, 15)) == 30
+    assert payable_base_days(2026, 8, None) == 31
+    assert payable_base_days(2026, 8, date(2020, 1, 1)) == 31
+
+
+def test_payable_base_days_handles_every_month_length() -> None:
+    """30/31, and February in both a leap and a common year."""
+    assert payable_base_days(2026, 2, None) == 28  # common year
+    assert payable_base_days(2028, 2, None) == 29  # leap year
+    assert payable_base_days(2026, 4, None) == 30
+    assert payable_base_days(2026, 1, None) == 31
+    # Joining on the last day earns exactly one day, in any month length.
+    assert payable_base_days(2026, 2, date(2026, 2, 28)) == 1
+    assert payable_base_days(2026, 4, date(2026, 4, 30)) == 1
+    # Joining on the 1st is a whole month, not a day short.
+    assert payable_base_days(2026, 6, date(2026, 6, 1)) == 30
+    # Not joined yet this month → nothing is payable.
+    assert payable_base_days(2026, 5, date(2026, 7, 1)) == 0
+
+
+async def test_a_mid_month_joiner_is_not_paid_for_the_days_before_they_joined(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """The bug: LOP only ever lands on WORKING days, so the weekends sitting before
+    a mid-month start date were silently paid — a 15 Aug joiner collected the 1st,
+    2nd, 8th and 9th. The payable base now starts at the hire date."""
+    # A future month, so nothing has elapsed and no real absence can muddy the
+    # arithmetic — this isolates the joining window itself.
+    person = await db.get(Employee, seed.report.id)
+    assert person is not None
+    person.hire_date = date(2099, 6, 15)
+    await db.commit()
+
+    await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation",
+        json=_COMP,
+        headers=auth_headers(settings, seed.admin),
+    )
+    await client.put(
+        "/api/v1/payroll/settings", json=_SETTINGS, headers=auth_headers(settings, seed.admin)
+    )
+
+    resp = await client.get(
+        "/api/v1/payroll/estimate?month=2099-06", headers=auth_headers(settings, seed.admin)
+    )
+    assert resp.status_code == 200, resp.text
+    line = next(line for line in resp.json()["lines"] if line["employee_id"] == str(seed.report.id))
+
+    assert line["total_days"] == 30  # June is still a 30-day month...
+    assert line["payable_days"] == 16  # ...but only 15-30 June is theirs
+    assert line["lop_days"] == 0  # and nothing before the 15th is absence
+
+    # Paid 16/30 of the month, not the whole thing — the old behaviour paid all 30,
+    # because the weekends before the 15th were never eligible for loss-of-pay.
+    full = line["breakdown"]["gross_minor"]
+    assert line["prorated"]["gross_minor"] == round(full * 16 / 30)
+    assert line["prorated"]["gross_minor"] < full
+
+    # Working days are scoped to their window too, so the slip reads truthfully.
+    assert line["working_days"] == working_days_between(
+        date(2099, 6, 15), date(2099, 6, 30), set(), 5
+    )
+
+
+async def test_someone_already_on_the_roster_is_unaffected(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """The joining-month rule must not touch anyone else's slip."""
+    person = await db.get(Employee, seed.report.id)
+    assert person is not None
+    person.hire_date = date(2020, 1, 6)
+    await db.commit()
+
+    await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation",
+        json=_COMP,
+        headers=auth_headers(settings, seed.admin),
+    )
+    await client.put(
+        "/api/v1/payroll/settings", json=_SETTINGS, headers=auth_headers(settings, seed.admin)
+    )
+
+    resp = await client.get(
+        "/api/v1/payroll/estimate?month=2099-06", headers=auth_headers(settings, seed.admin)
+    )
+    line = next(line for line in resp.json()["lines"] if line["employee_id"] == str(seed.report.id))
+    assert line["payable_days"] == line["total_days"] == 30
+    assert line["net_minor"] == line["breakdown"]["net_minor"]
+
+
+async def test_the_register_pays_a_joiner_a_part_month_too(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """The Excel register is the file that actually gets paid, and it prorates on a
+    fixed 30-day base of its own. That base has to shrink to the joining window too,
+    or the screen shows a part month while the payrun hands over a full one."""
+    person = await db.get(Employee, seed.report.id)
+    assert person is not None
+    person.hire_date = date(2099, 6, 15)  # 16 of June's 30 days
+    await db.commit()
+
+    await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation",
+        json=_COMP,
+        headers=auth_headers(settings, seed.admin),
+    )
+    await client.put(
+        "/api/v1/payroll/settings", json=_SETTINGS, headers=auth_headers(settings, seed.admin)
+    )
+
+    resp = await client.get(
+        "/api/v1/payroll/export?month=2099-06", headers=auth_headers(settings, seed.admin)
+    )
+    assert resp.status_code == 200, resp.text
+    sheet = load_workbook(BytesIO(resp.content)).active
+    assert sheet is not None
+    header = [c.value for c in sheet[1]]
+    rows = {
+        r[header.index("Employee Name")]: r for r in sheet.iter_rows(min_row=2, values_only=True)
+    }
+    row = rows[seed.report.full_name]
+
+    base = row[header.index("Base Days")]
+    paid = row[header.index("Effective Paid Days")]
+    # 30 x 16/30 = 16 base days, none lost — a part month, not 30.
+    assert base == pytest.approx(16.0)
+    assert paid == pytest.approx(16.0)
+    assert row[header.index("Loss Of Pay")] == pytest.approx(0.0)
+
+    # The day columns being right is not the point — the MONEY has to be right.
+    # (A denominator slip here once produced a ratio above 1, which clamped back
+    # to a full month while these day columns still read 16.)
+    full_month_gross = row[header.index("Gross Amount(Per Annum)")] / 12
+    assert row[header.index("Gross Pay")] == pytest.approx(full_month_gross * 16 / 30, rel=0.01)
+    assert row[header.index("Gross Pay")] < full_month_gross
+
+
+async def test_the_register_still_gives_everyone_else_a_full_30_day_base(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """The joining-month rule must not disturb the register's own convention."""
+    person = await db.get(Employee, seed.report.id)
+    assert person is not None
+    person.hire_date = date(2020, 1, 6)
+    await db.commit()
+
+    await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation",
+        json=_COMP,
+        headers=auth_headers(settings, seed.admin),
+    )
+    await client.put(
+        "/api/v1/payroll/settings", json=_SETTINGS, headers=auth_headers(settings, seed.admin)
+    )
+
+    resp = await client.get(
+        "/api/v1/payroll/export?month=2099-06", headers=auth_headers(settings, seed.admin)
+    )
+    sheet = load_workbook(BytesIO(resp.content)).active
+    assert sheet is not None
+    header = [c.value for c in sheet[1]]
+    rows = {
+        r[header.index("Employee Name")]: r for r in sheet.iter_rows(min_row=2, values_only=True)
+    }
+    row = rows[seed.report.full_name]
+    assert row[header.index("Base Days")] == pytest.approx(30.0)
+    # And a whole month's money, not a fraction of one.
+    assert row[header.index("Gross Pay")] == pytest.approx(
+        row[header.index("Gross Amount(Per Annum)")] / 12, rel=0.01
+    )
+
+
+async def test_someone_who_has_not_joined_yet_is_paid_nothing_anywhere(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """A hire date after the month means a zero-day window. `attendance_ratio`
+    reads a zero denominator as "no information — pay the full month", which is
+    the exact opposite of what it means here, so both the estimate and the
+    register must be checked, not just one."""
+    person = await db.get(Employee, seed.report.id)
+    assert person is not None
+    person.hire_date = date(2099, 9, 1)  # joins in September
+    await db.commit()
+
+    await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation",
+        json=_COMP,
+        headers=auth_headers(settings, seed.admin),
+    )
+    await client.put(
+        "/api/v1/payroll/settings", json=_SETTINGS, headers=auth_headers(settings, seed.admin)
+    )
+
+    est = await client.get(
+        "/api/v1/payroll/estimate?month=2099-06", headers=auth_headers(settings, seed.admin)
+    )
+    line = next(r for r in est.json()["lines"] if r["employee_id"] == str(seed.report.id))
+    assert line["payable_base_days"] == 0
+    assert line["payable_days"] == 0
+    assert line["prorated"]["gross_minor"] == 0
+
+    export = await client.get(
+        "/api/v1/payroll/export?month=2099-06", headers=auth_headers(settings, seed.admin)
+    )
+    sheet = load_workbook(BytesIO(export.content)).active
+    assert sheet is not None
+    header = [c.value for c in sheet[1]]
+    rows = {
+        r[header.index("Employee Name")]: r for r in sheet.iter_rows(min_row=2, values_only=True)
+    }
+    row = rows[seed.report.full_name]
+    assert row[header.index("Base Days")] == pytest.approx(0.0)
+    assert row[header.index("Gross Pay")] == pytest.approx(0.0)
+
+
+async def _override_payable_days(
+    client: AsyncClient, settings: Settings, seed: _Seed, *, month: str, days: float
+) -> None:
+    resp = await client.post(
+        "/api/v1/payroll/adjustments",
+        json={
+            "employee_id": str(seed.report.id),
+            "period_month": month,
+            "kind": "override",
+            "target": "payable_days",
+            "label": "Agreed paid days",
+            "amount_minor": int(days * 100),
+        },
+        headers=auth_headers(settings, seed.admin),
+    )
+    assert resp.status_code in (200, 201), resp.text
+
+
+async def test_editing_payable_days_moves_the_money_on_screen_and_in_the_register(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """Changing payable days must restate the pay everywhere it is shown, not just
+    the day counter — the estimate, the prorated breakdown, the net, and the Excel
+    register that is actually paid from."""
+    await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation",
+        json=_COMP,
+        headers=auth_headers(settings, seed.admin),
+    )
+    await client.put(
+        "/api/v1/payroll/settings", json=_SETTINGS, headers=auth_headers(settings, seed.admin)
+    )
+    await _override_payable_days(client, settings, seed, month="2099-06", days=15.0)
+
+    est = await client.get(
+        "/api/v1/payroll/estimate?month=2099-06", headers=auth_headers(settings, seed.admin)
+    )
+    line = next(r for r in est.json()["lines"] if r["employee_id"] == str(seed.report.id))
+    assert line["payable_days"] == 15.0
+    assert line["lop_days"] == 15.0  # base 30 - 15 paid
+    # Half a month of days must be half a month of money.
+    full = line["breakdown"]["gross_minor"]
+    assert line["prorated"]["gross_minor"] == round(full * 15 / 30)
+    assert line["net_minor"] < line["breakdown"]["net_minor"]
+
+    export = await client.get(
+        "/api/v1/payroll/export?month=2099-06", headers=auth_headers(settings, seed.admin)
+    )
+    sheet = load_workbook(BytesIO(export.content)).active
+    assert sheet is not None
+    header = [c.value for c in sheet[1]]
+    rows = {
+        r[header.index("Employee Name")]: r for r in sheet.iter_rows(min_row=2, values_only=True)
+    }
+    row = rows[seed.report.full_name]
+    assert row[header.index("Effective Paid Days")] == pytest.approx(15.0)
+    assert row[header.index("Gross Pay")] == pytest.approx(
+        row[header.index("Gross Amount(Per Annum)")] / 12 * 15 / 30, rel=0.01
+    )
+
+
+async def test_editing_payable_days_for_a_joiner_stays_inside_their_window(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """For a mid-month joiner the override is read against THEIR window, not the
+    month: 10 paid days out of 16 is 6 unpaid, not 20."""
+    person = await db.get(Employee, seed.report.id)
+    assert person is not None
+    person.hire_date = date(2099, 6, 15)  # 16 of June's 30 days
+    await db.commit()
+
+    await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation",
+        json=_COMP,
+        headers=auth_headers(settings, seed.admin),
+    )
+    await client.put(
+        "/api/v1/payroll/settings", json=_SETTINGS, headers=auth_headers(settings, seed.admin)
+    )
+    await _override_payable_days(client, settings, seed, month="2099-06", days=10.0)
+
+    est = await client.get(
+        "/api/v1/payroll/estimate?month=2099-06", headers=auth_headers(settings, seed.admin)
+    )
+    line = next(r for r in est.json()["lines"] if r["employee_id"] == str(seed.report.id))
+    assert line["payable_base_days"] == 16
+    assert line["payable_days"] == 10.0
+    assert line["lop_days"] == 6.0  # 16 - 10, NOT 30 - 10
+    full = line["breakdown"]["gross_minor"]
+    assert line["prorated"]["gross_minor"] == round(full * 10 / 30)
+
+
+async def test_a_payable_days_override_above_the_window_is_capped_not_negative(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """Asking for more paid days than exist can only ever mean "all of them" —
+    never negative loss-of-pay, which would quietly pay more than a full month."""
+    person = await db.get(Employee, seed.report.id)
+    assert person is not None
+    person.hire_date = date(2099, 6, 15)
+    await db.commit()
+
+    await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation",
+        json=_COMP,
+        headers=auth_headers(settings, seed.admin),
+    )
+    await _override_payable_days(client, settings, seed, month="2099-06", days=99.0)
+
+    est = await client.get(
+        "/api/v1/payroll/estimate?month=2099-06", headers=auth_headers(settings, seed.admin)
+    )
+    line = next(r for r in est.json()["lines"] if r["employee_id"] == str(seed.report.id))
+    assert line["lop_days"] == 0.0
+    assert line["payable_days"] == 16.0  # capped at their window
+    full = line["breakdown"]["gross_minor"]
+    assert line["prorated"]["gross_minor"] == round(full * 16 / 30)

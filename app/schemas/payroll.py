@@ -13,6 +13,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.core.payroll import payable_base_days
 from app.models.payroll_run import PayrollRun, PayrollRunSource
 from app.models.payroll_settings import PayCycle, PayrollSettings
 from app.models.payslip import Payslip
@@ -147,6 +148,11 @@ class PayrollLineRead(BaseModel):
     paid_leave_days: float
     lop_days: float  # loss-of-pay days = elapsed working days neither present nor paid
     payable_days: float
+    # Calendar days this person is on the payroll this month: the full month
+    # normally, but only from the hire date onward in the month they joined.
+    # This — not `total_days` — is the ceiling on payable days and the base LOP
+    # is taken from, so the editor must anchor its arithmetic here.
+    payable_base_days: int = 0
     # Manual HR/Admin adjustments folded into net_minor (0 when none).
     adjustment_earnings_minor: int = 0
     adjustment_deductions_minor: int = 0
@@ -189,6 +195,11 @@ class PayslipRead(BaseModel):
     paid_leave_days: float
     lop_days: float
     payable_days: float
+    # Calendar days this person is on the payroll this month: the full month
+    # normally, but only from the hire date onward in the month they joined.
+    # This — not `total_days` — is the ceiling on payable days and the base LOP
+    # is taken from, so the editor must anchor its arithmetic here.
+    payable_base_days: int = 0
     adjustment_earnings_minor: int = 0
     adjustment_deductions_minor: int = 0
     # Approved expense claims paid out with this month's salary. Included in
@@ -221,6 +232,21 @@ class PayslipSummaryRead(BaseModel):
         )
 
 
+def _base_days_for(m: Payslip) -> int:
+    """The joining window for a released snapshot, recomputed from its frozen
+    hire date (the window itself is not stored).
+
+    A malformed period string means a corrupt row we cannot date, so it reports 0
+    rather than inventing a month length — the reader shows "no payable days"
+    instead of quietly asserting a full month that was never paid.
+    """
+    try:
+        year, month = (int(part) for part in m.period_month.split("-", 1))
+    except ValueError:
+        return 0
+    return payable_base_days(year, month, m.hire_date)
+
+
 class ReleasedPayslipRead(BaseModel):
     """A finalized, HR-released payslip read back from its frozen snapshot.
 
@@ -247,6 +273,10 @@ class ReleasedPayslipRead(BaseModel):
     net_payable_minor: int  # prorated take-home
     # Approved expense claims paid with this month's salary, frozen at release.
     reimbursement_minor: int = 0
+    # Days this person was on the payroll that month. Not stored on the snapshot
+    # — recomputed from the frozen hire date, exactly as the PDF does, so a
+    # released slip and its PDF can never disagree about the joining window.
+    payable_base_days: int = 0
     released_at: datetime
     emailed: bool
 
@@ -271,6 +301,7 @@ class ReleasedPayslipRead(BaseModel):
             payable_days=m.payable_days,
             net_payable_minor=m.net_minor,
             reimbursement_minor=m.reimbursement_minor,
+            payable_base_days=_base_days_for(m),
             released_at=m.released_at,
             emailed=m.emailed_at is not None,
         )

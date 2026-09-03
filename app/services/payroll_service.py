@@ -28,6 +28,8 @@ from app.core.payroll import (
     days_in_month,
     employer_contributions,
     monthly_ctc_minor,
+    payable_base_days,
+    payroll_window,
     prorate_breakdown,
     weekdays_in_month,
 )
@@ -157,15 +159,20 @@ def _day_override(
 
 
 def _lop_override(
-    adjustments: Sequence[PayrollAdjustment], computed_lop: float, total_days: int
+    adjustments: Sequence[PayrollAdjustment], computed_lop: float, base_days: int
 ) -> float:
     """Resolve the effective loss-of-pay days from any OVERRIDE. Both LOP_DAYS and
     PAYABLE_DAYS overrides (stored as days x 100) are complementary — payable +
-    lop = total_days — so a paid-days override is turned into the matching LOP.
-    LOP_DAYS wins if both are present; otherwise the computed value stands."""
+    lop = base_days — so a paid-days override is turned into the matching LOP.
+    LOP_DAYS wins if both are present; otherwise the computed value stands.
+
+    `base_days` is the employee's own payroll window, not the month length: for
+    someone who joined mid-month, "paid 10 days" means 10 of their 17, so the
+    complementary LOP is 7 — not 21.
+    """
 
     def _days(a: PayrollAdjustment) -> float:
-        return min(float(total_days), max(0.0, a.amount_minor / 100))
+        return min(float(base_days), max(0.0, a.amount_minor / 100))
 
     for a in adjustments:
         if (
@@ -178,7 +185,7 @@ def _lop_override(
             a.kind is PayrollAdjustmentKind.OVERRIDE
             and a.target is PayrollAdjustmentTarget.PAYABLE_DAYS
         ):
-            return float(total_days) - _days(a)  # lop = total - payable
+            return float(base_days) - _days(a)  # lop = base - payable
     return computed_lop
 
 
@@ -410,10 +417,25 @@ class PayrollService:
             else 0
         )
         full = compute_breakdown(mctc, cfg, month=month)
-        base_days = 30.0
+        # The register keeps its fixed 30-day base (the payrun convention), but in
+        # the month someone JOINS it is only their share of it: 15 Aug ⇒ 17 of 31
+        # days ⇒ 30 x 17/31 = 16.45 base days. Without this the register — the file
+        # that actually gets paid — would hand a mid-month joiner a full month even
+        # though the estimate and payslip correctly show a part month. A full month
+        # yields exactly 30.0, so nobody else's row moves.
+        share = (line.payable_base_days / line.total_days) if line.total_days > 0 else 1.0
+        base_days = round(30.0 * share, 2)
         lop = min(base_days, max(0.0, line.lop_days))
         effective = base_days - lop
-        p = prorate_breakdown(full, effective, int(base_days))  # 30-day-base proration
+        # Someone whose hire date falls after this month has a zero-day window, and
+        # `attendance_ratio` reads a zero denominator as "no information — pay the
+        # full month". Here it means the opposite, so the zero row is built directly
+        # rather than divided.
+        p = (
+            prorate_breakdown(full, effective, 30)
+            if base_days > 0
+            else prorate_breakdown(full, 0.0, 30)
+        )
         # Manual adjustments (LOP overrides already applied to `line.lop_days` above):
         # field overrides restructure the slip; earnings/deductions fold into totals.
         p, adj_earnings, adj_deductions = _apply_adjustments(p, adjustments)
@@ -566,17 +588,29 @@ class PayrollService:
         )
         breakdown = compute_breakdown(mctc, cfg, month=cal.month)
         # Weekends and holidays are auto-paid: only working days that were neither
-        # present nor paid leave are loss-of-pay, so payable = calendar days - LOP.
+        # present nor paid leave are loss-of-pay, so payable = payroll days - LOP.
         # LOP is charged only over ELAPSED working days — a working day that has not
         # happened yet (later this in-progress month) is never counted as absent, so
         # a mid-month estimate reflects days actually missed, not the calendar ahead.
+        # In the month someone JOINS, the whole window starts at their hire date:
+        # both the payable base and the working days they can be judged on. Before
+        # this, a mid-month joiner was paid for the weekends preceding their start
+        # (LOP only lands on working days, so those Saturdays and Sundays slipped
+        # through), while the working days before it were charged as absence.
         # HR/finance may override the attendance-derived day counts directly.
+        window_start, window_end = payroll_window(cal.year, cal.month, employee.hire_date)
+        base_days = payable_base_days(cal.year, cal.month, employee.hire_date)
+        span = (window_start, window_end)
+        in_window = [d for d in cal.working_dates if span[0] <= d <= span[1]]
+        elapsed_in_window = [d for d in cal.elapsed_working_dates if span[0] <= d <= span[1]]
         present = _day_override(adjustments, PayrollAdjustmentTarget.PRESENT_DAYS, present)
         paid = _day_override(adjustments, PayrollAdjustmentTarget.PAID_LEAVE_DAYS, paid)
-        elapsed_working = float(cal.elapsed_working_days)
+        elapsed_working = float(len(elapsed_in_window))
         worked = min(elapsed_working, present + paid)
-        lop = _lop_override(adjustments, max(0.0, elapsed_working - worked), cal.total_days)
-        payable = max(0.0, float(cal.total_days) - lop)
+        lop = _lop_override(adjustments, max(0.0, elapsed_working - worked), base_days)
+        payable = max(0.0, float(base_days) - lop)
+        # The denominator stays the FULL month: a monthly salary buys a whole
+        # month, so 17 of August's 31 days is 17/31 of it — not a full month.
         prorated = prorate_breakdown(breakdown, payable, cal.total_days)
         prorated, adj_earnings, adj_deductions = _apply_adjustments(prorated, adjustments)
         return PayrollLineRead(
@@ -591,12 +625,15 @@ class PayrollService:
             breakdown=SalaryBreakdownRead(**breakdown.__dict__),
             prorated=SalaryBreakdownRead(**prorated.__dict__),
             total_days=cal.total_days,
-            working_days=cal.working_days,
-            elapsed_working_days=cal.elapsed_working_days,
+            # Scoped to this employee's own payroll window, so the slip's
+            # "of N working days" reads truthfully for a mid-month joiner.
+            working_days=len(in_window),
+            elapsed_working_days=int(elapsed_working),
             present_days=present,
             paid_leave_days=paid,
             lop_days=lop,
             payable_days=payable,
+            payable_base_days=base_days,
             adjustment_earnings_minor=adj_earnings,
             adjustment_deductions_minor=adj_deductions,
             reimbursement_minor=reimbursement_minor,
@@ -675,6 +712,7 @@ class PayrollService:
             paid_leave_days=line.paid_leave_days,
             lop_days=line.lop_days,
             payable_days=line.payable_days,
+            payable_base_days=line.payable_base_days,
             adjustment_earnings_minor=line.adjustment_earnings_minor,
             adjustment_deductions_minor=line.adjustment_deductions_minor,
             reimbursement_minor=line.reimbursement_minor,
@@ -797,6 +835,7 @@ class PayrollService:
             prorated=prorated,
             net_payable_minor=slip.net_minor,
             reimbursement_minor=slip.reimbursement_minor,
+            payable_base_days=payable_base_days(year, m, employee.hire_date),
             total_days=slip.total_days,
             working_days=slip.working_days,
             present_days=slip.present_days,
@@ -921,6 +960,7 @@ class PayrollService:
             prorated=m.prorated_breakdown or m.breakdown,
             net_payable_minor=m.net_minor,
             reimbursement_minor=m.reimbursement_minor,
+            payable_base_days=payable_base_days(year, month, m.hire_date),
             total_days=m.total_days,
             working_days=m.working_days,
             present_days=m.present_days,

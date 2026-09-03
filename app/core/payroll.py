@@ -235,6 +235,36 @@ def prorate_breakdown(
     )
 
 
+def payroll_window(year: int, month: int, hire_date: date | None = None) -> tuple[date, date]:
+    """The span of the month an employee is actually on the payroll for.
+
+    Normally the whole month. In the month someone JOINS, it starts on their
+    hire date — they are not owed (and must not be charged loss-of-pay for) the
+    days before they existed to us. Weekends are the reason this matters: LOP is
+    only ever charged on working days, so without this window the Saturdays and
+    Sundays sitting before a mid-month joining date were silently paid.
+
+    A hire date in a later month yields an inverted range (start > end), which
+    `payable_base_days` reports as zero days.
+    """
+    first = date(year, month, 1)
+    last = date(year, month, days_in_month(year, month))
+    if hire_date is not None and hire_date > first:
+        return hire_date, last
+    return first, last
+
+
+def payable_base_days(year: int, month: int, hire_date: date | None = None) -> int:
+    """Calendar days the employee is on the payroll this month — the ceiling on
+    payable days, and the base loss-of-pay is subtracted from.
+
+    A full month for everyone already on the roster; for a mid-month joiner, only
+    the days from their hire date onward (15 Aug ⇒ 17 of August's 31).
+    """
+    start, end = payroll_window(year, month, hire_date)
+    return (end - start).days + 1 if end >= start else 0
+
+
 def weekdays_in_month(year: int, month: int, working_days_per_week: int = 5) -> list[date]:
     """Every working-day date in the given month (the working-day baseline).
 

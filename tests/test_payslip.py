@@ -11,7 +11,7 @@ from __future__ import annotations
 from httpx import AsyncClient
 
 from app.core.config import Settings
-from app.core.payslip_pdf import PayslipPdfData, render_payslip_pdf
+from app.core.payslip_pdf import PayslipPdfData, payslip_lop_days, render_payslip_pdf
 from tests.conftest import _Seed, auth_headers
 
 _COMP = {"amount_minor": 50_000_00, "currency": "inr", "period": "monthly"}
@@ -167,3 +167,65 @@ async def test_hr_admin_can_download_any_employees_payslip(
     )
     assert resp.status_code == 200
     assert resp.content.startswith(b"%PDF")
+
+
+def _pdf_data(**over: object) -> PayslipPdfData:
+    """Minimal slip data; only the day counts matter for the LOP arithmetic."""
+    empty = dict.fromkeys(
+        (
+            "ctc_minor",
+            "basic_minor",
+            "hra_minor",
+            "special_allowance_minor",
+            "employer_pf_minor",
+            "gross_minor",
+            "employee_pf_minor",
+            "professional_tax_minor",
+            "income_tax_minor",
+            "total_deduction_minor",
+            "net_minor",
+        ),
+        0,
+    )
+    base: dict[str, object] = {
+        "org_name": "Optiminastic",
+        "employee_name": "Rishi Patel",
+        "job_title": None,
+        "department": None,
+        "location": None,
+        "doj_label": None,
+        "month_label": "August 2026",
+        "currency": "INR",
+        "monthly_ctc_minor": 0,
+        "monthly": empty,
+        "prorated": empty,
+        "net_payable_minor": 0,
+        "total_days": 31,
+        "working_days": 21,
+        "present_days": 0.0,
+        "paid_leave_days": 0.0,
+        "payable_days": 31.0,
+        "generated_label": "31 Aug 2026",
+    }
+    base.update(over)
+    return PayslipPdfData(**base)  # type: ignore[arg-type]
+
+
+def test_a_mid_month_joiner_is_not_shown_phantom_loss_of_pay() -> None:
+    """Joined 15 Aug and paid all 17 of their days: that is zero loss of pay. The
+    month-length subtraction used to print fourteen days of absence they never took."""
+    joiner = _pdf_data(payable_base_days=17, payable_days=17.0)
+    assert payslip_lop_days(joiner) == 0.0
+
+    # Real absence inside their own window still shows.
+    absent = _pdf_data(payable_base_days=17, payable_days=15.0)
+    assert payslip_lop_days(absent) == 2.0
+
+
+def test_loss_of_pay_falls_back_to_the_month_for_everyone_else() -> None:
+    # Already on the roster: the window IS the month, however it is supplied.
+    assert payslip_lop_days(_pdf_data(payable_base_days=31, payable_days=29.0)) == 2.0
+    # A slip released before the window was recorded carries 0 — use the month.
+    assert payslip_lop_days(_pdf_data(payable_base_days=0, payable_days=29.0)) == 2.0
+    # Never negative, whatever the inputs.
+    assert payslip_lop_days(_pdf_data(payable_base_days=17, payable_days=31.0)) == 0.0
