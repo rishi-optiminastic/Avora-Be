@@ -26,11 +26,17 @@ from app.core.exceptions import (
     ValidationError,
 )
 from app.core.logging import get_logger
+from app.core.uploads import detect_media_type
 from app.models.employee import Role
 from app.models.notification import NotificationKind, NotificationLevel
-from app.models.reimbursement import Reimbursement, ReimbursementStatus
+from app.models.reimbursement import (
+    Reimbursement,
+    ReimbursementReceipt,
+    ReimbursementStatus,
+)
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
+from app.repositories.payslip import PayslipRepository
 from app.repositories.reimbursement import ReimbursementRepository
 from app.schemas.auth import CurrentUser
 from app.schemas.reimbursement import ReimbursementCreate, ReimbursementDecision
@@ -43,6 +49,23 @@ _LINK = "/dashboard/time/reimbursements"
 # An invoice is a receipt photo or a PDF, not a data dump — a tight cap keeps
 # the in-DB fallback (used when S3 is off) from bloating the row store.
 MAX_RECEIPT_BYTES = 10 * 1024 * 1024
+# A claim can carry several documents (invoice + toll slip + boarding pass), but
+# not an unbounded pile — reviewers have to read them, and each one is stored.
+MAX_RECEIPTS_PER_CLAIM = 10
+MAX_RECEIPT_LABEL = 120
+
+
+def _receipt_label(label: str | None, filename: str | None) -> str:
+    """What to call this proof. The claimant's own name wins; failing that the
+    filename without its extension; failing that a plain word, because an unnamed
+    row in a reviewer's list is worse than a generic one."""
+    named = (label or "").strip()
+    if named:
+        return named[:MAX_RECEIPT_LABEL]
+    stem = (filename or "").rsplit("/", 1)[-1].rsplit(".", 1)[0].strip()
+    return (stem or "Proof")[:MAX_RECEIPT_LABEL]
+# What a proof may be. Enforced by sniffing the file's own bytes, never by the
+# Content-Type the browser claims — see app/core/uploads.detect_media_type.
 ALLOWED_RECEIPT_TYPES = frozenset(
     {"application/pdf", "image/png", "image/jpeg", "image/webp"}
 )
@@ -66,47 +89,50 @@ class ReimbursementService:
         audit: AuditRepository,
         notifications: NotificationService,
         settings: Settings,
+        payslips: PayslipRepository,
     ) -> None:
         self._reimbursements = reimbursements
         self._employees = employees
         self._audit = audit
         self._notifications = notifications
         self._settings = settings
+        self._payslips = payslips
 
-    async def attach_receipt(
+    async def add_receipt(
         self,
         caller: CurrentUser,
         reimbursement_id: uuid.UUID,
         data: bytes,
         *,
+        label: str | None,
         filename: str | None,
-        content_type: str,
+        content_type: str,  # the browser's claim; kept for logs, not trusted
     ) -> Reimbursement:
-        """Attach the invoice to a claim. The CLAIMANT's own, and only while the
-        claim can still change — once it is finally approved the attachment is part
-        of a paid record and must not be swapped.
+        """Attach one named proof to a claim. The CLAIMANT's own, and only while the
+        claim can still change — once it is finally approved the attachments are part
+        of a paid record and must not be added to or swapped.
 
         Bytes go to S3 when configured (only the key is stored), else to the in-DB
-        `receipt_content` column — the same fallback documents and screenshots use.
+        `content` column — the same fallback documents and screenshots use.
         """
-        row = await self._reimbursements.get_in_scope(caller, reimbursement_id)
-        if row is None:
-            raise NotFoundError()
-        if row.employee_id != caller.employee_id:
-            raise AuthorizationError()
-        if row.status not in (
-            ReimbursementStatus.SUBMITTED,
-            ReimbursementStatus.MANAGER_APPROVED,
-        ):
-            raise ValidationError("This claim can no longer be edited.")
+        row = await self._editable_claim(caller, reimbursement_id)
+        if len(row.receipts) >= MAX_RECEIPTS_PER_CLAIM:
+            raise ValidationError(
+                f"A claim can carry at most {MAX_RECEIPTS_PER_CLAIM} proofs. "
+                "Remove one before adding another."
+            )
         if not data:
-            raise ValidationError("The invoice file is empty.")
+            raise ValidationError("The file is empty.")
         if len(data) > MAX_RECEIPT_BYTES:
-            raise ValidationError("The invoice is too large (max 10 MB).")
+            raise ValidationError("That file is too large (max 10 MB).")
 
-        media_type = (content_type or "application/octet-stream").split(";")[0].strip().lower()
-        if media_type not in ALLOWED_RECEIPT_TYPES:
-            raise ValidationError("The invoice must be a PDF, PNG, JPG or WebP.")
+        # The browser's Content-Type is a claim, and a wrong one often enough that
+        # trusting it rejected real PDFs (many systems send them as
+        # application/octet-stream). Decide from the bytes instead — which also
+        # means a script cannot get in by calling itself a PDF.
+        media_type = detect_media_type(data)
+        if media_type is None or media_type not in ALLOWED_RECEIPT_TYPES:
+            raise ValidationError("Proofs must be a PDF, PNG, JPG or WebP.")
 
         object_key: str | None = None
         stored: bytes | None = data
@@ -119,12 +145,14 @@ class ReimbursementService:
                 raise StorageError() from exc
             stored = None
 
-        await self._reimbursements.set_receipt(
+        await self._reimbursements.add_receipt(
             row,
+            label=_receipt_label(label, filename),
             object_key=object_key,
             content=stored,
             content_type=media_type,
             filename=filename,
+            size_bytes=len(data),
         )
         await self._audit.append(
             actor=str(caller.employee_id),
@@ -133,17 +161,56 @@ class ReimbursementService:
         )
         return row
 
-    async def get_receipt(self, caller: CurrentUser, reimbursement_id: uuid.UUID) -> Reimbursement:
-        """The claim whose invoice bytes the download endpoint will stream.
+    async def remove_receipt(
+        self, caller: CurrentUser, reimbursement_id: uuid.UUID, receipt_id: uuid.UUID
+    ) -> Reimbursement:
+        """Drop one proof from a claim the claimant can still edit."""
+        row = await self._editable_claim(caller, reimbursement_id)
+        receipt = await self._reimbursements.get_receipt(row, receipt_id)
+        if receipt is None:
+            raise NotFoundError()
+        await self._reimbursements.delete_receipt(row, receipt)
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="reimbursement.receipt_remove",
+            target=f"reimbursement:{row.id}",
+        )
+        return row
+
+    async def _editable_claim(
+        self, caller: CurrentUser, reimbursement_id: uuid.UUID
+    ) -> Reimbursement:
+        """The caller's OWN claim, while it is still open to change. Shared by every
+        attachment write so the ownership and status gates can never drift apart."""
+        row = await self._reimbursements.get_in_scope(caller, reimbursement_id)
+        if row is None:
+            raise NotFoundError()
+        if row.employee_id != caller.employee_id:
+            raise AuthorizationError()
+        if row.status not in (
+            ReimbursementStatus.SUBMITTED,
+            ReimbursementStatus.MANAGER_APPROVED,
+        ):
+            raise ValidationError("This claim can no longer be edited.")
+        return row
+
+    async def get_receipt(
+        self, caller: CurrentUser, reimbursement_id: uuid.UUID, receipt_id: uuid.UUID
+    ) -> ReimbursementReceipt:
+        """The proof whose bytes the download endpoint will stream.
 
         Scope is the claim's own (own / reports' / HR + payroll) — a reviewer must
-        be able to see what they are approving. 404 when out of scope or when there
-        is nothing attached, so neither existence nor absence leaks.
+        be able to see what they are approving. 404 when out of scope, when the
+        claim has no such proof, or when the id belongs to someone else's claim, so
+        neither existence nor absence leaks.
         """
         row = await self._reimbursements.get_in_scope(caller, reimbursement_id)
-        if row is None or not row.has_receipt:
+        if row is None:
             raise NotFoundError()
-        return row
+        receipt = await self._reimbursements.get_receipt(row, receipt_id)
+        if receipt is None:
+            raise NotFoundError()
+        return receipt
 
     async def list_for_caller(
         self,
@@ -260,6 +327,8 @@ class ReimbursementService:
         if row.status is not ReimbursementStatus.MANAGER_APPROVED:
             raise ConflictError("This claim is not awaiting HR approval.")
 
+        if payload.approve:
+            row.period_month = await self._settlement_month(row, payload.settlement_month)
         row.hr_reviewer_id = caller.employee_id
         row.hr_decided_at = datetime.now(UTC)
         row.hr_note = payload.note
@@ -274,6 +343,23 @@ class ReimbursementService:
         )
         await self._notify_applicant(row, approved=payload.approve, note=payload.note)
         return row
+
+    async def _settlement_month(self, row: Reimbursement, chosen: str | None) -> str:
+        """Which payroll month pays this claim out.
+
+        HR's choice wins; otherwise the claim keeps the month it was filed against
+        (the expense month). Either way the month must still be OPEN: paying into
+        a month whose payslips are already released means the money is never
+        actually handed over, because those slips are frozen snapshots. Refusing
+        loudly here beats an approved claim that quietly never gets paid.
+        """
+        month = chosen or row.period_month
+        if await self._payslips.list_for_month(month):
+            raise ConflictError(
+                f"Payroll for {month} has already been released, so nothing more can be "
+                "paid into it. Settle this claim in a later month."
+            )
+        return month
 
     async def withdraw(
         self, caller: CurrentUser, reimbursement_id: uuid.UUID

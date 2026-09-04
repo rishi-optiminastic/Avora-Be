@@ -1,7 +1,7 @@
 """Reimbursement — an employee expense claim, approved in two steps.
 
 An employee submits a claim (amount + category + what it was for + expense date,
-optional receipt). Their reporting MANAGER approves or rejects it first; only then
+any number of named proofs). Their reporting MANAGER approves or rejects it first; only then
 does HR/Admin give final approval. Fully-approved claims for a month feed the
 payroll register (the "Reimbursement" / "Business Expense Reimbursements" columns)
 and are paid with that month's salary.
@@ -17,7 +17,7 @@ from datetime import date, datetime
 from enum import StrEnum
 
 from sqlalchemy import BigInteger, Date, DateTime, ForeignKey, Index, String
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
@@ -58,12 +58,16 @@ class Reimbursement(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # submit; the payroll register reads approved claims by this key.
     period_month: Mapped[str] = mapped_column(String(7), index=True)
 
-    # Optional receipt — S3 object key when object storage is on, else the bytes
-    # live in `receipt_content` (same fallback ScreenshotService/WorkspaceFile use).
-    receipt_object_key: Mapped[str | None] = mapped_column(String(512), default=None)
-    receipt_filename: Mapped[str | None] = mapped_column(String(255), default=None)
-    receipt_content_type: Mapped[str | None] = mapped_column(String(128), default=None)
-    receipt_content: Mapped[bytes | None] = mapped_column(default=None)
+    # Proofs live in their own table — a claim usually needs more than one document
+    # (invoice + toll slip + boarding pass), each named by the person submitting so
+    # a reviewer can tell them apart without opening every file. Eagerly loaded:
+    # every list view shows how many proofs a claim carries.
+    receipts: Mapped[list[ReimbursementReceipt]] = relationship(
+        back_populates="reimbursement",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="ReimbursementReceipt.created_at",
+    )
 
     status: Mapped[ReimbursementStatus] = mapped_column(
         default=ReimbursementStatus.SUBMITTED, index=True
@@ -87,4 +91,29 @@ class Reimbursement(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     @property
     def has_receipt(self) -> bool:
-        return bool(self.receipt_object_key or self.receipt_content)
+        return bool(self.receipts)
+
+
+class ReimbursementReceipt(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """One named proof attached to a claim (invoice, bill, boarding pass…).
+
+    Bytes go to S3 when object storage is on — only `object_key` is stored — else
+    they live in `content`, the same fallback screenshots and workspace files use.
+    Deleting the claim deletes its proofs (cascade both in the ORM and the FK).
+    """
+
+    __tablename__ = "reimbursement_receipts"
+
+    reimbursement_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("reimbursements.id", ondelete="CASCADE"), index=True
+    )
+    # What the claimant calls this document. Defaulted from the filename when they
+    # do not type one, so a proof is never nameless in the reviewer's list.
+    label: Mapped[str] = mapped_column(String(120))
+    filename: Mapped[str | None] = mapped_column(String(255), default=None)
+    content_type: Mapped[str] = mapped_column(String(128), default="application/octet-stream")
+    size_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    object_key: Mapped[str | None] = mapped_column(String(512), default=None)
+    content: Mapped[bytes | None] = mapped_column(default=None)
+
+    reimbursement: Mapped[Reimbursement] = relationship(back_populates="receipts")

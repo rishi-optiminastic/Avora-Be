@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, date, datetime
 
@@ -9,6 +10,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.models.reimbursement import ReimbursementCategory, ReimbursementStatus
 from app.schemas.common import ORMModel
+
+_MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 
 class ReimbursementCreate(BaseModel):
@@ -32,6 +35,33 @@ class ReimbursementDecision(BaseModel):
 
     approve: bool
     note: str | None = Field(default=None, max_length=1000)
+    # Which payroll month actually pays this out (YYYY-MM). HR only: the expense
+    # month is a reasonable default but often the wrong one — an August expense
+    # claimed on the 20th of September has already missed the payrun that settled
+    # August, so it has to be pushed to the next open month. Omitted means "leave
+    # it where it is". Ignored on the manager step and on a rejection.
+    settlement_month: str | None = None
+
+    @field_validator("settlement_month")
+    @classmethod
+    def _valid_settlement_month(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not _MONTH_RE.match(value):
+            raise ValueError("settlement_month must be YYYY-MM.")
+        return value
+
+
+class ReimbursementReceiptRead(ORMModel):
+    """One named proof on a claim. Deliberately no bytes and no storage key — the
+    file is fetched through the scoped download route, never handed out inline."""
+
+    id: uuid.UUID
+    label: str
+    filename: str | None
+    content_type: str
+    size_bytes: int
+    created_at: datetime
 
 
 class ReimbursementRead(ORMModel):
@@ -43,8 +73,8 @@ class ReimbursementRead(ORMModel):
     expense_date: date
     period_month: str
     status: ReimbursementStatus
-    receipt_filename: str | None
     has_receipt: bool
+    receipts: list[ReimbursementReceiptRead] = Field(default_factory=list)
     manager_reviewer_id: uuid.UUID | None
     manager_decided_at: datetime | None
     manager_note: str | None

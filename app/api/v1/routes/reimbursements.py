@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, File, Query, Response, UploadFile, status
+from fastapi import APIRouter, File, Form, Query, Response, UploadFile, status
 from fastapi.responses import RedirectResponse
 
 from app.core import storage
@@ -115,48 +115,67 @@ async def withdraw_reimbursement(
     )
 
 
-@router.post("/{reimbursement_id}/receipt", response_model=ReimbursementRead)
-async def attach_receipt(
+@router.post(
+    "/{reimbursement_id}/receipts",
+    response_model=ReimbursementRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def add_receipt(
     reimbursement_id: uuid.UUID,
     caller: UploadRateLimitDep,
     service: ReimbursementServiceDep,
     file: Annotated[UploadFile, File()],
+    label: Annotated[str | None, Form()] = None,
 ) -> ReimbursementRead:
-    """Attach the invoice to your own claim, while it can still be edited.
+    """Attach one named proof to your own claim, while it can still be edited.
 
-    PDF or image, 10 MB max. The claimant uploads; reviewers read it via the
-    download route below.
+    PDF or image, 10 MB each, up to ten per claim. `label` is what the reviewer
+    sees in the list; it falls back to the filename when omitted.
     """
     data = await file.read()
-    row = await service.attach_receipt(
+    row = await service.add_receipt(
         caller,
         reimbursement_id,
         data,
+        label=label,
         filename=file.filename,
         content_type=file.content_type or "application/octet-stream",
     )
     return ReimbursementRead.model_validate(row)
 
 
-@router.get("/{reimbursement_id}/receipt")
+@router.delete("/{reimbursement_id}/receipts/{receipt_id}", response_model=ReimbursementRead)
+async def remove_receipt(
+    reimbursement_id: uuid.UUID,
+    receipt_id: uuid.UUID,
+    caller: CurrentUserDep,
+    service: ReimbursementServiceDep,
+) -> ReimbursementRead:
+    """Remove one proof from your own claim, while it can still be edited."""
+    row = await service.remove_receipt(caller, reimbursement_id, receipt_id)
+    return ReimbursementRead.model_validate(row)
+
+
+@router.get("/{reimbursement_id}/receipts/{receipt_id}")
 async def download_receipt(
     reimbursement_id: uuid.UUID,
+    receipt_id: uuid.UUID,
     caller: DownloadRateLimitDep,
     service: ReimbursementServiceDep,
 ) -> Response:
-    """The attached invoice, scoped to whoever may see the claim (404 otherwise).
+    """One proof, scoped to whoever may see the claim (404 otherwise).
 
     Served as a neutral-type attachment — an uploaded file is never handed back
     with a type a browser will execute.
     """
-    row = await service.get_receipt(caller, reimbursement_id)
-    safe = _safe_filename(row.receipt_filename or "invoice")
-    if row.receipt_object_key:
-        url = storage.presigned_get_url(row.receipt_object_key, download_filename=safe)
+    receipt = await service.get_receipt(caller, reimbursement_id, receipt_id)
+    safe = _safe_filename(receipt.filename or receipt.label or "proof")
+    if receipt.object_key:
+        url = storage.presigned_get_url(receipt.object_key, download_filename=safe)
         return RedirectResponse(url, status_code=307)
-    if row.receipt_content is not None:
+    if receipt.content is not None:
         return Response(
-            content=row.receipt_content,
+            content=receipt.content,
             media_type="application/octet-stream",
             headers={"Content-Disposition": f'attachment; filename="{safe}"'},
         )

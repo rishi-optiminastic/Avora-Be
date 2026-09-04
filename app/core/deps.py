@@ -778,8 +778,11 @@ def get_reimbursement_service(
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
     notifications: Annotated[NotificationService, Depends(get_notification_service)],
     settings: SettingsDep,
+    payslips: Annotated[PayslipRepository, Depends(get_payslip_repo)],
 ) -> ReimbursementService:
-    return ReimbursementService(reimbursements, employees, audit, notifications, settings)
+    return ReimbursementService(
+        reimbursements, employees, audit, notifications, settings, payslips
+    )
 
 
 def get_payroll_adjustment_service(
