@@ -41,7 +41,7 @@ def upgrade() -> None:
         # tuned a value by hand, that decision outranks this migration.
         op.execute(
             sa.text(
-                f"UPDATE leave_policies SET {column} = :written "  # noqa: S608
+                f"UPDATE leave_policy SET {column} = :written "  # noqa: S608
                 f"WHERE {column} = :placeholder"
             ).bindparams(written=written, placeholder=placeholder)
         )
@@ -51,7 +51,7 @@ def downgrade() -> None:
     for column, written, placeholder in _VALUES:
         op.execute(
             sa.text(
-                f"UPDATE leave_policies SET {column} = :placeholder "  # noqa: S608
+                f"UPDATE leave_policy SET {column} = :placeholder "  # noqa: S608
                 f"WHERE {column} = :written"
             ).bindparams(written=written, placeholder=placeholder)
         )

@@ -1,4 +1,4 @@
-"""Widen audit_logs.target to TEXT.
+"""Widen audit_log.target to TEXT.
 
 The payroll export records exactly whose bank details left the system (rule
 5.7), which is a list of employee ids. Seventeen people overflow varchar(256),
@@ -25,7 +25,7 @@ depends_on = None
 
 def upgrade() -> None:
     op.alter_column(
-        "audit_logs",
+        "audit_log",
         "target",
         existing_type=sa.String(length=256),
         type_=sa.Text(),
@@ -36,9 +36,9 @@ def upgrade() -> None:
 def downgrade() -> None:
     # Anything already longer than 256 would not fit again; truncate first so the
     # narrowing cannot fail on real data.
-    op.execute(sa.text("UPDATE audit_logs SET target = left(target, 256) WHERE target IS NOT NULL"))
+    op.execute(sa.text("UPDATE audit_log SET target = left(target, 256) WHERE target IS NOT NULL"))
     op.alter_column(
-        "audit_logs",
+        "audit_log",
         "target",
         existing_type=sa.Text(),
         type_=sa.String(length=256),
