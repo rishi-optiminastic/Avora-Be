@@ -77,6 +77,14 @@ class LeaveTypeBalance(BaseModel):
     used: float  # approved days in the current leave year
     pending: float  # submitted-but-undecided days in the current leave year
     remaining: float  # allocated - used - pending (may be negative if over-quota)
+    # False while the employee's tenure band grants none of this type — during
+    # probation, planned and annual leave are not yet earned. Distinct from a
+    # quota that has simply run out: both read as 0 remaining, but only one of
+    # them can be explained to the person looking at it, and only one of them
+    # will still be 0 tomorrow no matter what they do.
+    eligible: bool = True
+    # Plain-language reason when `eligible` is False, ready to show as-is.
+    ineligible_reason: str | None = None
 
 
 class LeaveBalanceRead(BaseModel):

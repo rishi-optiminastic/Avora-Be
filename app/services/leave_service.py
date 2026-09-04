@@ -434,9 +434,19 @@ class LeaveService:
             if row is not None:
                 if row.monthly_accrual_days is not None:
                     accruing.append(leave_type)
-                    return accrued_units(
+                    earned = accrued_units(
                         accrual_start, org_today, per_month=float(row.monthly_accrual_days)
                     )
+                    # Accrual runs toward a ceiling, never past it: the band's own
+                    # figure when it sets one, otherwise the org policy. Without
+                    # this, "1 a month" reached 12 however few days HR had actually
+                    # granted, so lowering planned leave in Settings did nothing.
+                    ceiling = (
+                        float(row.annual_days)
+                        if row.annual_days is not None
+                        else float(getattr(policy, policy_attr))
+                    )
+                    return min(earned, ceiling)
                 if row.annual_days is not None:
                     return float(row.annual_days)
             return float(getattr(policy, policy_attr))
@@ -460,6 +470,10 @@ class LeaveService:
             allocated = quota(leave_type, policy_attr, alloc_attr)
             used = bucket(approved, types)
             pend = bucket(pending, types)
+            # A band that grants none of a type has not *run out* of it — the
+            # person has not earned it yet. Both read as 0 remaining, so say
+            # which, or the UI can only show an unexplained zero.
+            not_yet = allocated == 0 and used == 0 and pend == 0
             balances.append(
                 LeaveTypeBalance(
                     leave_type=leave_type,
@@ -467,6 +481,12 @@ class LeaveService:
                     used=used,
                     pending=pend,
                     remaining=allocated - used - pend,
+                    eligible=not not_yet,
+                    ineligible_reason=(
+                        _ineligible_reason(tier, confirmed_on)
+                        if not_yet
+                        else None
+                    ),
                 )
             )
         # Unpaid leave is uncapped — surfaced for visibility (used/pending only).
@@ -542,6 +562,18 @@ def _utc_date(value: datetime) -> date:
     if value.tzinfo is None:
         value = value.replace(tzinfo=UTC)
     return value.astimezone(UTC).date()
+
+
+def _ineligible_reason(tier: TenureStatus, confirmed_on: date) -> str:
+    """Why this leave type is at zero, in words the employee can act on.
+
+    Only reached for a type the person's band grants none of, so the reason is
+    always about tenure — either probation is still running, or the type needs a
+    full year of service.
+    """
+    if tier is TenureStatus.PROBATION:
+        return f"Available once you complete probation on {confirmed_on:%d %b %Y}"
+    return "Available after one year of service"
 
 
 def _leave_year_window(anchor: date, today: date) -> tuple[date, date]:

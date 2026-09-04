@@ -1034,3 +1034,64 @@ async def test_pf_defaults_to_on_when_the_field_is_omitted(
     )
     assert resp.status_code in (200, 201), resp.text
     assert resp.json()["pf_enabled"] is True
+
+
+async def test_exporting_the_whole_org_does_not_overflow_the_audit_log(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """The export records exactly whose bank details left the system, and that
+    audit write happens inside the request — so an oversized target killed the
+    export itself. Seventeen employees' ids are ~630 characters; the column used
+    to hold 256, and HR just saw "export failed"."""
+    people = [
+        Employee(
+            hr_external_id=f"bulk-{i}",
+            work_email=f"bulk{i}@acme.com",
+            full_name=f"Bulk Person {i}",
+            role=Role.EMPLOYEE,
+            status=EmployeeStatus.ACTIVE,
+            is_active=True,
+        )
+        for i in range(20)
+    ]
+    db.add_all(people)
+    await db.commit()
+
+    headers = auth_headers(settings, seed.admin)
+    for person in people:
+        await client.put(f"/api/v1/employees/{person.id}/compensation", json=_COMP, headers=headers)
+    await client.put("/api/v1/payroll/settings", json=_SETTINGS, headers=headers)
+
+    # Whole-org export.
+    everyone = await client.get("/api/v1/payroll/export?month=2099-06", headers=headers)
+    assert everyone.status_code == 200, everyone.text
+    assert everyone.content.startswith(b"PK")  # a real xlsx
+
+    # And an explicit selection of all of them, which is what actually broke:
+    # 20 ids concatenated is far past the old 256-character ceiling.
+    query = "&".join(f"employee_id={p.id}" for p in people)
+    selected = await client.get(f"/api/v1/payroll/export?month=2099-06&{query}", headers=headers)
+    assert selected.status_code == 200, selected.text
+    assert selected.content.startswith(b"PK")
+
+
+def test_the_export_audit_scope_names_who_without_growing_unbounded() -> None:
+    """Small selections are enumerated so the log is readable; large ones collapse
+    to a count plus a digest, which still tells two different selections apart."""
+    from app.services.payroll_service import _export_audit_scope
+
+    ids = [uuid.uuid4() for _ in range(20)]
+
+    # A whole-org export and a one-person export must never look alike.
+    assert _export_audit_scope(None, ids).startswith("all:")
+    assert _export_audit_scope(ids[:1], ids[:1]) == str(ids[0])
+
+    small = _export_audit_scope(ids[:5], ids[:5])
+    assert small.count(",") == 4  # every id named
+
+    big = _export_audit_scope(ids, ids)
+    assert big.startswith("selected:20:")
+    assert len(big) < 256  # the ceiling that used to break the export
+    # A different selection of the same size is still distinguishable.
+    other = [uuid.uuid4() for _ in range(20)]
+    assert _export_audit_scope(other, other) != big

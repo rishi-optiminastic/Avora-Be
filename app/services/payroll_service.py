@@ -17,6 +17,7 @@ import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
+from hashlib import sha256
 from zoneinfo import ZoneInfo
 
 from app.core.config import Settings
@@ -121,6 +122,29 @@ def _parse_month(month: str) -> tuple[int, int]:
     except ValueError as exc:
         raise ValidationError("Month must be in YYYY-MM format.") from exc
     return year, m
+
+
+# Beyond this many people, the audit row names the count and a digest of the
+# selection instead of every id — enough to tell two different exports apart
+# without writing kilobytes for a routine whole-org run.
+_AUDIT_ID_LIMIT = 8
+
+
+def _export_audit_scope(
+    employee_ids: Sequence[uuid.UUID] | None, exported: Sequence[uuid.UUID]
+) -> str:
+    """Who this export covered, for the audit log (§5.7).
+
+    Bank details leave the system here, so a whole-org export and a one-person
+    export must never look alike in the log.
+    """
+    if employee_ids is None:
+        return f"all:{len(exported)}"
+    ids = sorted(str(i) for i in exported)
+    if len(ids) <= _AUDIT_ID_LIMIT:
+        return ",".join(ids)
+    digest = sha256(",".join(ids).encode()).hexdigest()[:16]
+    return f"selected:{len(ids)}:{digest}"
 
 
 def _month_label(year: int, month: int) -> str:
@@ -563,11 +587,7 @@ class PayrollService:
         xlsx = build_payroll_xlsx(rows, month_label=_month_label(year, m), currency=est.currency)
         # Bank details leave the system here, so record exactly whose (§5.7) — a
         # whole-org export and a one-person export must not look alike in the log.
-        scope = (
-            "all"
-            if employee_ids is None
-            else ",".join(sorted(str(line.employee_id) for line in lines))
-        )
+        scope = _export_audit_scope(employee_ids, [line.employee_id for line in lines])
         await self._audit.append(
             actor=str(caller.employee_id),
             action="payroll.export",

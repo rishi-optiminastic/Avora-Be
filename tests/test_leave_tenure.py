@@ -140,19 +140,44 @@ async def test_confirmed_stacks_sick_to_six_and_starts_accruing_planned(
     assert payload["probation_end_date"] == add_months(hire, _PROBATION_MONTHS).isoformat()
 
 
-async def test_tenured_falls_through_to_the_org_policy(
+async def test_tenured_gets_the_full_written_entitlement(
     client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
 ) -> None:
-    """The tenured band has no rules yet, so it must inherit the org defaults
-    rather than silently inheriting the confirmed band's."""
+    """A year in, the whole policy applies: planned 8, annual 6, sick 6 — three
+    SEPARATE balances, not one pooled 20. The band used to be missing entirely and
+    fell through to the org defaults (12/15/8), which contradicted the policy on
+    every one of them."""
     await _set_hire_date(db, seed.report.id, add_months(datetime.now(UTC).date(), -18))
 
     payload = await _balance(client, settings, seed.report)
 
     assert payload["tenure_status"] == TenureStatus.TENURED.value
-    assert _allocated(payload, LeaveType.PLANNED) == 12.0  # LeavePolicy default
-    assert _allocated(payload, LeaveType.SICK) == 8.0
+    assert _allocated(payload, LeaveType.PLANNED) == 8.0
+    assert _allocated(payload, LeaveType.ANNUAL) == 6.0
+    assert _allocated(payload, LeaveType.SICK) == 6.0
+    assert _allocated(payload, LeaveType.BIRTHDAY) == 1.0
+    # Granted up front at this band, so nothing is still accruing.
     assert payload["accruing_types"] == []
+
+
+async def test_planned_leave_accrues_toward_eight_and_stops(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """A confirmed employee earns planned leave a month at a time, but the policy
+    grants 8 a year — accrual used to run on to 12."""
+    # Confirmed 11 months ago: far past 8 months of accrual, still under a year
+    # of total service would be impossible, so use a long-tenured hire and read
+    # the CONFIRMED band directly instead.
+    await _set_hire_date(db, seed.report.id, add_months(datetime.now(UTC).date(), -10))
+    payload = await _balance(client, settings, seed.report)
+
+    assert payload["tenure_status"] == TenureStatus.CONFIRMED.value
+    # Probation ended 4 months in, so ~6 months of accrual have run: under the cap.
+    planned = _allocated(payload, LeaveType.PLANNED)
+    assert 0 < planned <= 8.0
+    assert LeaveType.PLANNED.value in payload["accruing_types"]  # type: ignore[operator]
+    # Annual leave still needs a full year.
+    assert _allocated(payload, LeaveType.ANNUAL) == 0.0
 
 
 async def test_a_per_employee_override_still_beats_the_band(
@@ -201,3 +226,91 @@ async def test_a_personal_probation_length_overrides_the_org_default(
     # The confirmation date must move with it, or the badge and the entitlement
     # would tell the employee two different stories.
     assert overridden["probation_end_date"] == add_months(hire, 3).isoformat()
+
+
+async def test_probation_says_why_planned_leave_is_zero_not_just_that_it_is(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """A quota the band grants none of has not run out — it is not earned yet.
+    Both read as 0 remaining, so the balance has to distinguish them or the UI can
+    only show an unexplained zero."""
+    hire = datetime.now(UTC).date() - timedelta(days=30)
+    await _set_hire_date(db, seed.report.id, hire)
+
+    payload = await _balance(client, settings, seed.report)
+    rows = {r["leave_type"]: r for r in payload["balances"]}  # type: ignore[union-attr]
+
+    planned = rows[LeaveType.PLANNED.value]
+    assert planned["allocated"] == 0.0
+    assert planned["eligible"] is False
+    assert "complete probation" in planned["ineligible_reason"]
+    # The date named is the one the badge shows, not a different reckoning.
+    assert payload["probation_end_date"][:4] in planned["ineligible_reason"]
+
+    # Sick leave IS granted during probation, so it stays actionable.
+    sick = rows[LeaveType.SICK.value]
+    assert sick["allocated"] == 4.0
+    assert sick["eligible"] is True
+    assert sick["ineligible_reason"] is None
+
+
+async def test_a_tenured_employee_has_nothing_marked_ineligible(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    await _set_hire_date(db, seed.report.id, add_months(datetime.now(UTC).date(), -18))
+    payload = await _balance(client, settings, seed.report)
+    tracked = [r for r in payload["balances"] if r["leave_type"] != "unpaid"]  # type: ignore[union-attr]
+    assert all(r["eligible"] for r in tracked)
+
+
+async def test_a_used_up_quota_is_still_eligible(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """Spent is not the same as unearned: a confirmed employee who has taken all
+    their sick leave must not be told to wait for probation to end."""
+    await _set_hire_date(db, seed.report.id, add_months(datetime.now(UTC).date(), -7))
+    payload = await _balance(client, settings, seed.report)
+    rows = {r["leave_type"]: r for r in payload["balances"]}  # type: ignore[union-attr]
+    assert rows[LeaveType.PLANNED.value]["eligible"] is True
+
+
+async def test_planned_accrual_never_exceeds_the_annual_grant(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """The cap is the point: 1 a month for long enough used to reach 12, which is
+    the old org default and four days more than the policy grants."""
+    # Joined 11 months ago, so probation ended 5 months in and ~6 accrual months
+    # have run — then push the clock far enough that an uncapped rate would blow
+    # past 8 by using a hire date almost a year old.
+    await _set_hire_date(db, seed.report.id, add_months(datetime.now(UTC).date(), -11))
+    payload = await _balance(client, settings, seed.report)
+    assert payload["tenure_status"] == TenureStatus.CONFIRMED.value
+    assert _allocated(payload, LeaveType.PLANNED) <= 8.0
+
+
+def test_the_three_balances_stay_separate() -> None:
+    """HR confirmed PL/AL/SL are three independent quotas, not one pool of 20.
+    Their sum happening to be 20 is a coincidence of the numbers, and nothing may
+    treat it as a shared bucket."""
+    from app.models.leave_policy import LeavePolicy
+
+    # Column defaults, not instance attributes: SQLAlchemy applies these on INSERT.
+    def default(column: str) -> int:
+        return int(LeavePolicy.__table__.c[column].default.arg)  # type: ignore[union-attr]
+
+    assert default("annual_planned_days") == 8
+    assert default("annual_days") == 6
+    assert default("annual_sick_days") == 6
+    # Three columns, not one — there is no combined field to spend from.
+    assert "combined_leave_days" not in LeavePolicy.__table__.c
+
+
+def test_tenured_is_deliberately_not_a_seeded_band() -> None:
+    """A band expresses a tenure RESTRICTION; the full entitlement stays in the
+    org policy so HR can change it in Settings. Seeding tenured here would take
+    planned/annual/sick off that screen."""
+    from app.repositories.leave_tier_quota import _SEED
+
+    assert TenureStatus.TENURED not in _SEED
+    assert TenureStatus.PROBATION in _SEED
+    assert TenureStatus.CONFIRMED in _SEED

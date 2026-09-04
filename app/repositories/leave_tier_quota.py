@@ -21,12 +21,18 @@ from app.models.leave_tier_quota import LeaveTierQuota
 # always has something to resolve against. `None` for a leave type simply means
 # "no row" — that band inherits the org LeavePolicy for it.
 #
-#   probation — 4 sick, 1 birthday, and no planned/annual time off at all.
+#   probation — 4 sick, 1 birthday, and no planned or annual time off at all.
 #   confirmed — sick rises to 6 (the probation 4 plus 2 more, counted against the
 #               same leave year so days already taken still count), and planned
-#               leave starts accruing at 1/month with carryforward.
-#   tenured   — deliberately absent: inherits the org policy until its own rules
-#               are decided.
+#               leave starts accruing at 1/month toward its annual 8. Annual leave
+#               still needs a full year, so it stays at 0.
+#   tenured   — deliberately ABSENT, and that is the design: a band expresses a
+#               tenure RESTRICTION, while the full entitlement lives in the org
+#               LeavePolicy, which HR edits in Settings. Hard-coding tenured here
+#               would quietly take planned/annual/sick away from that screen.
+#
+# Planned/annual/sick are three SEPARATE balances (HR confirmed), not one pooled
+# 20 — sick leave can never be spent as planned time off.
 _SEED: dict[TenureStatus, dict[LeaveType, tuple[int | None, float | None]]] = {
     TenureStatus.PROBATION: {
         LeaveType.SICK: (4, None),
@@ -37,7 +43,7 @@ _SEED: dict[TenureStatus, dict[LeaveType, tuple[int | None, float | None]]] = {
     TenureStatus.CONFIRMED: {
         LeaveType.SICK: (6, None),
         LeaveType.BIRTHDAY: (1, None),
-        LeaveType.PLANNED: (None, 1.0),
+        LeaveType.PLANNED: (None, 1.0),  # 1 a month, capped by the org policy
         LeaveType.ANNUAL: (0, None),
     },
 }

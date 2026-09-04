@@ -121,16 +121,16 @@ async def test_balance_self(
     by_type = {b["leave_type"]: b for b in body["balances"]}
 
     planned = by_type["planned"]
-    assert planned["allocated"] == 12  # default policy
+    assert planned["allocated"] == 8  # written policy: 8 planned days
     assert planned["used"] == expected["planned_used"]
     assert planned["pending"] == 0
-    assert planned["remaining"] == 12 - expected["planned_used"]
+    assert planned["remaining"] == 8 - expected["planned_used"]
 
     sick = by_type["sick"]
-    assert sick["allocated"] == 8
+    assert sick["allocated"] == 6
     assert sick["used"] == 0
     assert sick["pending"] == expected["sick_pending"]
-    assert sick["remaining"] == 8 - expected["sick_pending"]
+    assert sick["remaining"] == 6 - expected["sick_pending"]
 
 
 async def test_balance_scope(
@@ -161,7 +161,7 @@ async def test_policy_readable_by_everyone(
 ) -> None:
     resp = await client.get("/api/v1/leaves/policy", headers=auth_headers(settings, seed.report))
     assert resp.status_code == 200
-    assert resp.json()["annual_planned_days"] == 12
+    assert resp.json()["annual_planned_days"] == 8
 
 
 async def test_policy_update_is_hr_admin_only(

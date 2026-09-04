@@ -21,16 +21,16 @@ class LeavePolicy(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "leave_policy"
 
     # Annual entitlement (working days) per paid leave type, per leave year.
-    annual_planned_days: Mapped[int] = mapped_column(default=12)
-    annual_sick_days: Mapped[int] = mapped_column(default=8)
+    annual_planned_days: Mapped[int] = mapped_column(default=8)
+    annual_sick_days: Mapped[int] = mapped_column(default=6)
     # Additional paid leave types (see LeaveType). Each is an annual working-day
     # quota; birthday/maternity/paternity are further gated by profile fields
     # (date_of_birth / gender) in the service.
-    annual_days: Mapped[int] = mapped_column(default=15)
-    bereavement_days: Mapped[int] = mapped_column(default=5)
+    annual_days: Mapped[int] = mapped_column(default=6)
+    bereavement_days: Mapped[int] = mapped_column(default=3)
     birthday_days: Mapped[int] = mapped_column(default=1)
     maternity_days: Mapped[int] = mapped_column(default=90)
-    paternity_days: Mapped[int] = mapped_column(default=15)
+    paternity_days: Mapped[int] = mapped_column(default=7)
     marriage_days: Mapped[int] = mapped_column(default=5)
 
     # How long probation lasts, in months from the joining date. Drives the
