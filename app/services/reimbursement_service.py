@@ -361,6 +361,78 @@ class ReimbursementService:
             )
         return month
 
+    async def move_settlement_month(
+        self, caller: CurrentUser, reimbursement_id: uuid.UUID, settlement_month: str
+    ) -> Reimbursement:
+        """Move an APPROVED claim into a different payroll month.
+
+        The month is only decided once, at approval, and until now it was frozen
+        afterwards — so a claim approved into the wrong run sat there with no way
+        out. HR/finance can move it, subject to both ends being open:
+
+        - the month it is LEAVING must not be released, or it has already been
+          paid and moving it would quietly un-pay someone;
+        - the month it is GOING TO must not be released, or the money lands in a
+          frozen snapshot and is never handed over.
+        """
+        row = await self._reimbursements.get(reimbursement_id)
+        if row is None:
+            raise NotFoundError()
+        if not _can_review_hr(caller):
+            raise AuthorizationError()
+        if row.status is not ReimbursementStatus.APPROVED:
+            raise ConflictError("Only an approved claim is scheduled into a payroll month.")
+        if settlement_month == row.period_month:
+            return row
+        if await self._payslips.list_for_month(row.period_month):
+            raise ConflictError(
+                f"This claim was already paid in {row.period_month}'s released payroll, "
+                "so it cannot be moved out of it."
+            )
+        previous = row.period_month
+        row.period_month = await self._settlement_month(row, settlement_month)
+        await self._reimbursements.flush()
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="reimbursement.settlement_month_move",
+            target=f"reimbursement:{row.id}:{previous}->{row.period_month}",
+        )
+        return row
+
+    async def revoke_approval(
+        self, caller: CurrentUser, reimbursement_id: uuid.UUID, note: str | None
+    ) -> Reimbursement:
+        """Take an approved claim back out of payroll altogether.
+
+        For a claim that should not be paid at all, rather than one filed against
+        the wrong month. It becomes REJECTED — the history stays, the claim simply
+        stops being payable. Refused once the money has actually gone out.
+        """
+        row = await self._reimbursements.get(reimbursement_id)
+        if row is None:
+            raise NotFoundError()
+        if not _can_review_hr(caller):
+            raise AuthorizationError()
+        if row.status is not ReimbursementStatus.APPROVED:
+            raise ConflictError("This claim is not approved.")
+        if await self._payslips.list_for_month(row.period_month):
+            raise ConflictError(
+                f"This claim was already paid in {row.period_month}'s released payroll. "
+                "Recover it through a payroll adjustment instead."
+            )
+        row.status = ReimbursementStatus.REJECTED
+        row.hr_reviewer_id = caller.employee_id
+        row.hr_decided_at = datetime.now(UTC)
+        row.hr_note = note
+        await self._reimbursements.flush()
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="reimbursement.approval_revoke",
+            target=f"reimbursement:{row.id}",
+        )
+        await self._notify_applicant(row, approved=False, note=note)
+        return row
+
     async def withdraw(
         self, caller: CurrentUser, reimbursement_id: uuid.UUID
     ) -> Reimbursement:

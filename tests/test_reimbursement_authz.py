@@ -615,3 +615,119 @@ async def test_a_malformed_settlement_month_is_rejected(
             headers=auth_headers(settings, await _hr(db)),
         )
         assert resp.status_code == 422, f"{bad}: {resp.text}"
+
+
+async def _approved_claim(
+    client: AsyncClient, settings: Settings, seed: _Seed, hr: Employee
+) -> str:
+    claim_id = await _to_hr_step(client, settings, seed)
+    done = await client.post(
+        f"/api/v1/reimbursements/{claim_id}/hr-decision",
+        json={"approve": True},
+        headers=auth_headers(settings, hr),
+    )
+    assert done.status_code == 200, done.text
+    return claim_id
+
+
+async def test_hr_moves_an_already_approved_claim_to_another_month(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """The month is chosen at approval and used to be frozen afterwards, so a claim
+    approved into the wrong run had no way out of it."""
+    hr = await _hr(db)
+    claim_id = await _approved_claim(client, settings, seed, hr)
+
+    moved = await client.patch(
+        f"/api/v1/reimbursements/{claim_id}/settlement-month",
+        json={"settlement_month": "2099-12"},
+        headers=auth_headers(settings, hr),
+    )
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["period_month"] == "2099-12"
+    assert moved.json()["status"] == "approved"  # still payable, just later
+
+
+async def test_a_claim_already_paid_out_cannot_be_moved_or_revoked(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """Once its month is released the money has gone out. Moving it would quietly
+    un-pay someone; revoking it would claw back pay outside payroll's own record."""
+    from app.models.payslip import Payslip
+
+    hr = await _hr(db)
+    claim_id = await _approved_claim(client, settings, seed, hr)
+    period = (
+        await client.get(f"/api/v1/reimbursements/{claim_id}", headers=auth_headers(settings, hr))
+    ).json()["period_month"]
+
+    db.add(Payslip(employee_id=seed.report.id, period_month=period, net_minor=1))
+    await db.commit()
+
+    moved = await client.patch(
+        f"/api/v1/reimbursements/{claim_id}/settlement-month",
+        json={"settlement_month": "2099-12"},
+        headers=auth_headers(settings, hr),
+    )
+    assert moved.status_code == 409
+    assert "already paid" in moved.text
+
+    revoked = await client.post(
+        f"/api/v1/reimbursements/{claim_id}/revoke-approval",
+        json={"note": "duplicate"},
+        headers=auth_headers(settings, hr),
+    )
+    assert revoked.status_code == 409
+
+
+async def test_hr_revokes_an_approval_to_take_it_out_of_payroll(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """For a claim that should not be paid at all. The history stays; it simply
+    stops being payable."""
+    hr = await _hr(db)
+    claim_id = await _approved_claim(client, settings, seed, hr)
+
+    revoked = await client.post(
+        f"/api/v1/reimbursements/{claim_id}/revoke-approval",
+        json={"note": "Submitted twice"},
+        headers=auth_headers(settings, hr),
+    )
+    assert revoked.status_code == 200, revoked.text
+    assert revoked.json()["status"] == "rejected"
+    assert revoked.json()["hr_note"] == "Submitted twice"
+
+
+async def test_neither_move_nor_revoke_is_open_to_everyone(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """Admin is excluded from reimbursements by design, and so is the claimant."""
+    hr = await _hr(db)
+    claim_id = await _approved_claim(client, settings, seed, hr)
+
+    for actor in (seed.report, seed.manager, seed.admin, seed.outsider):
+        moved = await client.patch(
+            f"/api/v1/reimbursements/{claim_id}/settlement-month",
+            json={"settlement_month": "2099-12"},
+            headers=auth_headers(settings, actor),
+        )
+        assert moved.status_code == 403, f"{actor.role} moved a claim"
+        revoked = await client.post(
+            f"/api/v1/reimbursements/{claim_id}/revoke-approval",
+            json={},
+            headers=auth_headers(settings, actor),
+        )
+        assert revoked.status_code == 403, f"{actor.role} revoked a claim"
+
+
+async def test_only_an_approved_claim_has_a_month_to_move(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    hr = await _hr(db)
+    claim_id = await _to_hr_step(client, settings, seed)  # manager-approved, not HR
+    resp = await client.patch(
+        f"/api/v1/reimbursements/{claim_id}/settlement-month",
+        json={"settlement_month": "2099-12"},
+        headers=auth_headers(settings, hr),
+    )
+    assert resp.status_code == 409

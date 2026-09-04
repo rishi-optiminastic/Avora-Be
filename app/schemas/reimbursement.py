@@ -64,6 +64,25 @@ class ReimbursementReceiptRead(ORMModel):
     created_at: datetime
 
 
+class SettlementMonthUpdate(BaseModel):
+    """HR/finance moving an approved claim into a different payroll month."""
+
+    settlement_month: str
+
+    @field_validator("settlement_month")
+    @classmethod
+    def _valid_month(cls, value: str) -> str:
+        if not _MONTH_RE.match(value):
+            raise ValueError("settlement_month must be YYYY-MM.")
+        return value
+
+
+class ApprovalRevoke(BaseModel):
+    """HR/finance taking an approved claim back out of payroll entirely."""
+
+    note: str | None = Field(default=None, max_length=1000)
+
+
 class ReimbursementRead(ORMModel):
     id: uuid.UUID
     employee_id: uuid.UUID
