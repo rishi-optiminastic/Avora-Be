@@ -29,7 +29,8 @@ def upgrade() -> None:
     op.execute(
         sa.text(
             "UPDATE leave_tier_quotas SET annual_days = 0 "
-            "WHERE tier = 'PROBATION' AND leave_type = 'BIRTHDAY' AND annual_days = 1"
+            "WHERE tier = 'PROBATION'::tenurestatus "
+            "  AND leave_type = 'BIRTHDAY'::leavetype AND annual_days = 1"
         )
     )
 
@@ -38,6 +39,7 @@ def downgrade() -> None:
     op.execute(
         sa.text(
             "UPDATE leave_tier_quotas SET annual_days = 1 "
-            "WHERE tier = 'PROBATION' AND leave_type = 'BIRTHDAY' AND annual_days = 0"
+            "WHERE tier = 'PROBATION'::tenurestatus "
+            "  AND leave_type = 'BIRTHDAY'::leavetype AND annual_days = 0"
         )
     )

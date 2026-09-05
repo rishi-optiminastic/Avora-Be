@@ -1,4 +1,9 @@
-"""Every table a migration touches must actually exist in the models.
+"""Migrations are checked here because nothing else checks them.
+
+Tests build the schema with `create_all` from the ORM, so a migration is never
+executed by the suite — a wrong table name, or a comparison against an enum
+column without a cast, passes everything and then takes the deploy down. Both
+have happened.
 
 Tests build the schema with `create_all` from the ORM, so a migration is never
 executed here — a wrong table name passes every test and then takes the deploy
@@ -56,3 +61,33 @@ def test_every_migration_names_a_real_table() -> None:
     assert not problems, "migration references a table that does not exist:\n  " + "\n  ".join(
         problems
     )
+
+
+# Columns that are Postgres ENUMs. Comparing one to a bound parameter fails with
+# "operator does not exist: <enum> = character varying" — Postgres will not
+# implicitly cast a parameter to an enum, though a bare literal coerces fine,
+# which is exactly what makes this easy to miss in review.
+_ENUM_COLUMNS = ("leave_type", "tier", "status", "kind", "target", "role")
+
+_PARAM = re.compile(r":\w+|%\(\w+\)s|\$\d+")
+
+
+def test_enum_comparisons_in_raw_sql_are_cast() -> None:
+    """A raw-SQL comparison of an enum column to a BOUND PARAMETER must cast it.
+
+    `leave_type = :lt` is the shape that broke a deploy; `leave_type = 'BIRTHDAY'`
+    is fine, and `leave_type = CAST(:lt AS leavetype)` is the fix.
+    """
+    problems: list[str] = []
+    for path in sorted(_VERSIONS.glob("*.py")):
+        source = path.read_text()
+        for column in _ENUM_COLUMNS:
+            for match in re.finditer(rf"\b{column}\s*=\s*([^\s,)]+)", source):
+                value = match.group(1)
+                if not _PARAM.match(value):
+                    continue  # a literal, or a column — both coerce
+                problems.append(
+                    f"{path.name}: `{column} = {value}` compares an enum column to a "
+                    f"bound parameter without a cast — use CAST({value} AS <enumtype>)"
+                )
+    assert not problems, "uncast enum comparison in a migration:\n  " + "\n  ".join(problems)

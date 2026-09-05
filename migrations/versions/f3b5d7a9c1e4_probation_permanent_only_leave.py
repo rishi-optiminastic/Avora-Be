@@ -10,6 +10,12 @@ Seeding is additive — `seed_defaults` never rewrites an existing row so it can
 undo a deliberate org edit — which means the new rows have to be inserted here
 for any environment whose tier table is already populated.
 
+`tier` and `leave_type` are Postgres ENUMS (tenurestatus / leavetype). A bound
+parameter arrives as varchar and Postgres will not implicitly cast it to an enum
+in a comparison — "operator does not exist: leavetype = character varying" — so
+every parameter is cast explicitly. A bare literal coerces fine, which is what
+makes this easy to miss.
+
 Revision ID: f3b5d7a9c1e4
 Revises: e2a4c6b8d0f3
 """
@@ -33,12 +39,14 @@ def upgrade() -> None:
         # org's own decision and outranks the policy default.
         op.execute(
             sa.text(
-                "INSERT INTO leave_tier_quotas (id, tier, leave_type, annual_days, "
-                "created_at, updated_at) "
-                "SELECT gen_random_uuid(), 'PROBATION', :lt, 0, now(), now() "
+                "INSERT INTO leave_tier_quotas "
+                "  (id, tier, leave_type, annual_days, created_at, updated_at) "
+                "SELECT gen_random_uuid(), 'PROBATION'::tenurestatus, "
+                "       CAST(:lt AS leavetype), 0, now(), now() "
                 "WHERE NOT EXISTS ("
                 "  SELECT 1 FROM leave_tier_quotas "
-                "  WHERE tier = 'PROBATION' AND leave_type = :lt"
+                "  WHERE tier = 'PROBATION'::tenurestatus "
+                "    AND leave_type = CAST(:lt AS leavetype)"
                 ")"
             ).bindparams(lt=leave_type)
         )
@@ -49,6 +57,8 @@ def downgrade() -> None:
         op.execute(
             sa.text(
                 "DELETE FROM leave_tier_quotas "
-                "WHERE tier = 'PROBATION' AND leave_type = :lt AND annual_days = 0"
+                "WHERE tier = 'PROBATION'::tenurestatus "
+                "  AND leave_type = CAST(:lt AS leavetype) "
+                "  AND annual_days = 0"
             ).bindparams(lt=leave_type)
         )
