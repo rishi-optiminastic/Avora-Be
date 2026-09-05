@@ -63,8 +63,10 @@ def test_on_time_full_day() -> None:
     assert v.late_login is False
 
 
-def test_late_in_window_is_regularizable() -> None:
-    v = classify_day(login_at=_at(9, 30), worked_minutes=500, regularized=False, policy=_POLICY)
+def test_a_late_arrival_short_of_the_hours_owed_is_regularizable() -> None:
+    """500 worked minutes clears an on-time day but not the 8 hours a late arrival
+    owes, so the day is Late and can be contested."""
+    v = classify_day(login_at=_at(9, 30), worked_minutes=470, regularized=False, policy=_POLICY)
     assert v.status is AttendanceStatus.LATE
     assert v.regularizable is True
 
@@ -75,9 +77,12 @@ def test_regularized_late_becomes_full() -> None:
     assert v.regularized is True
 
 
-def test_too_late_is_half_day() -> None:
-    v = classify_day(login_at=_at(10, 30), worked_minutes=500, regularized=False, policy=_POLICY)
-    assert v.status is AttendanceStatus.HALF_DAY
+def test_a_very_late_arrival_short_of_the_hours_is_not_a_full_day() -> None:
+    """There is no arrival cutoff any more — the hours owed decide. 400 minutes is
+    well short of the 8 hours a 10:30 start owes."""
+    v = classify_day(login_at=_at(10, 30), worked_minutes=400, regularized=False, policy=_POLICY)
+    assert v.status is not AttendanceStatus.FULL_DAY
+    assert v.late_login is True
 
 
 def test_too_few_hours_is_half_day() -> None:
@@ -124,8 +129,9 @@ def test_in_progress_on_time_is_present_not_half() -> None:
     assert v.late_login is False
 
 
-def test_in_progress_too_late_is_still_half() -> None:
-    # Arriving past the reg window is an arrival fact — half day even mid-day.
+def test_in_progress_late_is_not_judged_before_the_day_ends() -> None:
+    """A late arrival can still work the 8 hours owed, so mid-day the verdict is
+    Present, not a half day already decided against them."""
     v = classify_day(
         login_at=_at(10, 30),
         worked_minutes=60,
@@ -133,11 +139,13 @@ def test_in_progress_too_late_is_still_half() -> None:
         policy=_POLICY,
         day_complete=False,
     )
-    assert v.status is AttendanceStatus.HALF_DAY
+    assert v.status is AttendanceStatus.PRESENT
+    assert v.late_login is True
 
 
-def test_in_progress_late_in_window_is_regularizable() -> None:
-    # Late but inside the window, day still running → Late + regularizable.
+def test_in_progress_late_shows_as_present_with_the_late_flag() -> None:
+    """The lateness is recorded immediately (it counts toward the monthly
+    allowance), but the day is not scored until the hours are final."""
     v = classify_day(
         login_at=_at(9, 30),
         worked_minutes=60,
@@ -145,8 +153,8 @@ def test_in_progress_late_in_window_is_regularizable() -> None:
         policy=_POLICY,
         day_complete=False,
     )
-    assert v.status is AttendanceStatus.LATE
-    assert v.regularizable is True
+    assert v.status is AttendanceStatus.PRESENT
+    assert v.late_login is True
 
 
 def test_no_login_is_absent() -> None:
@@ -177,16 +185,27 @@ async def test_policy_read_open_write_admin_only(
     assert ok.json()["monthly_regularizations"] == 3
 
 
-def test_arriving_past_the_window_can_still_be_contested() -> None:
+def test_arriving_late_and_falling_short_can_still_be_contested() -> None:
     """The narrow window was the bug: someone an hour late had no way to ask.
 
-    Arriving after the regularization window is exactly when a person has a story
-    worth telling (traffic, a client visit, a doctor). The monthly credit cap —
-    enforced when a request is approved — is what limits this, not eligibility.
+    Arriving late is exactly when a person has a story worth telling (traffic, a
+    client visit, a doctor). The monthly credit cap — enforced when a request is
+    approved — is what limits this, not eligibility.
+    """
+    # Late, and short of the 8 hours a late arrival owes.
+    v = classify_day(login_at=_at(10, 30), worked_minutes=400, regularized=False, policy=_POLICY)
+    assert v.status is AttendanceStatus.LATE
+    assert v.regularizable is True
+
+
+def test_a_late_arrival_who_works_the_full_eight_hours_keeps_the_day() -> None:
+    """Attendance Guidelines 2026: lateness is paid for by owing 8 working hours
+    from the actual arrival, and by the 3-a-month allowance — not by an arrival
+    cutoff that made a 10:30 start unsalvageable however long the person stayed.
     """
     v = classify_day(login_at=_at(10, 30), worked_minutes=500, regularized=False, policy=_POLICY)
-    assert v.status is AttendanceStatus.HALF_DAY
-    assert v.regularizable is True
+    assert v.status is AttendanceStatus.FULL_DAY
+    assert v.late_login is True  # still counts toward the monthly allowance
 
 
 def test_a_day_with_no_punch_can_be_contested() -> None:

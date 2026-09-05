@@ -128,6 +128,12 @@ class _NoSessions:
     ) -> dict[uuid.UUID, object]:
         return {}
 
+    async def sessions_in_range(
+        self, employee_ids: object, start: object, end: object, source: object = None
+    ) -> list[object]:
+        # Read by the monthly late-arrival count; no sessions here either.
+        return []
+
 
 async def _add_activity(db: AsyncSession, seed: _Seed) -> None:
     """Two samples today for the report → attendance sees them as present."""

@@ -38,22 +38,31 @@ def test_working_days_between_inverted_range_is_zero() -> None:
     assert working_days_between(date(2026, 6, 20), date(2026, 6, 15), set()) == 0
 
 
-def test_leave_year_window_after_anniversary() -> None:
-    start, end = _leave_year_window(date(2020, 3, 10), date(2026, 6, 22))
-    assert start == date(2026, 3, 10)
-    assert end == date(2027, 3, 9)
+def test_leave_year_runs_april_to_march() -> None:
+    """Leave Policy 2026: the leave year is the financial year, so everyone resets
+    together on 1 April instead of on their own joining anniversary."""
+    start, end = _leave_year_window(date(2026, 6, 22))
+    assert start == date(2026, 4, 1)
+    assert end == date(2027, 3, 31)
 
 
-def test_leave_year_window_before_anniversary() -> None:
-    start, end = _leave_year_window(date(2020, 9, 10), date(2026, 6, 22))
-    assert start == date(2025, 9, 10)
-    assert end == date(2026, 9, 9)
+def test_january_to_march_belong_to_the_year_that_started_last_april() -> None:
+    """The off-by-one that bites: February 2027 is in the 2026-27 leave year, not
+    a 2027-28 one that has not begun."""
+    for day in (date(2027, 1, 1), date(2027, 2, 14), date(2027, 3, 31)):
+        assert _leave_year_window(day) == (date(2026, 4, 1), date(2027, 3, 31))
 
 
-def test_leave_year_window_leap_day_anchor() -> None:
-    start, end = _leave_year_window(date(2020, 2, 29), date(2025, 6, 1))
-    assert start == date(2025, 2, 28)
-    assert end == date(2026, 2, 27)
+def test_the_boundary_days_land_in_the_right_year() -> None:
+    assert _leave_year_window(date(2026, 3, 31)) == (date(2025, 4, 1), date(2026, 3, 31))
+    assert _leave_year_window(date(2026, 4, 1)) == (date(2026, 4, 1), date(2027, 3, 31))
+
+
+def test_the_window_is_the_same_for_everyone_regardless_of_joining_date() -> None:
+    """The whole point of the change: it no longer depends on the employee."""
+    assert _leave_year_window(date(2026, 6, 22)) == _leave_year_window(date(2026, 6, 22))
+    # A leap-day span still closes on 31 March.
+    assert _leave_year_window(date(2028, 2, 29)) == (date(2027, 4, 1), date(2028, 3, 31))
 
 
 # ---- balance over real leaves ---------------------------------------------- #

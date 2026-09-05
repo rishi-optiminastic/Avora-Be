@@ -106,7 +106,7 @@ async def _set_hire_date(db: AsyncSession, employee_id: object, hire: date) -> N
     await db.commit()
 
 
-async def test_probation_gets_four_sick_one_birthday_and_no_planned(
+async def test_probation_gets_only_four_sick_days(
     client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
 ) -> None:
     await _set_hire_date(db, seed.report.id, datetime.now(UTC).date() - timedelta(days=30))
@@ -115,8 +115,9 @@ async def test_probation_gets_four_sick_one_birthday_and_no_planned(
 
     assert payload["tenure_status"] == TenureStatus.PROBATION.value
     assert _allocated(payload, LeaveType.SICK) == 4.0
-    assert _allocated(payload, LeaveType.BIRTHDAY) == 1.0
-    # Planned/annual time off isn't earned yet.
+    # Birthday leave is a permanent-employee benefit, and planned/annual time off
+    # is not earned yet — so sick leave is the only thing this band grants.
+    assert _allocated(payload, LeaveType.BIRTHDAY) == 0.0
     assert _allocated(payload, LeaveType.PLANNED) == 0.0
     assert _allocated(payload, LeaveType.ANNUAL) == 0.0
 
@@ -155,7 +156,7 @@ async def test_tenured_gets_the_full_written_entitlement(
     assert _allocated(payload, LeaveType.PLANNED) == 8.0
     assert _allocated(payload, LeaveType.ANNUAL) == 6.0
     assert _allocated(payload, LeaveType.SICK) == 6.0
-    assert _allocated(payload, LeaveType.BIRTHDAY) == 1.0
+    assert _allocated(payload, LeaveType.BIRTHDAY) == 1.0  # permanent, so it applies
     # Granted up front at this band, so nothing is still accruing.
     assert payload["accruing_types"] == []
 
@@ -197,7 +198,7 @@ async def test_a_per_employee_override_still_beats_the_band(
     payload = await _balance(client, settings, seed.report)
     assert payload["tenure_status"] == TenureStatus.PROBATION.value
     assert _allocated(payload, LeaveType.SICK) == 20.0  # override wins
-    assert _allocated(payload, LeaveType.BIRTHDAY) == 1.0  # band still applies elsewhere
+    assert _allocated(payload, LeaveType.BIRTHDAY) == 0.0  # birthday leave is permanent-only
 
 
 async def test_a_personal_probation_length_overrides_the_org_default(
@@ -314,3 +315,53 @@ def test_tenured_is_deliberately_not_a_seeded_band() -> None:
     assert TenureStatus.TENURED not in _SEED
     assert TenureStatus.PROBATION in _SEED
     assert TenureStatus.CONFIRMED in _SEED
+
+
+async def test_probation_blocks_the_permanent_only_leave_types(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """Marriage, paternity and maternity are permanent-employee benefits. They
+    used to have no probation row at all, so they fell through to the org policy
+    and were available to someone in their first week."""
+    await _set_hire_date(db, seed.report.id, datetime.now(UTC).date() - timedelta(days=7))
+    payload = await _balance(client, settings, seed.report)
+    rows = {r["leave_type"]: r for r in payload["balances"]}  # type: ignore[union-attr]
+
+    assert payload["tenure_status"] == TenureStatus.PROBATION.value
+    for blocked in (LeaveType.MARRIAGE, LeaveType.PATERNITY, LeaveType.MATERNITY):
+        row = rows[blocked.value]
+        assert row["allocated"] == 0.0, f"{blocked.value} should not apply during probation"
+        assert row["eligible"] is False
+        assert "probation" in row["ineligible_reason"].lower()
+
+
+async def test_bereavement_applies_from_day_one_including_probation(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """The policy is explicit: parent bereavement leave is available "from Day 1,
+    including during probation". It must NOT be swept up with the rest."""
+    await _set_hire_date(db, seed.report.id, datetime.now(UTC).date() - timedelta(days=7))
+    payload = await _balance(client, settings, seed.report)
+    rows = {r["leave_type"]: r for r in payload["balances"]}  # type: ignore[union-attr]
+
+    bereavement = rows[LeaveType.BEREAVEMENT.value]
+    assert bereavement["allocated"] == 3.0
+    assert bereavement["eligible"] is True
+    assert bereavement["ineligible_reason"] is None
+
+
+async def test_the_leave_year_is_april_to_march_for_everyone(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """It used to run from each person's joining anniversary, so two colleagues
+    hired in different months had different windows."""
+    await _set_hire_date(db, seed.report.id, date(2024, 11, 20))
+    await _set_hire_date(db, seed.manager.id, date(2023, 2, 3))
+
+    mine = await _balance(client, settings, seed.report)
+    theirs = await _balance(client, settings, seed.manager)
+
+    assert mine["leave_year_start"] == theirs["leave_year_start"]
+    assert mine["leave_year_end"] == theirs["leave_year_end"]
+    assert str(mine["leave_year_start"]).endswith("-04-01")
+    assert str(mine["leave_year_end"]).endswith("-03-31")

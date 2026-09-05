@@ -26,6 +26,14 @@ class PolicySpec:
     working_days_per_week: int
     timezone: str
     full_day_grace_minutes: int = 0
+    # Attendance Guidelines 2026: a late arrival must "complete 8 working hours
+    # from their actual time of arrival" — a stricter bar than the normal day,
+    # because arriving late does not shorten the day owed.
+    late_full_day_minutes: int = 480
+    # "If an employee reports after 9:30 AM more than 3 times in a month, any
+    # subsequent late arrival beyond the permitted 3 instances will be considered
+    # as a half-day." The first three are late but still full days on hours.
+    monthly_late_allowance: int = 3
 
     @property
     def on_time_cutoff(self) -> int:
@@ -64,7 +72,7 @@ class DayVerdict:
     arrival_minute: int | None  # local minutes from midnight, for display
 
 
-def _local_minute(when: datetime, tz: str) -> int:
+def local_minute(when: datetime, tz: str) -> int:
     aware = when if when.tzinfo else when.replace(tzinfo=UTC)
     local = aware.astimezone(ZoneInfo(tz))
     return local.hour * 60 + local.minute
@@ -77,6 +85,7 @@ def classify_day(
     regularized: bool,
     policy: PolicySpec,
     day_complete: bool = True,
+    prior_lates_this_month: int = 0,
 ) -> DayVerdict:
     """Classify one employee-day against the policy.
 
@@ -86,6 +95,12 @@ def classify_day(
     mid-day nobody has yet put in a full day's hours, so an on-time person who's
     still working shows as PRESENT (on track), not a premature HALF_DAY. Arrival
     facts (arriving after the reg window) still count immediately.
+
+    `prior_lates_this_month` is how many times this person already arrived late
+    earlier in the same month. The policy allows three; from the fourth onward a
+    late arrival is a half day however many hours are worked. Regularisation
+    still overrides it — that is a deliberate HR decision about a specific day,
+    not an excuse the employee grants themselves.
     """
     if login_at is None:
         # No punch at all. This is the case people MOST need to contest — a missed
@@ -96,27 +111,38 @@ def classify_day(
             AttendanceStatus.ABSENT, False, not regularized, regularized, False, None
         )
 
-    arrival = _local_minute(login_at, policy.timezone)
+    arrival = local_minute(login_at, policy.timezone)
     on_time = arrival <= policy.on_time_cutoff
-    in_reg_window = policy.on_time_cutoff < arrival <= policy.regularizable_cutoff
-    too_late = arrival > policy.regularizable_cutoff
-    hours_ok = worked_minutes >= policy.full_day_hours_cutoff
+    # A late arrival owes a full 8 hours from when they actually got in; an
+    # on-time one owes the normal day. Late people used to owe LESS in practice,
+    # because the normal bar assumed a 9 AM start.
+    required_minutes = (
+        policy.late_full_day_minutes if not on_time else policy.full_day_hours_cutoff
+    )
+    hours_ok = worked_minutes >= required_minutes
     # Worked hours only judge someone once the day is over (see docstring).
     too_few_hours = day_complete and worked_minutes < policy.half_day_min_minutes
-    early_logout = day_complete and worked_minutes < policy.full_day_hours_cutoff
+    early_logout = day_complete and worked_minutes < required_minutes
+    # Beyond the monthly allowance, being late is itself the half day.
+    over_late_allowance = not on_time and prior_lates_this_month >= policy.monthly_late_allowance
 
-    arrival_ok = on_time or regularized
-
-    if too_late and not regularized:
+    if over_late_allowance and not regularized:
+        # Past the monthly allowance, the lateness itself is the half day.
         status = AttendanceStatus.HALF_DAY
     elif too_few_hours:
         status = AttendanceStatus.HALF_DAY
-    elif arrival_ok and hours_ok:
+    elif hours_ok:
+        # Met the hours owed — the normal day when on time, a full 8 from arrival
+        # when late. The policy penalises lateness by owing MORE, not by capping
+        # the day at half however long you stay; a hard arrival cutoff used to
+        # make an 11 AM start unsalvageable even after ten hours of work.
         status = AttendanceStatus.FULL_DAY
-    elif arrival_ok and not day_complete:
-        status = AttendanceStatus.PRESENT  # on time / regularized, day still running
-    elif in_reg_window and not regularized:
-        status = AttendanceStatus.LATE  # eligible to regularize → full day on approval
+    elif regularized:
+        status = AttendanceStatus.FULL_DAY  # HR approved this specific day
+    elif not day_complete:
+        status = AttendanceStatus.PRESENT  # still running, hours not final yet
+    elif not on_time:
+        status = AttendanceStatus.LATE  # eligible to regularize → full on approval
     else:
         status = AttendanceStatus.HALF_DAY
 

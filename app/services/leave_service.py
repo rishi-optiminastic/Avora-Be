@@ -373,7 +373,7 @@ class LeaveService:
             raise NotFoundError()
 
         anchor = employee.hire_date or employee.created_at.date()
-        year_start, year_end = _leave_year_window(anchor, datetime.now(UTC).date())
+        year_start, year_end = _leave_year_window(datetime.now(UTC).date())
         holidays = await self._holidays.dates_in_range(year_start, year_end)
         working_days_per_week = (await self._attendance_policy.spec()).working_days_per_week
         start_dt = datetime(year_start.year, year_start.month, year_start.day, tzinfo=UTC)
@@ -482,11 +482,7 @@ class LeaveService:
                     pending=pend,
                     remaining=allocated - used - pend,
                     eligible=not not_yet,
-                    ineligible_reason=(
-                        _ineligible_reason(tier, confirmed_on)
-                        if not_yet
-                        else None
-                    ),
+                    ineligible_reason=(_ineligible_reason(tier, confirmed_on) if not_yet else None),
                 )
             )
         # Unpaid leave is uncapped — surfaced for visibility (used/pending only).
@@ -576,22 +572,19 @@ def _ineligible_reason(tier: TenureStatus, confirmed_on: date) -> str:
     return "Available after one year of service"
 
 
-def _leave_year_window(anchor: date, today: date) -> tuple[date, date]:
-    """The joining-anniversary leave year containing `today`.
+# The company leave year is the Indian financial year (Leave Policy 2026, General
+# Guidelines: "the financial year from 1 April to 31 March"). Everyone resets
+# together on 1 April, rather than each person resetting on their own joining
+# anniversary as they used to.
+LEAVE_YEAR_START_MONTH = 4
 
-    Returns [start, end] inclusive, where start is the most recent anniversary of
-    `anchor` on or before `today`, and end is the day before the next one. A
-    Feb-29 anchor is clamped to Feb-28 in non-leap years.
+
+def _leave_year_window(today: date) -> tuple[date, date]:
+    """The financial-year leave window containing `today`: 1 April - 31 March.
+
+    Returns [start, end] inclusive. January-March belong to the year that STARTED
+    the previous April, so February 2027 sits in the 2026-27 window.
     """
-
-    def anniversary(year: int) -> date:
-        try:
-            return anchor.replace(year=year)
-        except ValueError:  # Feb 29 in a non-leap year
-            return anchor.replace(year=year, day=28)
-
-    start = anniversary(today.year)
-    if start > today:
-        start = anniversary(today.year - 1)
-    end = anniversary(start.year + 1) - timedelta(days=1)
-    return start, end
+    year = today.year if today.month >= LEAVE_YEAR_START_MONTH else today.year - 1
+    start = date(year, LEAVE_YEAR_START_MONTH, 1)
+    return start, date(year + 1, LEAVE_YEAR_START_MONTH, 1) - timedelta(days=1)

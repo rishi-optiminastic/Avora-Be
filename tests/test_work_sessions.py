@@ -61,7 +61,9 @@ async def test_attendance_board_reflects_clock_in(
     board = await client.get("/api/v1/attendance", headers=auth_headers(settings, seed.manager))
     assert board.status_code == 200
     row = next(r for r in board.json() if r["employee_id"] == str(seed.report.id))
-    assert row["status"] in ("full_day", "half_day", "late")
+    # "present" is the mid-day verdict: the day is running and the hours owed
+    # are not final yet, so it is not scored for or against the employee.
+    assert row["status"] in ("full_day", "half_day", "late", "present")
     assert row["login_at"] is not None
 
 

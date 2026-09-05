@@ -16,8 +16,9 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from app.core.attendance import PolicySpec, classify_day
+from app.core.attendance import PolicySpec, classify_day, local_minute
 from app.core.exceptions import NotFoundError, ValidationError
+from app.core.payroll import is_working_day
 from app.models.attendance_override import AttendanceOverrideStatus
 from app.models.employee import Employee
 from app.repositories.activity import ActivityRepository, DailyAgg, idle_minutes
@@ -139,7 +140,7 @@ class AttendanceService:
         working: list[date] = []
         cursor = first
         while cursor <= last:
-            if cursor.weekday() < spec.working_days_per_week and cursor not in holidays:
+            if is_working_day(cursor, spec.working_days_per_week) and cursor not in holidays:
                 working.append(cursor)
             cursor += timedelta(days=1)
         if not working:
@@ -236,6 +237,9 @@ class AttendanceService:
         local_date = _aware(day).astimezone(ZoneInfo(spec.timezone)).date().isoformat()
         start, end = self._local_bounds(local_date, spec.timezone)
         aggs = await self._activity.daily_aggregates(ids, start, end)
+        # The fourth late arrival in a month is a half day, so today's verdict
+        # depends on the days before it.
+        lates_before = await self._lates_before(ids, local_date, spec)
         # Biometric punch drives attendance times; manual/agent sessions and
         # activity are only the fallback when there's no punch that day.
         bio = await self._sessions.biometric_day_spans(ids, start, end)
@@ -278,6 +282,7 @@ class AttendanceService:
                 regularized=regd,
                 policy=spec,
                 day_complete=window_closed or out_src in ("dashboard", "auto"),
+                prior_lates_this_month=lates_before.get(e.id, 0),
             )
             agg = aggs.get(e.id)
             idle = idle_minutes(agg, worked) if agg else 0
@@ -325,6 +330,37 @@ class AttendanceService:
         return BiometricTodayRead(clock_in_at=span.login_at, clock_out_at=span.logout_at)
 
     # ---- range + monthly report (clock-in/out driven) ---------------------- #
+    @staticmethod
+    def _prev_day(day: str) -> str:
+        return (date.fromisoformat(day) - timedelta(days=1)).isoformat()
+
+    async def _lates_before(
+        self, ids: Sequence[uuid.UUID], day: str, spec: PolicySpec
+    ) -> dict[uuid.UUID, int]:
+        """How many times each employee already arrived late earlier THIS month.
+
+        The policy allows three late arrivals a month and makes the fourth a half
+        day, so the verdict for a day depends on the days before it. Scoped to the
+        calendar month `day` falls in — the allowance resets each month.
+        """
+        month_start = f"{day[:7]}-01"
+        if day <= month_start:
+            return {}
+        start, _ = self._local_bounds(month_start, spec.timezone)
+        _, end = self._local_bounds(self._prev_day(day), spec.timezone)
+        rows = await self._sessions.sessions_in_range(list(ids), start, end, source="biometric")
+        first_in: dict[tuple[uuid.UUID, str], datetime] = {}
+        for emp_id, started_at, *_rest in rows:
+            local_day = _aware(started_at).astimezone(ZoneInfo(spec.timezone)).date().isoformat()
+            key = (emp_id, local_day)
+            if key not in first_in or started_at < first_in[key]:
+                first_in[key] = started_at
+        counts: dict[uuid.UUID, int] = {}
+        for (emp_id, _), login in first_in.items():
+            if local_minute(login, spec.timezone) > spec.on_time_cutoff:
+                counts[emp_id] = counts.get(emp_id, 0) + 1
+        return counts
+
     async def _day_rows(
         self, caller: CurrentUser, start_date: str, end_date: str, spec: PolicySpec
     ) -> tuple[list[AttendanceDayRow], list[uuid.UUID]]:
@@ -378,8 +414,12 @@ class AttendanceService:
                 continue
             _accumulate(emp_id, cin, cout, src, cout_src)
 
+        # The allowance is monthly, so seed from any lates BEFORE this range and
+        # then count forward in date order — a range that starts mid-month would
+        # otherwise forgive the lates the employee already used up.
+        running_lates = await self._lates_before(ids, start_date, spec)
         rows: list[AttendanceDayRow] = []
-        for (emp_id, day), acc in grouped.items():
+        for (emp_id, day), acc in sorted(grouped.items(), key=lambda kv: (kv[0][1], str(kv[0][0]))):
             regd = day in approved.get(emp_id, set())
             window_closed = day < today or (day == today and now_minute >= spec.work_end_minute)
             out_src = None if acc.is_open else acc.out_source
@@ -389,7 +429,10 @@ class AttendanceService:
                 regularized=regd,
                 policy=spec,
                 day_complete=window_closed or out_src in ("dashboard", "auto"),
+                prior_lates_this_month=running_lates.get(emp_id, 0),
             )
+            if v.late_login:
+                running_lates[emp_id] = running_lates.get(emp_id, 0) + 1
             ov = overrides.get((emp_id, day))
             rows.append(
                 AttendanceDayRow(

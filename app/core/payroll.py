@@ -269,18 +269,66 @@ def payable_base_days(year: int, month: int, hire_date: date | None = None) -> i
     return (end - start).days + 1 if end >= start else 0
 
 
+_SATURDAY = 5
+# Saturdays that are weekly offs, counted within the calendar month: the 2nd and
+# the 4th (Attendance Guidelines 2026 — "1st and 3rd Saturdays will be working
+# days, while 2nd and 4th Saturdays will be weekly offs"). A 5th Saturday is not
+# named by the policy, so it stays a working day like the 1st and 3rd.
+_SATURDAYS_OFF = (2, 4)
+
+# Leave & Attendance Policy 2026 is "effective 7th September 2026". Rules that
+# change how a PAST day is classified must not reach back before it: turning the
+# 2nd and 4th Saturdays into weekly offs retroactively would restate attendance
+# records people have already seen and shift payroll months already processed.
+# Every day before this date keeps the rule it was actually worked under.
+POLICY_EFFECTIVE_DATE = date(2026, 9, 7)
+
+
+def is_working_saturday(day: date) -> bool:
+    """Whether this Saturday is worked. The 1st, 3rd (and any 5th) are; the 2nd
+    and 4th are weekly offs."""
+    return ((day.day - 1) // 7 + 1) not in _SATURDAYS_OFF
+
+
+def is_working_day(day: date, working_days_per_week: int = 5) -> bool:
+    """Whether the company works on `day`, ignoring holidays.
+
+    THE single answer to that question. Attendance, monitoring and payroll each
+    used to test `weekday() < working_days_per_week` for themselves, which meant
+    adding the alternate-Saturday rule in one place would have left the others
+    marking people absent on their own weekly off.
+
+    The alternate-Saturday rule applies only from `POLICY_EFFECTIVE_DATE`. Before
+    it, every Mon-Sat day was worked and was recorded that way, so re-answering
+    for those days would rewrite attendance and pay that are already settled.
+    """
+    if day.weekday() >= working_days_per_week:
+        return False
+    if (
+        working_days_per_week == 6
+        and day.weekday() == _SATURDAY
+        and day >= POLICY_EFFECTIVE_DATE
+    ):
+        return is_working_saturday(day)
+    return True
+
+
 def weekdays_in_month(year: int, month: int, working_days_per_week: int = 5) -> list[date]:
     """Every working-day date in the given month (the working-day baseline).
 
     `working_days_per_week` is counted from Monday: 5 ⇒ Mon-Fri, 6 ⇒ Mon-Sat,
     7 ⇒ every day. `weekday()` is 0=Mon … 6=Sun, so `< working_days_per_week`
     selects the first N days of the week.
+
+    A six-day week is Mon-Sat with the 2nd and 4th Saturday off, which is the
+    actual shift pattern — treating every Saturday as worked overstated the
+    month by two days and made those two Saturdays dockable as absence.
     """
     _, last = calendar.monthrange(year, month)
     return [
         d
         for day in range(1, last + 1)
-        if (d := date(year, month, day)).weekday() < working_days_per_week
+        if is_working_day(d := date(year, month, day), working_days_per_week)
     ]
 
 
@@ -299,7 +347,7 @@ def working_days_between(
     total = 0
     current = start
     while current <= end:
-        if current.weekday() < working_days_per_week and current not in holidays:
+        if is_working_day(current, working_days_per_week) and current not in holidays:
             total += 1
         current += timedelta(days=1)
     return total

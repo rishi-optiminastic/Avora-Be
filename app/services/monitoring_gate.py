@@ -18,6 +18,7 @@ import uuid
 from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
+from app.core.payroll import is_working_day
 from app.repositories.work_session import WorkSessionRepository
 from app.services.attendance_policy_service import AttendancePolicyService
 
@@ -36,9 +37,9 @@ class MonitoringGateService:
         injectable for tests; it defaults to the current time."""
         spec = await self._policy.spec()
         now_local = (now or datetime.now(UTC)).astimezone(ZoneInfo(spec.timezone))
-        # Non-working day: weekday() is 0=Mon … 6=Sun; indices ≥ working_days_per_week
+        # Non-working day — including the alternate Saturdays that are weekly offs,
         # are off (5 ⇒ Sat & Sun off, 6 ⇒ Sun off).
-        if now_local.weekday() >= spec.working_days_per_week:
+        if not is_working_day(now_local.date(), spec.working_days_per_week):
             return True
         # Only capture while clocked in. No open session ⇒ before check-in or after
         # checkout ⇒ suppress.

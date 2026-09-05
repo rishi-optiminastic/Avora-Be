@@ -21,7 +21,10 @@ from app.models.leave_tier_quota import LeaveTierQuota
 # always has something to resolve against. `None` for a leave type simply means
 # "no row" — that band inherits the org LeavePolicy for it.
 #
-#   probation — 4 sick, 1 birthday, and no planned or annual time off at all.
+#   probation — 4 sick, plus bereavement, which the policy grants "from Day 1,
+#               including during probation". Everything else is a PERMANENT-
+#               employee benefit and is withheld until confirmation: planned,
+#               annual, birthday, marriage, paternity and maternity.
 #   confirmed — sick rises to 6 (the probation 4 plus 2 more, counted against the
 #               same leave year so days already taken still count), and planned
 #               leave starts accruing at 1/month toward its annual 8. Annual leave
@@ -36,12 +39,19 @@ from app.models.leave_tier_quota import LeaveTierQuota
 _SEED: dict[TenureStatus, dict[LeaveType, tuple[int | None, float | None]]] = {
     TenureStatus.PROBATION: {
         LeaveType.SICK: (4, None),
-        LeaveType.BIRTHDAY: (1, None),
+        LeaveType.BIRTHDAY: (0, None),
         LeaveType.PLANNED: (0, None),
         LeaveType.ANNUAL: (0, None),
+        LeaveType.MARRIAGE: (0, None),
+        LeaveType.PATERNITY: (0, None),
+        LeaveType.MATERNITY: (0, None),
+        # Bereavement is deliberately absent: it applies from Day 1, so it falls
+        # through to the org policy like it does for everyone else.
     },
     TenureStatus.CONFIRMED: {
         LeaveType.SICK: (6, None),
+        # Everything a permanent employee gets is now unlocked; only annual leave
+        # still waits for a full year of service.
         LeaveType.BIRTHDAY: (1, None),
         LeaveType.PLANNED: (None, 1.0),  # 1 a month, capped by the org policy
         LeaveType.ANNUAL: (0, None),
