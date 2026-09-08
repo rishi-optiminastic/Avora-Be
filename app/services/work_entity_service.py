@@ -1,4 +1,4 @@
-"""Work-entity (attribution catalog) business rules — admin-managed."""
+"""Work-entity (project catalog) business rules - curated by HR and Admin."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import uuid
 from collections.abc import Sequence
 
 from app.core.exceptions import AuthorizationError, NotFoundError
-from app.models.employee import Role
 from app.models.work_entity import WorkEntity
 from app.repositories.audit import AuditRepository
 from app.repositories.work_entity import WorkEntityRepository
@@ -15,7 +14,7 @@ from app.schemas.work_entity import WorkEntityCreate, WorkEntityUpdate
 
 
 def _can_manage(caller: CurrentUser) -> bool:
-    return caller.role is Role.ADMIN
+    return caller.can_manage_projects
 
 
 class WorkEntityService:
@@ -29,8 +28,8 @@ class WorkEntityService:
         return await self._entities.list_all()
 
     async def list_active_for_picker(self, caller: CurrentUser) -> Sequence[WorkEntity]:
-        """Active projects a manager can attach to a task. Admin curates them;
-        any manager/HR may read the active set to assign work against."""
+        """Active projects a manager can attach to a task. HR/Admin curate them;
+        any manager may read the active set to assign work against."""
         if not caller.is_manager:
             raise AuthorizationError()
         return await self._entities.list_active()

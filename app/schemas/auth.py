@@ -50,6 +50,17 @@ class CurrentUser(BaseModel):
         return self.role is Role.HR or self.payroll_manager
 
     @property
+    def can_manage_projects(self) -> bool:
+        """Who curates the project catalog: HR and Admin.
+
+        Projects are how work is attributed and how tasks are grouped, so keeping
+        the list current is day-to-day people-ops rather than a system-owner job.
+        Admin-only locked HR out of even READING the catalog, which meant they
+        could not see the projects their own team was assigned to.
+        """
+        return self.role in (Role.ADMIN, Role.HR)
+
+    @property
     def is_manager(self) -> bool:
         return self.role in (Role.MANAGER, Role.SENIOR_MANAGER, Role.ADMIN, Role.HR)
 
