@@ -116,12 +116,46 @@ async def export_payroll_xlsx(
         list[uuid.UUID] | None,
         Query(description="Restrict the register to these employees; omit for everyone"),
     ] = None,
+    include_reimbursements: Annotated[
+        bool,
+        Query(
+            description=(
+                "Fold approved reimbursements into Net Pay. Set false when expenses "
+                "are paid from their own run via /export/reimbursements."
+            )
+        ),
+    ] = True,
 ) -> Response:
     """HR/Admin: download the month's payroll as an .xlsx (identity + bank details
     + UAN + the LOP-adjusted salary breakdown, one row per employee). Pass
     `employee_ids` to export only a selection — it narrows the rows the caller can
     already see, so it never widens scope."""
-    xlsx, filename = await service.export_xlsx(caller, month, employee_ids)
+    xlsx, filename = await service.export_xlsx(
+        caller, month, employee_ids, include_reimbursements=include_reimbursements
+    )
+    return Response(
+        content=xlsx,
+        media_type=_XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/export/reimbursements")
+async def export_reimbursements_xlsx(
+    caller: CurrentUserDep,
+    service: PayrollServiceDep,
+    month: str | None = Query(default=None, description="YYYY-MM; defaults to the current month"),
+) -> Response:
+    """HR/Admin: the month's approved reimbursements as their own .xlsx.
+
+    Same 40-column layout as the salary register so it imports the same way, but
+    salary-free: only people with an approved claim, and the only money on the row
+    is what they are owed back. 404 when nothing is approved for the month.
+
+    Pair it with `include_reimbursements=false` on /export, or the same rupees go
+    out in both files.
+    """
+    xlsx, filename = await service.export_reimbursements_xlsx(caller, month)
     return Response(
         content=xlsx,
         media_type=_XLSX_MEDIA_TYPE,

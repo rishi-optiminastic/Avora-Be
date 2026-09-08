@@ -1095,3 +1095,252 @@ def test_the_export_audit_scope_names_who_without_growing_unbounded() -> None:
     # A different selection of the same size is still distinguishable.
     other = [uuid.uuid4() for _ in range(20)]
     assert _export_audit_scope(other, other) != big
+
+
+async def test_the_register_reports_exactly_what_the_screen_shows(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """The screen is what HR approves; the Excel is what finance pays from. They
+    used to be computed twice, on different bases, and disagreed in production:
+    an approved reimbursement sat in its own column but was left out of Net Pay,
+    and a 31-day month prorated on 30 days moved everyone by a few hundred rupees.
+
+    One calculation now, formatted twice. This asserts that per employee AND in
+    total, so a future refactor cannot quietly reintroduce a second one.
+    """
+    headers = auth_headers(settings, seed.admin)
+    for who in (seed.report, seed.manager):
+        await client.put(f"/api/v1/employees/{who.id}/compensation", json=_COMP, headers=headers)
+    await client.put("/api/v1/payroll/settings", json=_SETTINGS, headers=headers)
+
+    # A reimbursement on one person: the exact shape that broke the register.
+    claim = await client.post(
+        "/api/v1/reimbursements",
+        json={
+            "amount_minor": 7_193_00,
+            "category": "travel",
+            "description": "Bhiwandi warehouse visit",
+            "expense_date": date.today().isoformat(),
+        },
+        headers=auth_headers(settings, seed.report),
+    )
+    assert claim.status_code == 201, claim.text
+    rid = claim.json()["id"]
+    await client.post(
+        f"/api/v1/reimbursements/{rid}/manager-decision",
+        json={"approve": True},
+        headers=auth_headers(settings, seed.manager),
+    )
+    hr = Employee(
+        hr_external_id="hr-parity",
+        work_email="parity-hr@corp.test",
+        full_name="Hazel HR",
+        role=Role.HR,
+        status=EmployeeStatus.ACTIVE,
+        is_active=True,
+    )
+    db.add(hr)
+    await db.commit()
+    month = date.today().strftime("%Y-%m")
+    approved = await client.post(
+        f"/api/v1/reimbursements/{rid}/hr-decision",
+        json={"approve": True, "settlement_month": month},
+        headers=auth_headers(settings, hr),
+    )
+    assert approved.status_code == 200, approved.text
+
+    est = await client.get(f"/api/v1/payroll/estimate?month={month}", headers=headers)
+    assert est.status_code == 200, est.text
+    on_screen = {line["name"]: line["net_minor"] for line in est.json()["lines"]}
+
+    export = await client.get(f"/api/v1/payroll/export?month={month}", headers=headers)
+    assert export.status_code == 200, export.text
+    sheet = load_workbook(BytesIO(export.content)).active
+    assert sheet is not None
+    header = [c.value for c in sheet[1]]
+    name_i, net_i = header.index("Employee Name"), header.index("Net Pay")
+    reimb_i = header.index("Business Expense Reimbursements")
+
+    rows = {r[name_i]: r for r in sheet.iter_rows(min_row=2, values_only=True) if r[name_i]}
+    for name, net_minor in on_screen.items():
+        assert name in rows, f"{name} missing from the register"
+        assert rows[name][net_i] == pytest.approx(round(net_minor / 100), abs=1), (
+            f"{name}: screen shows {round(net_minor / 100)}, register says {rows[name][net_i]}"
+        )
+
+    # And the reimbursement is both reported AND inside the net that gets paid.
+    claimant = rows[seed.report.full_name]
+    assert claimant[reimb_i] == pytest.approx(7193)
+    assert claimant[net_i] > rows[seed.manager.full_name][net_i]
+
+
+async def test_nobody_is_paid_a_negative_amount(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """An employee whose hire date is after the month has no payable days, so no
+    salary — and therefore no professional tax to take from it. Leaving that flat
+    statutory charge standing against a zero gross billed them 200 rupees on the
+    register."""
+    person = await db.get(Employee, seed.report.id)
+    assert person is not None
+    person.hire_date = date(2099, 9, 1)  # joins later
+    await db.commit()
+
+    headers = auth_headers(settings, seed.admin)
+    await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation", json=_COMP, headers=headers
+    )
+    await client.put("/api/v1/payroll/settings", json=_SETTINGS, headers=headers)
+
+    est = await client.get("/api/v1/payroll/estimate?month=2099-06", headers=headers)
+    line = next(r for r in est.json()["lines"] if r["employee_id"] == str(seed.report.id))
+    assert line["net_minor"] == 0
+    assert line["prorated"]["professional_tax_minor"] == 0
+    assert line["prorated"]["total_deduction_minor"] == 0
+
+    export = await client.get("/api/v1/payroll/export?month=2099-06", headers=headers)
+    sheet = load_workbook(BytesIO(export.content)).active
+    assert sheet is not None
+    header = [c.value for c in sheet[1]]
+    rows = {
+        r[header.index("Employee Name")]: r
+        for r in sheet.iter_rows(min_row=2, values_only=True)
+        if r[header.index("Employee Name")]
+    }
+    assert rows[seed.report.full_name][header.index("Net Pay")] == 0
+    for row in rows.values():
+        assert (row[header.index("Net Pay")] or 0) >= 0, "a register row pays a negative amount"
+
+
+async def _approved_claim_for(
+    client: AsyncClient,
+    db: AsyncSession,
+    settings: Settings,
+    seed: _Seed,
+    *,
+    amount_minor: int,
+) -> str:
+    """Submit -> manager -> HR, so the claim is genuinely payable this month."""
+    month = date.today().strftime("%Y-%m")
+    claim = await client.post(
+        "/api/v1/reimbursements",
+        json={
+            "amount_minor": amount_minor,
+            "category": "travel",
+            "description": "Client site visit",
+            "expense_date": date.today().isoformat(),
+        },
+        headers=auth_headers(settings, seed.report),
+    )
+    assert claim.status_code == 201, claim.text
+    rid = claim.json()["id"]
+    await client.post(
+        f"/api/v1/reimbursements/{rid}/manager-decision",
+        json={"approve": True},
+        headers=auth_headers(settings, seed.manager),
+    )
+    hr = Employee(
+        hr_external_id="hr-reimb-export",
+        work_email="reimb-export-hr@corp.test",
+        full_name="Hollis HR",
+        role=Role.HR,
+        status=EmployeeStatus.ACTIVE,
+        is_active=True,
+    )
+    db.add(hr)
+    await db.commit()
+    done = await client.post(
+        f"/api/v1/reimbursements/{rid}/hr-decision",
+        json={"approve": True, "settlement_month": month},
+        headers=auth_headers(settings, hr),
+    )
+    assert done.status_code == 200, done.text
+    return month
+
+
+def _rows(content: bytes) -> tuple[list[str | None], dict[str, tuple[object, ...]]]:
+    sheet = load_workbook(BytesIO(content)).active
+    assert sheet is not None
+    header = [c.value for c in sheet[1]]
+    name_i = header.index("Employee Name")
+    return header, {r[name_i]: r for r in sheet.iter_rows(min_row=2, values_only=True) if r[name_i]}
+
+
+async def test_reimbursements_can_ride_with_payroll_or_be_paid_separately(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """Two ways to pay an expense claim, and picking one must exclude the other.
+
+    Zeroing the reimbursement COLUMN while leaving the rupees inside Net Pay would
+    look correct and still pay twice, so the net is asserted, not just the column.
+    """
+    headers = auth_headers(settings, seed.admin)
+    await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation", json=_COMP, headers=headers
+    )
+    await client.put("/api/v1/payroll/settings", json=_SETTINGS, headers=headers)
+    month = await _approved_claim_for(client, db, settings, seed, amount_minor=7_193_00)
+
+    # 1. Folded into payroll (the default).
+    with_reimb = await client.get(f"/api/v1/payroll/export?month={month}", headers=headers)
+    assert with_reimb.status_code == 200, with_reimb.text
+    header, rows = _rows(with_reimb.content)
+    net_i = header.index("Net Pay")
+    reimb_i = header.index("Business Expense Reimbursements")
+    included_net = rows[seed.report.full_name][net_i]
+    assert rows[seed.report.full_name][reimb_i] == pytest.approx(7193)
+
+    # 2. Salary run with expenses held back for their own payment.
+    without = await client.get(
+        f"/api/v1/payroll/export?month={month}&include_reimbursements=false", headers=headers
+    )
+    assert without.status_code == 200, without.text
+    _, rows_without = _rows(without.content)
+    excluded_net = rows_without[seed.report.full_name][net_i]
+    assert rows_without[seed.report.full_name][reimb_i] == 0
+    # The money actually left the total, not just the column.
+    assert included_net - excluded_net == pytest.approx(7193)
+
+    # 3. The reimbursement-only register carries exactly that difference.
+    only = await client.get(f"/api/v1/payroll/export/reimbursements?month={month}", headers=headers)
+    assert only.status_code == 200, only.text
+    header2, rows_only = _rows(only.content)
+    row = rows_only[seed.report.full_name]
+    assert list(header2) == list(header), "the layout must match the salary register"
+    assert row[header2.index("Net Pay")] == pytest.approx(7193)
+    assert row[header2.index("Payroll Type")] == "Reimbursement"
+    # Salary-free: nothing earned, nothing deducted, no days.
+    for column in (
+        "Basic",
+        "House Rent Allowance",
+        "Fixed Allowance",
+        "Total Deductions",
+        "EPF Contribution",
+    ):
+        assert row[header2.index(column)] == 0, f"{column} should be empty on an expense run"
+    assert row[header2.index("Effective Paid Days")] == 0
+    # Only the claimant appears.
+    assert set(rows_only) == {seed.report.full_name}
+
+
+async def test_the_reimbursement_register_404s_when_there_is_nothing_to_pay(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """An empty spreadsheet reads as "everyone was paid nothing", which is worse
+    than being told there is nothing to export."""
+    headers = auth_headers(settings, seed.admin)
+    await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation", json=_COMP, headers=headers
+    )
+    resp = await client.get("/api/v1/payroll/export/reimbursements?month=2099-06", headers=headers)
+    assert resp.status_code == 404
+
+
+async def test_the_reimbursement_register_is_hr_admin_only(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    for actor in (seed.report, seed.manager, seed.outsider):
+        resp = await client.get(
+            "/api/v1/payroll/export/reimbursements", headers=auth_headers(settings, actor)
+        )
+        assert resp.status_code == 403, f"{actor.role} exported a reimbursement register"

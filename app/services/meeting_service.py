@@ -233,13 +233,14 @@ class MeetingService:
 def _normalise_pem(raw: str) -> str:
     """Coax a pasted private key into a real PEM.
 
-    The key reaches us through an env-var text box, and the same three mistakes
+    The key reaches us through an env-var text box, and the same four mistakes
     happen every time: the JSON's escaped ``\\n`` sequences survive verbatim, the
-    surrounding quotes get pasted along with the value, or the deploy UI expands
-    the escapes into genuine newlines. All three describe the same key, so accept
-    all three rather than making somebody guess which one the parser wanted.
+    surrounding quotes get pasted along with the value, the deploy UI expands the
+    escapes into genuine newlines, or it expands only the ``n`` and leaves the
+    backslash behind at the end of every line. All four describe the same key, so
+    accept all four rather than making somebody guess which one the parser wanted.
 
-    Only formatting is normalised — a truncated or wrong key still fails to parse,
+    Only formatting is normalised. A truncated or wrong key still fails to parse,
     which is the point.
     """
     key = raw.strip()
@@ -250,8 +251,18 @@ def _normalise_pem(raw: str) -> str:
             key = key[1:-1].strip()
             break
     # Escaped newlines (single-line form) become real ones. A key that already has
-    # real newlines is unaffected — there is nothing to replace.
-    return key.replace("\\n", "\n")
+    # real newlines is unaffected: there is nothing to replace.
+    key = key.replace("\\n", "\n")
+    # A backslash left dangling at the end of a line is the half-expanded form:
+    # the `n` of each `\n` became a real newline and the backslash stayed. It sits
+    # inside the base64 body and breaks the decode, while every marker still looks
+    # right, which is why the key reads as valid and is not. Base64 never contains
+    # a backslash, so stripping it here is unambiguous.
+    lines = (line.rstrip().rstrip("\\").rstrip() for line in key.split("\n"))
+    cleaned = "\n".join(line for line in lines if line)
+    # Keep an empty value empty, so `_describe_pem` can still say "it is empty"
+    # rather than reporting a missing BEGIN line on a blank env var.
+    return f"{cleaned}\n" if cleaned else ""
 
 
 def _describe_pem(raw: str) -> str:
@@ -268,7 +279,10 @@ def _describe_pem(raw: str) -> str:
         problems.append("no BEGIN line")
     if "-----END" not in key:
         problems.append("no END line")
-    if "\n" not in key:
+    # Count breaks in the CONTENT: normalisation terminates the key with a newline,
+    # so testing for one at all would call every single-line key well formed and
+    # lose the most actionable message of the set.
+    if len(key.strip().split("\n")) == 1:
         problems.append("no line breaks (escaped \\n may have been stripped)")
     if not problems:
         problems.append(f"markers present but the body did not parse ({len(key)} chars)")

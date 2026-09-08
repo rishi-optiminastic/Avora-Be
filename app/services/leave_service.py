@@ -470,10 +470,19 @@ class LeaveService:
             allocated = quota(leave_type, policy_attr, alloc_attr)
             used = bucket(approved, types)
             pend = bucket(pending, types)
-            # A band that grants none of a type has not *run out* of it — the
-            # person has not earned it yet. Both read as 0 remaining, so say
-            # which, or the UI can only show an unexplained zero.
-            not_yet = allocated == 0 and used == 0 and pend == 0
+            # "Not earned yet" is a statement about TENURE, so read it off the
+            # band — never off a zero. A zero can equally be HR typing 0 into
+            # someone's override, or a policy that grants none of a type, and
+            # calling either of those "available after one year of service" is
+            # nonsense to an eight-year employee looking at their own profile.
+            override = allocation is not None and getattr(allocation, alloc_attr) is not None
+            row = tier_rows.get(leave_type)
+            not_yet = (
+                not override
+                and row is not None
+                and row.monthly_accrual_days is None
+                and row.annual_days == 0
+            )
             balances.append(
                 LeaveTypeBalance(
                     leave_type=leave_type,
@@ -561,15 +570,18 @@ def _utc_date(value: datetime) -> date:
 
 
 def _ineligible_reason(tier: TenureStatus, confirmed_on: date) -> str:
-    """Why this leave type is at zero, in words the employee can act on.
+    """Why this leave type is withheld, in words the employee can act on.
 
-    Only reached for a type the person's band grants none of, so the reason is
-    always about tenure — either probation is still running, or the type needs a
-    full year of service.
+    Only reached when the person's TENURE BAND grants none of the type, so the
+    reason is always about tenure. The tenured band withholds nothing, so it
+    should never arrive here — if it somehow does, say nothing about years of
+    service, because the reader has already served them.
     """
     if tier is TenureStatus.PROBATION:
         return f"Available once you complete probation on {confirmed_on:%d %b %Y}"
-    return "Available after one year of service"
+    if tier is TenureStatus.CONFIRMED:
+        return "Available after one year of service"
+    return "Not available on your current plan"
 
 
 # The company leave year is the Indian financial year (Leave Policy 2026, General

@@ -215,6 +215,12 @@ def prorate_breakdown(
                                      → Net 31,971
     """
     ratio = attendance_ratio(payable_days, total_days)
+    if ratio == 0:
+        # Nobody paid for any day this month owes a statutory deduction either.
+        # Professional tax is flat BECAUSE it is a charge on salary, so leaving it
+        # standing against a zero gross produced a NEGATIVE net pay on the register
+        # (an employee who had not started yet was billed 200 rupees).
+        return SalaryBreakdown(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
 
     def scale(minor: int) -> int:
         return round(minor * ratio)

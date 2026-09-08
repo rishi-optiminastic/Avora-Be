@@ -365,3 +365,55 @@ async def test_the_leave_year_is_april_to_march_for_everyone(
     assert mine["leave_year_end"] == theirs["leave_year_end"]
     assert str(mine["leave_year_start"]).endswith("-04-01")
     assert str(mine["leave_year_end"]).endswith("-03-31")
+
+
+async def test_a_zero_from_an_hr_override_is_not_dressed_up_as_a_tenure_gate(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """The bug an eight-year employee saw on her own profile: bereavement showed
+    "Available after one year of service" because HR had set her override to 0.
+
+    A zero can mean three different things — the band withholds it, HR set it to
+    zero, or the org grants none — and only the first is about tenure.
+    """
+    await _set_hire_date(db, seed.report.id, add_months(datetime.now(UTC).date(), -98))
+
+    granted = await client.put(
+        f"/api/v1/employees/{seed.report.id}/leave-allocation",
+        json={"bereavement_days": 0, "marriage_days": 0},
+        headers=auth_headers(settings, seed.admin),
+    )
+    assert granted.status_code in (200, 201), granted.text
+
+    payload = await _balance(client, settings, seed.report)
+    rows = {r["leave_type"]: r for r in payload["balances"]}  # type: ignore[union-attr]
+
+    assert payload["tenure_status"] == TenureStatus.TENURED.value
+    for zeroed in (LeaveType.BEREAVEMENT, LeaveType.MARRIAGE):
+        row = rows[zeroed.value]
+        assert row["allocated"] == 0.0
+        # Zero, yes — but not "come back in a year". They have eight.
+        assert row["eligible"] is True, f"{zeroed.value} wrongly reported as unearned"
+        assert row["ineligible_reason"] is None
+
+
+async def test_a_tenured_employee_is_never_told_to_wait_a_year(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """The tenured band withholds nothing, so no card on a long-serving person's
+    profile may carry a tenure message at all."""
+    await _set_hire_date(db, seed.report.id, add_months(datetime.now(UTC).date(), -98))
+    payload = await _balance(client, settings, seed.report)
+    for row in payload["balances"]:  # type: ignore[union-attr]
+        assert row["ineligible_reason"] is None, f"{row['leave_type']}: {row['ineligible_reason']}"
+
+
+async def test_probation_still_explains_itself(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """The genuine tenure gate must survive the fix."""
+    await _set_hire_date(db, seed.report.id, datetime.now(UTC).date() - timedelta(days=7))
+    payload = await _balance(client, settings, seed.report)
+    rows = {r["leave_type"]: r for r in payload["balances"]}  # type: ignore[union-attr]
+    assert rows[LeaveType.PLANNED.value]["eligible"] is False
+    assert "probation" in rows[LeaveType.PLANNED.value]["ineligible_reason"].lower()

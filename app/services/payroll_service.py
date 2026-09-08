@@ -445,50 +445,27 @@ class PayrollService:
         reimbursement_minor: int,
         adjustments: Sequence[PayrollAdjustment] = (),
     ) -> PayrollExportRow:
-        """Build one 40-column register row. Earnings/PF are prorated on a fixed
-        30-day base (Base Days minus Loss Of Pay), independent of the on-screen
-        calendar-day proration; employer contributions follow standard PF rules."""
-        mctc = (
-            monthly_ctc_minor(comp.amount_minor, is_annual=comp.period is PayPeriod.ANNUAL)
-            if comp is not None
-            else 0
-        )
-        full = compute_breakdown(mctc, self._config_for(cfg, comp), month=month)
-        # The register keeps its fixed 30-day base (the payrun convention), but in
-        # the month someone JOINS it is only their share of it: 15 Aug ⇒ 17 of 31
-        # days ⇒ 30 x 17/31 = 16.45 base days. Without this the register — the file
-        # that actually gets paid — would hand a mid-month joiner a full month even
-        # though the estimate and payslip correctly show a part month. A full month
-        # yields exactly 30.0, so nobody else's row moves.
-        share = (line.payable_base_days / line.total_days) if line.total_days > 0 else 1.0
-        base_days = round(30.0 * share, 2)
-        lop = min(base_days, max(0.0, line.lop_days))
-        effective = base_days - lop
-        # Someone whose hire date falls after this month has a zero-day window, and
-        # `attendance_ratio` reads a zero denominator as "no information — pay the
-        # full month". Here it means the opposite, so the zero row is built directly
-        # rather than divided.
-        p = (
-            prorate_breakdown(full, effective, 30)
-            if base_days > 0
-            else prorate_breakdown(full, 0.0, 30)
-        )
-        # Manual adjustments (LOP overrides already applied to `line.lop_days` above):
-        # field overrides restructure the slip; earnings/deductions fold into totals.
-        p, adj_earnings, adj_deductions = _apply_adjustments(p, adjustments)
-        has_net_override = any(
-            a.kind is PayrollAdjustmentKind.OVERRIDE
-            and a.target is PayrollAdjustmentTarget.NET_PAY
-            for a in adjustments
-        )
-        er = employer_contributions(p.basic_minor, p.employee_pf_minor)
+        """Build one 40-column register row from the line the screen already shows.
+
+        This deliberately does NOT recompute the salary. It used to: the register
+        re-derived every figure on a fixed 30-day base while the estimate prorated
+        on calendar days, so the file HR pays from disagreed with the screen HR
+        approved (a 31-day month moved everyone by a few hundred rupees, and the
+        approved reimbursement was reported in its own column but left out of Net
+        Pay entirely). Two implementations of one calculation can only drift, so
+        there is now one: `_line_for`. This function formats it.
+        """
+        emp_pf = line.prorated.employee_pf_minor
+        er = employer_contributions(line.prorated.basic_minor, emp_pf)
 
         def rupees(minor: int) -> int:
             return round(minor / 100)
 
-        fixed_earnings = rupees(p.gross_minor)  # Basic + HRA + Fixed Allowance
-        total_earnings = fixed_earnings + rupees(adj_earnings)  # + manual earnings
-        total_deductions = rupees(p.total_deduction_minor) + rupees(adj_deductions)
+        fixed_earnings = rupees(line.prorated.gross_minor)  # Basic + HRA + allowance
+        total_earnings = fixed_earnings + rupees(line.adjustment_earnings_minor)
+        total_deductions = rupees(line.prorated.total_deduction_minor) + rupees(
+            line.adjustment_deductions_minor
+        )
         account_number = (
             decrypt_pii(self._settings, comp.account_number_encrypted)
             if comp is not None and comp.account_number_encrypted
@@ -510,38 +487,158 @@ class PayrollService:
             bank_name=(comp.bank_name or "") if comp is not None else "",
             account_number=account_number,
             ifsc=(comp.ifsc_code or "") if comp is not None else "",
-            ctc_annual=rupees(mctc * 12),
-            gross_annual=rupees(full.gross_minor * 12),
-            base_days=base_days,
-            loss_of_pay=lop,
-            effective_paid_days=effective,
-            basic=rupees(p.basic_minor),
-            hra=rupees(p.hra_minor),
-            fixed_allowance=rupees(p.special_allowance_minor),
+            ctc_annual=rupees(line.monthly_ctc_minor * 12),
+            gross_annual=rupees(line.breakdown.gross_minor * 12),
+            # The same day counts the estimate shows, on the same calendar basis.
+            base_days=float(line.payable_base_days),
+            loss_of_pay=line.lop_days,
+            effective_paid_days=line.payable_days,
+            basic=rupees(line.prorated.basic_minor),
+            hra=rupees(line.prorated.hra_minor),
+            fixed_allowance=rupees(line.prorated.special_allowance_minor),
             reimbursement=0,
             total_reimbursements=0,
             fixed_monthly_earnings=fixed_earnings,
-            fixed_monthly_costs=rupees(p.ctc_minor),
+            fixed_monthly_costs=rupees(line.prorated.ctc_minor),
             total_earnings=total_earnings,
-            epf_employee=rupees(p.employee_pf_minor),
+            epf_employee=rupees(emp_pf),
             epf_employer=rupees(er.epf_employer_minor),
             eps_employer=rupees(er.eps_minor),
             edli_employer=rupees(er.edli_minor),
             epf_admin_employer=rupees(er.admin_minor),
             total_employer_contributions=rupees(er.total_minor),
-            income_tax=rupees(p.income_tax_minor),
-            professional_tax=rupees(p.professional_tax_minor),
+            income_tax=rupees(line.prorated.income_tax_minor),
+            professional_tax=rupees(line.prorated.professional_tax_minor),
             total_deductions=total_deductions,
             gross_pay=total_earnings,
-            net_pay=rupees(p.net_minor) if has_net_override else total_earnings - total_deductions,
+            # The screen's net, which already folds in adjustments, any NET_PAY
+            # override, and the approved reimbursement. Recomputing it here is
+            # what let the file disagree with the figure HR signed off.
+            #
+            # `reimbursement_minor` is the line's own figure normally, and 0 when
+            # expenses are being paid from their own run — so swapping it out
+            # takes the reimbursement back out of the net too, instead of zeroing
+            # the column while the money stayed inside the total.
+            net_pay=rupees(line.net_minor - line.reimbursement_minor + reimbursement_minor),
             business_expense_reimbursements=rupees(reimbursement_minor),
         )
+
+    def _reimbursement_row(
+        self,
+        line: PayrollLineRead,
+        *,
+        emp: Employee | None,
+        comp: Compensation | None,
+        period_label: str,
+        reimbursement_minor: int,
+    ) -> PayrollExportRow:
+        """One row of the reimbursement-only register: the same 40 columns, with
+        every salary figure zero.
+
+        Expense repayment is not earnings, so nothing here is prorated, taxed or
+        PF'd, and the day counts are zero — this run pays back money already spent
+        and nothing else. Keeping the layout identical means it drops into the
+        same CMS import as the salary register.
+        """
+        amount = round(reimbursement_minor / 100)
+        account_number = (
+            decrypt_pii(self._settings, comp.account_number_encrypted)
+            if comp is not None and comp.account_number_encrypted
+            else ""
+        )
+        return PayrollExportRow(
+            period=period_label,
+            payroll_type="Reimbursement",
+            employee_no=(emp.employee_number or "") if emp is not None else "",
+            employee_name=line.name,
+            department=line.department or "",
+            designation=(emp.job_title or "") if emp is not None else "",
+            work_location=(emp.location or "") if emp is not None else "",
+            date_of_joining=fmt_register_date(emp.hire_date if emp is not None else None),
+            date_of_birth=fmt_register_date(emp.date_of_birth if emp is not None else None),
+            last_working_day="",
+            payment_mode=(comp.payment_mode if comp is not None else "Bank Transfer"),
+            account_holder=(comp.account_holder_name or "") if comp is not None else "",
+            bank_name=(comp.bank_name or "") if comp is not None else "",
+            account_number=account_number,
+            ifsc=(comp.ifsc_code or "") if comp is not None else "",
+            ctc_annual=0,
+            gross_annual=0,
+            base_days=0.0,
+            loss_of_pay=0.0,
+            effective_paid_days=0.0,
+            basic=0,
+            hra=0,
+            fixed_allowance=0,
+            reimbursement=0,
+            total_reimbursements=amount,
+            fixed_monthly_earnings=0,
+            fixed_monthly_costs=0,
+            total_earnings=amount,
+            epf_employee=0,
+            epf_employer=0,
+            eps_employer=0,
+            edli_employer=0,
+            epf_admin_employer=0,
+            total_employer_contributions=0,
+            income_tax=0,
+            professional_tax=0,
+            total_deductions=0,
+            gross_pay=amount,
+            net_pay=amount,
+            business_expense_reimbursements=amount,
+        )
+
+    async def export_reimbursements_xlsx(
+        self, caller: CurrentUser, month: str | None
+    ) -> tuple[bytes, str]:
+        """HR/Admin: the month's approved reimbursements as their own register.
+
+        Same 40-column layout as the salary export so it imports the same way, but
+        salary-free: only people with an approved claim appear, and the only money
+        on the row is what they are owed back.
+
+        Pair this with `include_reimbursements=False` on the salary export, or the
+        same rupees go out in both files.
+        """
+        est = await self.estimate(caller, month)  # authorizes HR/Admin
+        lines = list(est.lines)
+        ids = [line.employee_id for line in lines]
+        reimbursed = await self._reimbursements.approved_for_month(ids, est.month)
+        payable = [line for line in lines if reimbursed.get(line.employee_id, 0) > 0]
+        if not payable:
+            raise NotFoundError()
+
+        year, m = _parse_month(est.month)
+        comps = await self._compensation.get_for_employees([r.employee_id for r in payable])
+        employees = {e.id: e for e in await self._employees.all_in_scope(caller)}
+        rows = [
+            self._reimbursement_row(
+                line,
+                emp=employees.get(line.employee_id),
+                comp=comps.get(line.employee_id),
+                period_label=_month_label(year, m),
+                reimbursement_minor=reimbursed[line.employee_id],
+            )
+            for line in payable
+        ]
+        xlsx = build_payroll_xlsx(
+            rows, month_label=_month_label(year, m), currency=est.currency
+        )
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="payroll.export_reimbursements",
+            target=f"month:{est.month}:{len(rows)}",
+        )
+        return xlsx, f"reimbursements-{est.month}.xlsx"
 
     async def export_xlsx(
         self,
         caller: CurrentUser,
         month: str | None,
         employee_ids: Sequence[uuid.UUID] | None = None,
+        *,
+        include_reimbursements: bool = True,
     ) -> tuple[bytes, str]:
         """HR/Admin: the month's payroll as an .xlsx in the 40-column "Payrun
         Employee Salary statement" register — identity + bank + per-annum CTC/Gross,
@@ -552,6 +649,10 @@ class PayrollService:
         `employee_ids` narrows the register to a chosen few. It filters the lines
         the caller can ALREADY see (estimate() scopes them first), so it can only
         ever shrink the export — never widen it past the caller's scope.
+
+        Set `include_reimbursements=False` when expenses are being paid from their
+        own run (`export_reimbursements_xlsx`); leaving both on pays the same
+        rupees twice.
         """
         est = await self.estimate(caller, month)  # authorizes HR/Admin
         lines = list(est.lines)
@@ -566,7 +667,11 @@ class PayrollService:
         ids = [line.employee_id for line in lines]
         comps = await self._compensation.get_for_employees(ids)
         employees = {e.id: e for e in await self._employees.all_in_scope(caller)}
-        reimbursed = await self._reimbursements.approved_for_month(ids, est.month)
+        reimbursed = (
+            await self._reimbursements.approved_for_month(ids, est.month)
+            if include_reimbursements
+            else {}
+        )
         adjustments = await self._adjustments.for_month(ids, est.month)
         period_label = _month_label(year, m)
 
