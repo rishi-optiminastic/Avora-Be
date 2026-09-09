@@ -39,11 +39,25 @@ class EmployeeRepository:
         return result.scalar_one_or_none()
 
     async def get_by_biometric_id(self, biometric_id: str) -> Employee | None:
-        """Resolve an employee by their attendance-device enrollment id."""
+        """Resolve an employee by their attendance-device enrollment id.
+
+        The same device id can legitimately match more than one row. Offboarding
+        soft-deletes an employee and keeps the record (rule 8), so someone who
+        rejoins and is re-enrolled on the same finger has an old inactive row and
+        a new active one. `scalar_one_or_none` RAISED on that, and because ingest
+        resolves every punch in a batch, a single duplicate made the whole upload
+        500 and a day of office punches vanished.
+
+        Prefer the active record, then the most recent, so the answer is stable
+        rather than whichever row the planner happened to return first.
+        """
         result = await self._session.execute(
-            select(Employee).where(Employee.biometric_id == biometric_id)
+            select(Employee)
+            .where(Employee.biometric_id == biometric_id)
+            .order_by(Employee.is_active.desc(), Employee.created_at.desc())
+            .limit(1)
         )
-        return result.scalar_one_or_none()
+        return result.scalars().first()
 
     async def tracking_mode(self, employee_id: uuid.UUID) -> TrackingMode:
         """The ingest gate reads this on every sample — a single indexed lookup."""
