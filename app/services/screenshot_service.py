@@ -131,9 +131,7 @@ class ScreenshotService:
             try:
                 await storage.delete_objects([shot.object_key])
             except (ClientError, BotoCoreError):
-                logger.warning(
-                    "screenshot_s3_delete_failed", extra={"key": shot.object_key}
-                )
+                logger.warning("screenshot_s3_delete_failed", extra={"key": shot.object_key})
         await self._screenshots.delete(shot)
         await self._audit.append(
             actor=str(caller.employee_id),

@@ -38,9 +38,7 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     op.add_column(
         "attendance_policy",
-        sa.Column(
-            "full_day_grace_minutes", sa.Integer(), nullable=False, server_default="15"
-        ),
+        sa.Column("full_day_grace_minutes", sa.Integer(), nullable=False, server_default="15"),
     )
     op.alter_column("attendance_policy", "full_day_grace_minutes", server_default=None)
 

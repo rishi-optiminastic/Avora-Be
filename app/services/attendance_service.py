@@ -153,9 +153,7 @@ class AttendanceService:
                 iso = day.isoformat()
                 if (emp_id, iso) in existing:
                     continue
-                status = (
-                    AttendanceStatus.ON_LEAVE if day in on_leave else AttendanceStatus.ABSENT
-                )
+                status = AttendanceStatus.ON_LEAVE if day in on_leave else AttendanceStatus.ABSENT
                 rows.append(
                     AttendanceDayRow(
                         employee_id=emp_id,
@@ -474,9 +472,7 @@ class AttendanceService:
         # approved leave) — synthesize them so they show up everywhere, not silently
         # vanish. Payroll is unaffected: it counts present = full+late+half only.
         existing = {(r.employee_id, r.day) for r in rows}
-        rows.extend(
-            await self._absence_rows(ids, start_date, end_date, spec, today, existing)
-        )
+        rows.extend(await self._absence_rows(ids, start_date, end_date, spec, today, existing))
         rows.sort(key=lambda r: (r.day, str(r.employee_id)))
         return rows, ids
 

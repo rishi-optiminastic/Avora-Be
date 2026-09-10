@@ -64,9 +64,7 @@ async def decide_resignation(
     service: ResignationServiceDep,
 ) -> ResignationRead:
     """Accept or reject a submitted resignation (HR/Admin, never your own)."""
-    return ResignationRead.model_validate(
-        await service.decide(caller, resignation_id, payload)
-    )
+    return ResignationRead.model_validate(await service.decide(caller, resignation_id, payload))
 
 
 @router.post("/{resignation_id}/withdraw", response_model=ResignationRead)

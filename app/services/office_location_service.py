@@ -33,9 +33,7 @@ class OfficeLocationService:
             raise AuthorizationError()
         return await self._offices.list_all()
 
-    async def create(
-        self, caller: CurrentUser, payload: OfficeLocationCreate
-    ) -> OfficeLocation:
+    async def create(self, caller: CurrentUser, payload: OfficeLocationCreate) -> OfficeLocation:
         if not _can_manage(caller):
             raise AuthorizationError()
         row = await self._offices.create(

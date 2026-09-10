@@ -42,14 +42,10 @@ async def test_grant_unlocks_payroll_cluster(
         await client.get(f"/api/v1/payroll/adjustments?month={_MONTH}", headers=exec_headers)
     ).status_code == 403
     assert (
-        await client.get(
-            f"/api/v1/attendance/overrides?month={_MONTH}", headers=exec_headers
-        )
+        await client.get(f"/api/v1/attendance/overrides?month={_MONTH}", headers=exec_headers)
     ).status_code == 403
     assert (
-        await client.get(
-            f"/api/v1/employees/{seed.report.id}/compensation", headers=exec_headers
-        )
+        await client.get(f"/api/v1/employees/{seed.report.id}/compensation", headers=exec_headers)
     ).status_code == 403
 
     url, body = _grant(str(seed.outsider.id), True)
@@ -62,9 +58,7 @@ async def test_grant_unlocks_payroll_cluster(
         await client.get(f"/api/v1/payroll/adjustments?month={_MONTH}", headers=exec_headers)
     ).status_code == 200
     assert (
-        await client.get(
-            f"/api/v1/attendance/overrides?month={_MONTH}", headers=exec_headers
-        )
+        await client.get(f"/api/v1/attendance/overrides?month={_MONTH}", headers=exec_headers)
     ).status_code == 200
     comp = await client.get(f"/api/v1/compensation/{seed.report.id}", headers=exec_headers)
     assert comp.status_code in (200, 404)  # authorized now; 404 only if no comp on file

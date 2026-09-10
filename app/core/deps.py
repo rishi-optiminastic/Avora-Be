@@ -65,6 +65,8 @@ from app.repositories.payroll_settings import PayrollSettingsRepository
 from app.repositories.payslip import PayslipRepository
 from app.repositories.personal_access_token import PersonalAccessTokenRepository
 from app.repositories.ping import PingRepository
+from app.repositories.probation_checklist import ProbationChecklistRepository
+from app.repositories.probation_decision import ProbationDecisionRepository
 from app.repositories.quick_meet import QuickMeetRepository
 from app.repositories.regularization import RegularizationRepository
 from app.repositories.reimbursement import ReimbursementRepository
@@ -119,6 +121,7 @@ from app.services.pat_service import PatService
 from app.services.payroll_adjustment_service import PayrollAdjustmentService
 from app.services.payroll_service import PayrollService
 from app.services.ping_service import PingService
+from app.services.probation_service import ProbationService
 from app.services.reconciliation_service import ReconciliationService
 from app.services.regularization_service import RegularizationService
 from app.services.reimbursement_service import ReimbursementService
@@ -590,9 +593,7 @@ def get_office_location_service(
     return OfficeLocationService(offices, audit)
 
 
-OfficeLocationServiceDep = Annotated[
-    OfficeLocationService, Depends(get_office_location_service)
-]
+OfficeLocationServiceDep = Annotated[OfficeLocationService, Depends(get_office_location_service)]
 
 
 def get_monitoring_gate(
@@ -762,6 +763,28 @@ def get_leave_service(
     )
 
 
+def get_probation_repo(db: DbDep) -> ProbationChecklistRepository:
+    return ProbationChecklistRepository(db)
+
+
+def get_probation_decision_repo(db: DbDep) -> ProbationDecisionRepository:
+    return ProbationDecisionRepository(db)
+
+
+def get_probation_service(
+    items: Annotated[ProbationChecklistRepository, Depends(get_probation_repo)],
+    decisions: Annotated[ProbationDecisionRepository, Depends(get_probation_decision_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    leave_policy: Annotated[LeavePolicyService, Depends(get_leave_policy_service)],
+    attendance_policy: Annotated[AttendancePolicyService, Depends(get_attendance_policy_service)],
+    email: Annotated[EmailService, Depends(get_email_service)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> ProbationService:
+    return ProbationService(
+        items, decisions, employees, (leave_policy, attendance_policy), email, audit
+    )
+
+
 def get_resignation_service(
     resignations: Annotated[ResignationRepository, Depends(get_resignation_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
@@ -780,9 +803,7 @@ def get_reimbursement_service(
     settings: SettingsDep,
     payslips: Annotated[PayslipRepository, Depends(get_payslip_repo)],
 ) -> ReimbursementService:
-    return ReimbursementService(
-        reimbursements, employees, audit, notifications, settings, payslips
-    )
+    return ReimbursementService(reimbursements, employees, audit, notifications, settings, payslips)
 
 
 def get_payroll_adjustment_service(
@@ -924,10 +945,9 @@ InvitationServiceDep = Annotated[InvitationService, Depends(get_invitation_servi
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
 TargetServiceDep = Annotated[TargetService, Depends(get_target_service)]
 LeaveServiceDep = Annotated[LeaveService, Depends(get_leave_service)]
+ProbationServiceDep = Annotated[ProbationService, Depends(get_probation_service)]
 ResignationServiceDep = Annotated[ResignationService, Depends(get_resignation_service)]
-ReimbursementServiceDep = Annotated[
-    ReimbursementService, Depends(get_reimbursement_service)
-]
+ReimbursementServiceDep = Annotated[ReimbursementService, Depends(get_reimbursement_service)]
 PayrollAdjustmentServiceDep = Annotated[
     PayrollAdjustmentService, Depends(get_payroll_adjustment_service)
 ]

@@ -58,12 +58,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["created_by"], ["employees.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        "ix_payroll_adjustments_employee_id", "payroll_adjustments", ["employee_id"]
-    )
-    op.create_index(
-        "ix_payroll_adjustments_period_month", "payroll_adjustments", ["period_month"]
-    )
+    op.create_index("ix_payroll_adjustments_employee_id", "payroll_adjustments", ["employee_id"])
+    op.create_index("ix_payroll_adjustments_period_month", "payroll_adjustments", ["period_month"])
     op.create_index(
         "ix_payroll_adjustments_employee_period",
         "payroll_adjustments",

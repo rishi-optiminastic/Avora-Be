@@ -36,16 +36,12 @@ def _adj(**over: object) -> dict[str, object]:
     return body
 
 
-async def _report_line(
-    client: AsyncClient, settings: Settings, seed: _Seed
-) -> dict[str, object]:
+async def _report_line(client: AsyncClient, settings: Settings, seed: _Seed) -> dict[str, object]:
     resp = await client.get(
         f"/api/v1/payroll/estimate?month={_MONTH}", headers=auth_headers(settings, seed.admin)
     )
     assert resp.status_code == 200
-    return next(
-        line for line in resp.json()["lines"] if line["employee_id"] == str(seed.report.id)
-    )
+    return next(line for line in resp.json()["lines"] if line["employee_id"] == str(seed.report.id))
 
 
 async def test_only_hr_admin_manages_adjustments(

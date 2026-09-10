@@ -107,18 +107,14 @@ def classify_day(
         # biometric scan, a forgotten clock-in — so it is regularizable, not a dead
         # end. It was previously excluded, which is why "the option isn't there"
         # was reported by exactly the people who needed it.
-        return DayVerdict(
-            AttendanceStatus.ABSENT, False, not regularized, regularized, False, None
-        )
+        return DayVerdict(AttendanceStatus.ABSENT, False, not regularized, regularized, False, None)
 
     arrival = local_minute(login_at, policy.timezone)
     on_time = arrival <= policy.on_time_cutoff
     # A late arrival owes a full 8 hours from when they actually got in; an
     # on-time one owes the normal day. Late people used to owe LESS in practice,
     # because the normal bar assumed a 9 AM start.
-    required_minutes = (
-        policy.late_full_day_minutes if not on_time else policy.full_day_hours_cutoff
-    )
+    required_minutes = policy.late_full_day_minutes if not on_time else policy.full_day_hours_cutoff
     hours_ok = worked_minutes >= required_minutes
     # Worked hours only judge someone once the day is over (see docstring).
     too_few_hours = day_complete and worked_minutes < policy.half_day_min_minutes

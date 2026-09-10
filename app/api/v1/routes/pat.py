@@ -32,7 +32,5 @@ async def list_tokens(caller: CurrentUserDep, service: PatServiceDep) -> list[Pa
 
 
 @router.delete("/tokens/{token_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def revoke_token(
-    token_id: uuid.UUID, caller: CurrentUserDep, service: PatServiceDep
-) -> None:
+async def revoke_token(token_id: uuid.UUID, caller: CurrentUserDep, service: PatServiceDep) -> None:
     await service.revoke_token(caller, token_id)

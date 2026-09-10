@@ -77,9 +77,7 @@ def upgrade() -> None:
         sa.Column("hr_decided_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("hr_note", sa.String(length=1000), nullable=True),
         sa.ForeignKeyConstraint(["employee_id"], ["employees.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(
-            ["manager_reviewer_id"], ["employees.id"], ondelete="SET NULL"
-        ),
+        sa.ForeignKeyConstraint(["manager_reviewer_id"], ["employees.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(["hr_reviewer_id"], ["employees.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -93,9 +91,7 @@ def upgrade() -> None:
     op.create_index(
         "ix_reimbursements_employee_status", "reimbursements", ["employee_id", "status"]
     )
-    op.create_index(
-        "ix_reimbursements_period_status", "reimbursements", ["period_month", "status"]
-    )
+    op.create_index("ix_reimbursements_period_status", "reimbursements", ["period_month", "status"])
 
     for value in ("REIMBURSEMENT_SUBMITTED", "REIMBURSEMENT_DECISION"):
         op.execute(f"ALTER TYPE notificationkind ADD VALUE IF NOT EXISTS '{value}'")

@@ -32,9 +32,7 @@ def upgrade() -> None:
     )
     op.add_column(
         "payroll_settings",
-        sa.Column(
-            "deduct_income_tax", sa.Boolean(), nullable=False, server_default=sa.true()
-        ),
+        sa.Column("deduct_income_tax", sa.Boolean(), nullable=False, server_default=sa.true()),
     )
 
 

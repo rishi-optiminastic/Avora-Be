@@ -570,9 +570,7 @@ class TaskService:
         await self._notify_comment(task, comment, author_id)
         return comment
 
-    async def _notify_comment(
-        self, task: Task, comment: TaskComment, author_id: uuid.UUID
-    ) -> None:
+    async def _notify_comment(self, task: Task, comment: TaskComment, author_id: uuid.UUID) -> None:
         """Ping everyone on the task (assignee, assigner, collaborators) except the
         author when a message is posted. notify() also drops the self-case."""
         recipients = {task.assignee_id, *task.collaborator_ids}

@@ -30,6 +30,8 @@ from app.services.email_templates import (
     leave_decision_email,
     leave_request_email,
     payslip_email,
+    probation_confirmation_email,
+    probation_extension_email,
     resignation_decision_email,
     resignation_submitted_email,
     task_assigned_email,
@@ -418,6 +420,39 @@ class EmailService:
         )
         await self.send(to=to, subject=subject, html=html)
 
+    async def send_probation_confirmed(
+        self,
+        *,
+        to: str,
+        employee_name: str,
+        job_title: str,
+        effective_label: str,
+        letter: EmailAttachment | None = None,
+    ) -> None:
+        """Confirmation letter after a successful probation review."""
+        subject, html = probation_confirmation_email(
+            employee_name=employee_name,
+            job_title=job_title,
+            effective_label=effective_label,
+            has_letter=letter is not None,
+        )
+        await self.send(to=to, subject=subject, html=html, attachments=[letter] if letter else None)
+
+    async def send_probation_extended(
+        self,
+        *,
+        to: str,
+        employee_name: str,
+        new_end_label: str,
+        letter: EmailAttachment | None = None,
+    ) -> None:
+        subject, html = probation_extension_email(
+            employee_name=employee_name,
+            new_end_label=new_end_label,
+            has_letter=letter is not None,
+        )
+        await self.send(to=to, subject=subject, html=html, attachments=[letter] if letter else None)
+
     async def send_birthday(self, *, to: str, person_name: str, audience: list[str]) -> None:
         """Wish one person, with the team CC'd so the wish is visibly public."""
         subject, html = birthday_email(person_name=person_name)
@@ -429,9 +464,7 @@ class EmailService:
         subject, html = anniversary_email(person_name=person_name, years=years)
         await self.send_broadcast(to=to, audience=audience, subject=subject, html=html)
 
-    async def send_festival(
-        self, *, festival_name: str, message: str, audience: list[str]
-    ) -> None:
+    async def send_festival(self, *, festival_name: str, message: str, audience: list[str]) -> None:
         """A festival has no one subject, so the workspace address takes the To line
         and the whole team is CC'd."""
         subject, html = festival_email(festival_name=festival_name, message=message)

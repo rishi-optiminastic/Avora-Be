@@ -36,9 +36,7 @@ class OfficeLocationRepository:
     async def create(
         self, *, name: str, latitude: float, longitude: float, radius_m: int
     ) -> OfficeLocation:
-        row = OfficeLocation(
-            name=name, latitude=latitude, longitude=longitude, radius_m=radius_m
-        )
+        row = OfficeLocation(name=name, latitude=latitude, longitude=longitude, radius_m=radius_m)
         self._session.add(row)
         await self._session.flush()
         return row

@@ -21,9 +21,7 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     # --- resignations ------------------------------------------------------ #
-    status = sa.Enum(
-        "SUBMITTED", "ACCEPTED", "REJECTED", "WITHDRAWN", name="resignationstatus"
-    )
+    status = sa.Enum("SUBMITTED", "ACCEPTED", "REJECTED", "WITHDRAWN", name="resignationstatus")
     status.create(op.get_bind(), checkfirst=True)
     op.create_table(
         "resignations",
@@ -49,9 +47,7 @@ def upgrade() -> None:
     op.create_index("ix_resignations_employee_id", "resignations", ["employee_id"])
     op.create_index("ix_resignations_status", "resignations", ["status"])
     op.create_index("ix_resignations_reviewer_id", "resignations", ["reviewer_id"])
-    op.create_index(
-        "ix_resignations_employee_status", "resignations", ["employee_id", "status"]
-    )
+    op.create_index("ix_resignations_employee_status", "resignations", ["employee_id", "status"])
 
     # --- festivals --------------------------------------------------------- #
     op.create_table(
@@ -73,15 +69,11 @@ def upgrade() -> None:
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()")),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.text("now()")),
-        sa.Column(
-            "birthday_enabled", sa.Boolean(), nullable=False, server_default=sa.text("true")
-        ),
+        sa.Column("birthday_enabled", sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.Column(
             "anniversary_enabled", sa.Boolean(), nullable=False, server_default=sa.text("true")
         ),
-        sa.Column(
-            "festival_enabled", sa.Boolean(), nullable=False, server_default=sa.text("true")
-        ),
+        sa.Column("festival_enabled", sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.Column("last_run_on", sa.Date(), nullable=True),
         sa.Column("updated_by", sa.Uuid(), nullable=True),
         sa.ForeignKeyConstraint(["updated_by"], ["employees.id"], ondelete="SET NULL"),

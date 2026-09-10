@@ -75,9 +75,7 @@ async def get_reimbursement(
     caller: CurrentUserDep,
     service: ReimbursementServiceDep,
 ) -> ReimbursementRead:
-    return ReimbursementRead.model_validate(
-        await service.get_for_caller(caller, reimbursement_id)
-    )
+    return ReimbursementRead.model_validate(await service.get_for_caller(caller, reimbursement_id))
 
 
 @router.post("/{reimbursement_id}/manager-decision", response_model=ReimbursementRead)
@@ -112,9 +110,7 @@ async def withdraw_reimbursement(
     caller: CurrentUserDep,
     service: ReimbursementServiceDep,
 ) -> ReimbursementRead:
-    return ReimbursementRead.model_validate(
-        await service.withdraw(caller, reimbursement_id)
-    )
+    return ReimbursementRead.model_validate(await service.withdraw(caller, reimbursement_id))
 
 
 @router.patch("/{reimbursement_id}/settlement-month", response_model=ReimbursementRead)
@@ -129,9 +125,7 @@ async def move_settlement_month(
     Refused if either the month it leaves or the month it enters has already
     been released — one would un-pay someone, the other would never pay them.
     """
-    row = await service.move_settlement_month(
-        caller, reimbursement_id, payload.settlement_month
-    )
+    row = await service.move_settlement_month(caller, reimbursement_id, payload.settlement_month)
     return ReimbursementRead.model_validate(row)
 
 

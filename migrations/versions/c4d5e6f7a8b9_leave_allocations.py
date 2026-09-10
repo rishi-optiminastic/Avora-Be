@@ -54,9 +54,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id", name=op.f("pk_leave_allocations")),
         sa.UniqueConstraint("employee_id", name="uq_leave_allocations_employee_id"),
     )
-    op.create_index(
-        op.f("ix_leave_allocations_employee_id"), "leave_allocations", ["employee_id"]
-    )
+    op.create_index(op.f("ix_leave_allocations_employee_id"), "leave_allocations", ["employee_id"])
 
 
 def downgrade() -> None:

@@ -100,9 +100,7 @@ async def test_self_assign_create_and_complete(
     mcp_env: None, db: AsyncSession, settings: Settings, seed: _Seed
 ) -> None:
     raw = await _mint(db, settings, seed.report)
-    created = json.loads(
-        await server.create_task(_ctx(raw), title="Write the weekly report")
-    )
+    created = json.loads(await server.create_task(_ctx(raw), title="Write the weekly report"))
     assert created["assignee_id"] == str(seed.report.id)
     assert created["status"] == "todo"
 
@@ -117,9 +115,7 @@ async def test_non_manager_cannot_assign_to_others(
 ) -> None:
     raw = await _mint(db, settings, seed.report)
     with pytest.raises(ToolError):
-        await server.create_task(
-            _ctx(raw), title="Do my chore", assignee_id=str(seed.outsider.id)
-        )
+        await server.create_task(_ctx(raw), title="Do my chore", assignee_id=str(seed.outsider.id))
 
 
 @pytest.mark.asyncio

@@ -114,6 +114,12 @@ class _FakeEmailService:
     async def send_holiday_reminder(self, **kwargs: object) -> None:
         self._record(kwargs, "holiday_reminder")
 
+    async def send_probation_confirmed(self, **kwargs: object) -> None:
+        self._record(kwargs, "probation_confirmed")
+
+    async def send_probation_extended(self, **kwargs: object) -> None:
+        self._record(kwargs, "probation_extended")
+
     async def send_agent_reinstall(self, **kwargs: object) -> None:
         return None
 

@@ -68,3 +68,24 @@ def test_declared_enum_types_use_uppercase_labels() -> None:
     assert not offenders, "Enum type labels must be member names (uppercase):\n" + "\n".join(
         offenders
     )
+
+
+# `sa.Enum(...)` accepts `create_type` and silently throws it away — the flag only
+# exists on `postgresql.ENUM`. A migration that pre-creates the type and then
+# passes `sa.Enum(..., create_type=False)` to `create_table` therefore emits
+# CREATE TYPE twice and dies with `type "..." already exists`, on Postgres only.
+# Verified by running such a migration against a real Postgres.
+_SA_ENUM_CREATE_TYPE = re.compile(r"sa\.Enum\([^)]*create_type", re.DOTALL)
+
+
+def test_no_migration_passes_create_type_to_sa_enum() -> None:
+    """create_type belongs to postgresql.ENUM. On sa.Enum it is a silent no-op."""
+    offenders = [
+        path.name
+        for path in _migration_files()
+        if _SA_ENUM_CREATE_TYPE.search(path.read_text(encoding="utf-8"))
+    ]
+    assert not offenders, (
+        "sa.Enum ignores create_type, so create_table will re-emit CREATE TYPE and "
+        f"the migration will fail on Postgres. Use postgresql.ENUM in: {offenders}"
+    )

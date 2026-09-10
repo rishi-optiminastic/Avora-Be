@@ -27,8 +27,12 @@ def upgrade() -> None:
         sa.Column("longitude", sa.Float(), nullable=False),
         sa.Column("radius_m", sa.Integer(), nullable=False, server_default="150"),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_office_locations_is_active", "office_locations", ["is_active"])
@@ -41,9 +45,7 @@ def upgrade() -> None:
     )
     op.add_column(
         "employees",
-        sa.Column(
-            "location_check_exempt", sa.Boolean(), nullable=False, server_default=sa.false()
-        ),
+        sa.Column("location_check_exempt", sa.Boolean(), nullable=False, server_default=sa.false()),
     )
     op.add_column("work_sessions", sa.Column("latitude", sa.Float(), nullable=True))
     op.add_column("work_sessions", sa.Column("longitude", sa.Float(), nullable=True))

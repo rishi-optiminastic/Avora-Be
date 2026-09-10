@@ -64,11 +64,11 @@ def _receipt_label(label: str | None, filename: str | None) -> str:
         return named[:MAX_RECEIPT_LABEL]
     stem = (filename or "").rsplit("/", 1)[-1].rsplit(".", 1)[0].strip()
     return (stem or "Proof")[:MAX_RECEIPT_LABEL]
+
+
 # What a proof may be. Enforced by sniffing the file's own bytes, never by the
 # Content-Type the browser claims — see app/core/uploads.detect_media_type.
-ALLOWED_RECEIPT_TYPES = frozenset(
-    {"application/pdf", "image/png", "image/jpeg", "image/webp"}
-)
+ALLOWED_RECEIPT_TYPES = frozenset({"application/pdf", "image/png", "image/jpeg", "image/webp"})
 
 
 def _can_review_hr(caller: CurrentUser) -> bool:
@@ -245,9 +245,7 @@ class ReimbursementService:
         await self._notify_step1_reviewers(caller, row)
         return row
 
-    async def _notify_step1_reviewers(
-        self, caller: CurrentUser, row: Reimbursement
-    ) -> None:
+    async def _notify_step1_reviewers(self, caller: CurrentUser, row: Reimbursement) -> None:
         """Ping whoever performs the manager step: the reporting manager, or every
         HR/Admin when the employee has no manager on file."""
         applicant = await self._employees.get(caller.employee_id)
@@ -433,9 +431,7 @@ class ReimbursementService:
         await self._notify_applicant(row, approved=False, note=note)
         return row
 
-    async def withdraw(
-        self, caller: CurrentUser, reimbursement_id: uuid.UUID
-    ) -> Reimbursement:
+    async def withdraw(self, caller: CurrentUser, reimbursement_id: uuid.UUID) -> Reimbursement:
         row = await self._reimbursements.get(reimbursement_id)
         if row is None:
             raise NotFoundError()
@@ -455,9 +451,7 @@ class ReimbursementService:
         )
         return row
 
-    async def _is_manager_reviewer(
-        self, caller: CurrentUser, row: Reimbursement
-    ) -> bool:
+    async def _is_manager_reviewer(self, caller: CurrentUser, row: Reimbursement) -> bool:
         """The manager step is for the applicant's reporting manager. HR/Admin may
         also act here (e.g. when the applicant has no manager on file)."""
         if _can_review_hr(caller):

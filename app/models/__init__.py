@@ -45,6 +45,8 @@ from app.models.payroll_settings import PayCycle, PayrollSettings
 from app.models.payslip import Payslip, PayslipStatus
 from app.models.personal_access_token import PersonalAccessToken
 from app.models.ping import Ping
+from app.models.probation_checklist import ProbationChecklistItem, ProbationStepStatus
+from app.models.probation_decision import ProbationDecision, ProbationOutcome
 from app.models.quick_meet_default import QuickMeetDefault
 from app.models.regularization import Regularization, RegularizationStatus
 from app.models.reimbursement import (
@@ -128,6 +130,10 @@ __all__ = [
     "PayslipStatus",
     "PersonalAccessToken",
     "Ping",
+    "ProbationChecklistItem",
+    "ProbationDecision",
+    "ProbationOutcome",
+    "ProbationStepStatus",
     "QuickMeetDefault",
     "Regularization",
     "RegularizationStatus",

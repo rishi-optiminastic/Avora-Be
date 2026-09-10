@@ -34,7 +34,9 @@ def upgrade() -> None:
         "workspace_files",
         sa.Column(
             "visibility",
-            postgresql.ENUM("EVERYONE", "RESTRICTED", name="workspacevisibility", create_type=False),
+            postgresql.ENUM(
+                "EVERYONE", "RESTRICTED", name="workspacevisibility", create_type=False
+            ),
             nullable=False,
             server_default="EVERYONE",
         ),

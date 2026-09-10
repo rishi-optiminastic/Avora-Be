@@ -622,9 +622,7 @@ class PayrollService:
             )
             for line in payable
         ]
-        xlsx = build_payroll_xlsx(
-            rows, month_label=_month_label(year, m), currency=est.currency
-        )
+        xlsx = build_payroll_xlsx(rows, month_label=_month_label(year, m), currency=est.currency)
         await self._audit.append(
             actor=str(caller.employee_id),
             action="payroll.export_reimbursements",

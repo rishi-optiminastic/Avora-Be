@@ -42,9 +42,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("employee_id", "day", name="uq_attendance_overrides_employee_day"),
     )
-    op.create_index(
-        "ix_attendance_overrides_employee_id", "attendance_overrides", ["employee_id"]
-    )
+    op.create_index("ix_attendance_overrides_employee_id", "attendance_overrides", ["employee_id"])
     op.create_index(
         "ix_attendance_overrides_employee_day", "attendance_overrides", ["employee_id", "day"]
     )

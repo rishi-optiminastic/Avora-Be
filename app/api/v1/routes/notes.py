@@ -30,7 +30,5 @@ async def create_note(
 
 
 @router.delete("/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_note(
-    note_id: uuid.UUID, caller: CurrentUserDep, service: NoteServiceDep
-) -> None:
+async def delete_note(note_id: uuid.UUID, caller: CurrentUserDep, service: NoteServiceDep) -> None:
     await service.delete(caller, note_id)

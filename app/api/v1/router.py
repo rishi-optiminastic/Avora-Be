@@ -38,6 +38,7 @@ from app.api.v1.routes import (
     payroll,
     payroll_adjustments,
     pings,
+    probation,
     reimbursements,
     resignations,
     screenshots,
@@ -74,6 +75,7 @@ api_router.include_router(notes.router)
 api_router.include_router(browsing.router)
 api_router.include_router(screenshots.router)
 api_router.include_router(pings.router)
+api_router.include_router(probation.router)
 api_router.include_router(insights.router)
 api_router.include_router(work_entities.router)
 api_router.include_router(attribution.router)

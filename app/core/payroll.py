@@ -310,11 +310,7 @@ def is_working_day(day: date, working_days_per_week: int = 5) -> bool:
     """
     if day.weekday() >= working_days_per_week:
         return False
-    if (
-        working_days_per_week == 6
-        and day.weekday() == _SATURDAY
-        and day >= POLICY_EFFECTIVE_DATE
-    ):
+    if working_days_per_week == 6 and day.weekday() == _SATURDAY and day >= POLICY_EFFECTIVE_DATE:
         return is_working_saturday(day)
     return True
 

@@ -55,10 +55,14 @@ async def test_send_uses_sendgrid_by_default(monkeypatch: pytest.MonkeyPatch) ->
     called: list[str] = []
     service = EmailService(_settings(email_provider="sendgrid", sendgrid_api_key="sg-key-value"))
     monkeypatch.setattr(
-        service, "_send_sendgrid", lambda **_: _record(called, "sendgrid")  # type: ignore[misc]
+        service,
+        "_send_sendgrid",
+        lambda **_: _record(called, "sendgrid"),  # type: ignore[misc]
     )
     monkeypatch.setattr(
-        service, "_send_smtp", lambda **_: _record(called, "smtp")  # type: ignore[misc]
+        service,
+        "_send_smtp",
+        lambda **_: _record(called, "smtp"),  # type: ignore[misc]
     )
 
     await service.send(to="dev@avora.test", subject="Hi", html="<p>body</p>")

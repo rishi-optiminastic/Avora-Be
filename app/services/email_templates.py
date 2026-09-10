@@ -779,3 +779,220 @@ def festival_email(*, festival_name: str, message: str) -> tuple[str, str]:
         heading=f"{festival_name} 🎉",
         body=message,
     )
+
+
+# -- Probation outcome letters ---------------------------------------------- #
+# Wording supplied by HR (Optiminastic probation templates). Keep the copy as
+# written: it is the company's language, not ours. Only the structure around it
+# is Avora's, and every interpolated value is escaped.
+
+_COMPANY = "Optiminastic Media Pvt. Ltd."
+_GLASSDOOR = "https://www.glassdoor.co.in"
+
+_PROBATION_FOOTER = (
+    f"Regards,<br/>HR Team<br/>{_COMPANY}<br/><br/>"
+    "Sent from Avora, the Optiminastic people workspace."
+)
+
+
+def _para(text: str) -> str:
+    return f'<p style="margin:0 0 14px;font-size:15px;line-height:1.65;color:{_INK};">{text}</p>'
+
+
+def _bullet(label: str, body: str) -> str:
+    return (
+        f'<li style="margin:0 0 8px;font-size:14.5px;line-height:1.6;color:{_INK};">'
+        f"<strong>{label}:</strong> {body}</li>"
+    )
+
+
+def probation_confirmation_email(
+    *,
+    employee_name: str,
+    job_title: str,
+    effective_label: str,
+    has_letter: bool,
+) -> tuple[str, str]:
+    """(subject, html) confirming someone's employment after probation."""
+    name, title = escape(employee_name), escape(job_title)
+    effective = escape(effective_label)
+    # Only claim an attachment when one is actually going out. An email that says
+    # "attached" with nothing attached is worse than one that stays quiet.
+    letter = (
+        _para(
+            "Your official Probation Confirmation Letter is attached to this email for "
+            "your reference and records."
+        )
+        if has_letter
+        else ""
+    )
+    content = f"""\
+<div style="font-size:11px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:{
+        _MUTED
+    };">
+  People · Probation
+</div>
+<h1 style="margin:8px 0 16px;font-family:{
+        _SERIF
+    };font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
+  Your probation is complete
+</h1>
+{_para(f"Dear {name},")}
+{_para("We are delighted to share some good news with you!")}
+{
+        _para(
+            f"Following the successful completion of your probation period, we are pleased to confirm "
+            f"your position as <strong>{title}</strong> at {_COMPANY}, effective <strong>{effective}</strong>."
+        )
+    }
+{
+        _para(
+            "Over the course of your probation, we have had the opportunity to see your contribution, "
+            "commitment, and potential as part of the Optiminastic team. Reaching this milestone is not "
+            "just the completion of your probation period - it marks the beginning of the next phase of "
+            "your journey with us."
+        )
+    }
+{
+        _para(
+            "We truly appreciate the effort you have put into your role so far, and we look forward to "
+            "seeing you continue to learn, take greater ownership, grow professionally, and contribute "
+            "to the larger goals of the organisation."
+        )
+    }
+<h2 style="margin:24px 0 10px;font-family:{
+        _SERIF
+    };font-size:18px;line-height:1.3;font-weight:600;color:{_INK};">
+  What changes after your confirmation
+</h2>
+{
+        _para(
+            "With effect from your confirmation date, the following employment terms and benefits will "
+            "become applicable to you, in accordance with the Company's policies:"
+        )
+    }
+<ul style="margin:0 0 14px;padding-left:20px;">
+  {_bullet("Notice Period", "Your applicable notice period will now be 30 days.")}
+  {
+        _bullet(
+            "Leave Eligibility",
+            "You will now be eligible for the applicable paid leave benefits as per the "
+            "Company's Leave Policy.",
+        )
+    }
+  {
+        _bullet(
+            "Health Insurance",
+            "You will become eligible for the Company's health insurance benefits, subject to "
+            "the applicable policy terms and enrolment guidelines.",
+        )
+    }
+  {
+        _bullet(
+            "Other Benefits",
+            "Any other benefits applicable to confirmed employees will be governed by the "
+            "prevailing Company policies.",
+        )
+    }
+</ul>
+{letter}
+{
+        _para(
+            "We hope your journey with Optiminastic continues to be one filled with opportunities, "
+            "learning, meaningful work, new responsibilities, and shared successes. As we grow as an "
+            "organisation, we hope you will grow with us and play an increasingly important role in "
+            "what we build together."
+        )
+    }
+{
+        _para(
+            "We would also love to hear about your experience of working with Optiminastic so far. If "
+            f'you would like to share your feedback, you can do so on <a href="{_GLASSDOOR}" '
+            f'style="color:{_VIOLET};">Glassdoor</a>.'
+        )
+    }
+{
+        _para(
+            "Once again, congratulations on successfully completing your probation and becoming a "
+            "confirmed member of the Optiminastic team!"
+        )
+    }
+{
+        _para(
+            "Thank you for your hard work, commitment, and contribution. We are excited to have you "
+            "continue this journey with us."
+        )
+    }"""
+    return (
+        "Congratulations - your probation is confirmed",
+        _layout(
+            preheader=f"Your position as {title} is confirmed, effective {effective}",
+            content_html=content,
+            footer=_PROBATION_FOOTER,
+        ),
+    )
+
+
+def probation_extension_email(
+    *,
+    employee_name: str,
+    new_end_label: str,
+    has_letter: bool,
+) -> tuple[str, str]:
+    """(subject, html) telling someone their probation has been extended."""
+    name, new_end = escape(employee_name), escape(new_end_label)
+    letter = (
+        _para(
+            "Please find the Probation Period Extension Letter attached, outlining the "
+            "details and expectations during the extended period."
+        )
+        if has_letter
+        else ""
+    )
+    content = f"""\
+<div style="font-size:11px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:{
+        _MUTED
+    };">
+  People · Probation
+</div>
+<h1 style="margin:8px 0 16px;font-family:{
+        _SERIF
+    };font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
+  Your probation has been extended
+</h1>
+{_para(f"Dear {name},")}
+{
+        _para(
+            "Following the review of your performance during your probation period, we would like to "
+            f"inform you that your probation has been extended until <strong>{new_end}</strong>."
+        )
+    }
+{
+        _para(
+            "Your performance will be reviewed periodically during this extended period, and a final "
+            "decision regarding your employment status will be communicated upon completion of the "
+            "extended probation period."
+        )
+    }
+{letter}
+{
+        _para(
+            "We encourage you to use this extended period as an opportunity to work on the identified "
+            "areas and demonstrate your capabilities."
+        )
+    }
+{
+        _para(
+            "Should you have any questions or require any guidance, please feel free to reach out to "
+            "your reporting manager or HR."
+        )
+    }
+{_para("We look forward to your progress and continued efforts.")}"""
+    return (
+        "Your probation period has been extended",
+        _layout(
+            preheader=f"Your probation is extended until {new_end}",
+            content_html=content,
+            footer=_PROBATION_FOOTER,
+        ),
+    )

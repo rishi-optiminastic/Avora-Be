@@ -139,9 +139,7 @@ async def test_outsider_cannot_set_someone_elses_bank(
     assert resp.status_code == 403
 
 
-async def test_bad_ifsc_is_rejected(
-    client: AsyncClient, settings: Settings, seed: _Seed
-) -> None:
+async def test_bad_ifsc_is_rejected(client: AsyncClient, settings: Settings, seed: _Seed) -> None:
     resp = await client.put(
         f"/api/v1/employees/{seed.report.id}/compensation/bank",
         json={**_BANK, "ifsc_code": "nope"},
