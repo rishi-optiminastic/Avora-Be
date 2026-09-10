@@ -222,11 +222,14 @@ class Settings(BaseSettings):
     auto_checkout_enabled: bool = False
     auto_checkout_tick_seconds: int = 900  # 15 min between sweeps
     auto_checkout_idle_grace_minutes: int = 30  # quiet this long ⇒ treat PC as off
-    # Don't auto-close TODAY's forgotten sessions until this local time (5:00 PM),
-    # independent of the attendance work-end — gives people an hour after office
-    # hours before the system steps in. Prior days are always closed.
+    # Don't auto-close TODAY's forgotten sessions until this local time, nor until
+    # `auto_checkout_after_work_end_minutes` past the org's work-end, whichever is
+    # later. The two together guarantee a real buffer: when the office window
+    # itself ends at 5 PM, a bare 5 PM trigger leaves none, and the sweep starts
+    # closing people the same minute their day ends. Prior days are always closed.
     auto_checkout_hour: int = 17
     auto_checkout_minute: int = 0
+    auto_checkout_after_work_end_minutes: int = 120
 
     # Monitoring retention: prune `activity_samples` and `screenshots` (with their
     # S3 blobs) older than this many days — nothing else is deleted. Both run once

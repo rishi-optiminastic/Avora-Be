@@ -122,7 +122,7 @@ async def test_probation_gets_only_four_sick_days(
     assert _allocated(payload, LeaveType.ANNUAL) == 0.0
 
 
-async def test_confirmed_stacks_sick_to_six_and_starts_accruing_planned(
+async def test_confirmed_holds_sick_at_four_and_starts_accruing_planned(
     client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
 ) -> None:
     # Joined 7 months ago: probation done last month, so one accrual month has
@@ -133,9 +133,11 @@ async def test_confirmed_stacks_sick_to_six_and_starts_accruing_planned(
     payload = await _balance(client, settings, seed.report)
 
     assert payload["tenure_status"] == TenureStatus.CONFIRMED.value
-    # The probation 4 plus 2 more, counted against the same leave year — days
-    # already taken during probation still count against this.
-    assert _allocated(payload, LeaveType.SICK) == 6.0
+    # Sick holds at the probation figure. The policy steps it up to 6 at ONE YEAR
+    # of service ("convert to annual 6 days including past 4 days of probation"),
+    # not on the confirmation date - confirmation unlocks the other types only.
+    # See test_tenured_gets_the_full_written_entitlement for the step up.
+    assert _allocated(payload, LeaveType.SICK) == 4.0
     assert _allocated(payload, LeaveType.PLANNED) == 2.0  # credited on confirmation, +1 a month
     assert LeaveType.PLANNED.value in payload["accruing_types"]  # type: ignore[operator]
     assert payload["probation_end_date"] == add_months(hire, _PROBATION_MONTHS).isoformat()

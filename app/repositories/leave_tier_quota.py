@@ -49,9 +49,12 @@ _SEED: dict[TenureStatus, dict[LeaveType, tuple[int | None, float | None]]] = {
         # through to the org policy like it does for everyone else.
     },
     TenureStatus.CONFIRMED: {
-        LeaveType.SICK: (6, None),
-        # Everything a permanent employee gets is now unlocked; only annual leave
-        # still waits for a full year of service.
+        # Sick leave holds at 4 until a full year of service, then steps up to the
+        # org policy figure of 6 ("convert to annual 6 days including past 4 days
+        # of probation"). Confirmation unlocks the other types, not this one.
+        LeaveType.SICK: (4, None),
+        # Everything else a permanent employee gets is now unlocked; only annual
+        # leave still waits for a full year of service.
         LeaveType.BIRTHDAY: (1, None),
         LeaveType.PLANNED: (None, 1.0),  # 1 a month, capped by the org policy
         LeaveType.ANNUAL: (0, None),
