@@ -27,6 +27,10 @@ class WorkspaceFileCategory(StrEnum):
     REFERENCE = "reference"  # supporting material
     REPORT = "report"  # exported reports / analyses
     ASSET = "asset"  # design / brand / media
+    # A company policy (leave, reimbursement, dress code). Everyone reads these;
+    # only HR/Admin may publish or remove one, because a policy carries the
+    # company's authority and anyone could otherwise post a convincing fake.
+    POLICY = "policy"
     OTHER = "other"
 
 

@@ -109,3 +109,26 @@ async def test_run_daily_broadcasts_and_is_idempotent(
 
     # Same day again → nothing re-sent (idempotent via last_run_on).
     assert await service.run_daily(today) == 0
+
+
+# --- the send hour ---------------------------------------------------------- #
+def test_greetings_wait_for_the_configured_hour(settings: Settings) -> None:
+    """A naive daily job fires the moment the date rolls over, so greetings went
+    out at 00:0x. "Happy birthday" at five past midnight reads as a robot, so the
+    worker holds until noon in the org's own timezone."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    ist = ZoneInfo("Asia/Kolkata")
+    send_after = settings.celebrations_hour * 60 + settings.celebrations_minute
+    assert send_after == 12 * 60  # noon, unless the env says otherwise
+
+    def is_due(hour: int, minute: int) -> bool:
+        now = datetime(2026, 9, 11, hour, minute, tzinfo=ist)
+        return now.hour * 60 + now.minute >= send_after
+
+    assert not is_due(0, 5)  # the bug this replaces
+    assert not is_due(11, 59)
+    assert is_due(12, 0)
+    # Started late (a restart at 3 pm) still sends the day rather than skipping it.
+    assert is_due(15, 30)

@@ -75,6 +75,18 @@ def _can_manage(caller: CurrentUser) -> bool:
     return caller.role in (Role.ADMIN, Role.HR)
 
 
+def _guard_policy(caller: CurrentUser, category: WorkspaceFileCategory) -> None:
+    """Only HR/Admin may publish a policy.
+
+    The rest of the workspace is a team drive anyone can add to, which is right
+    for briefs and assets. A policy is different: it speaks for the company, and
+    a convincing fake "Dress code v2" posted by anyone would be believed. Reading
+    stays open to everyone - that is the whole point of publishing one.
+    """
+    if category is WorkspaceFileCategory.POLICY and not _can_manage(caller):
+        raise AuthorizationError("Only HR or an admin can publish a company policy.")
+
+
 def _to_read(row: FileRow) -> WorkspaceFileRead:
     file, project_name, uploader_name = row
     return WorkspaceFileRead(
@@ -176,6 +188,7 @@ class WorkspaceFileService:
         filename: str | None,
         content_type: str,
     ) -> WorkspaceFileRead:
+        _guard_policy(caller, meta.category)
         if not data:
             raise ValidationError("File is empty.")
         if len(data) > MAX_FILE_BYTES:
@@ -226,6 +239,7 @@ class WorkspaceFileService:
         self, caller: CurrentUser, payload: WorkspaceLinkCreate
     ) -> WorkspaceFileRead:
         """Store a link (a Google Sheet/Doc, a receipt URL, anything) — no bytes."""
+        _guard_policy(caller, payload.category)
         if payload.project_id is not None and await self._entities.get(payload.project_id) is None:
             raise NotFoundError("Project not found.")
         visibility, departments, employee_ids = self._normalize_access(payload)
@@ -275,6 +289,9 @@ class WorkspaceFileService:
         if file is None:
             raise NotFoundError()
         # Only the uploader or HR/Admin may delete (everyone else can read it).
+        # A policy is HR/Admin only either way: withdrawing one is as much a
+        # company act as publishing it.
+        _guard_policy(caller, file.category)
         if not _can_manage(caller) and file.uploaded_by != caller.employee_id:
             raise AuthorizationError()
         if file.object_key and self._settings.s3_enabled:

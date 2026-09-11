@@ -10,7 +10,9 @@ Deploy alongside the API (one instance). Env:
   DATABASE_URL              Postgres URL (asyncpg-style, same as the API).
   SENDGRID_API_KEY          so greetings can actually be delivered.
   EMAIL_FROM                sender address (defaults to the app's configured value).
-  CELEBRATIONS_TICK_SECONDS seconds between checks (default 3600 = hourly).
+  CELEBRATIONS_TICK_SECONDS seconds between checks (default 900 = every 15 min).
+  CELEBRATIONS_HOUR         local hour to send at (default 12, i.e. noon).
+  CELEBRATIONS_MINUTE       minute past that hour (default 0).
 """
 
 from __future__ import annotations
@@ -38,7 +40,8 @@ from worker.heartbeat import beat
 
 log = logging.getLogger("celebrations_scheduler")
 
-TICK_SECONDS = float(os.getenv("CELEBRATIONS_TICK_SECONDS", "3600"))
+# 15 minutes, so the noon send is punctual rather than up to an hour late.
+TICK_SECONDS = float(os.getenv("CELEBRATIONS_TICK_SECONDS", "900"))
 HEARTBEAT_ENV = "HEARTBEAT_URL_CELEBRATIONS"
 
 
@@ -59,7 +62,15 @@ async def _tick() -> None:
             spec = await AttendancePolicyService(
                 AttendancePolicyRepository(session), AuditRepository(session)
             ).spec()
-            today = datetime.now(UTC).astimezone(ZoneInfo(spec.timezone)).date()
+            settings = get_settings()
+            now_local = datetime.now(UTC).astimezone(ZoneInfo(spec.timezone))
+            send_after = settings.celebrations_hour * 60 + settings.celebrations_minute
+            if now_local.hour * 60 + now_local.minute < send_after:
+                # Too early. Nothing is skipped: `run_daily` is idempotent on the
+                # date, so the first tick past noon still sends the whole day —
+                # including when the worker was restarted after noon.
+                return
+            today = now_local.date()
             sent = await _build_service(session).run_daily(today)
             if sent:
                 log.info("celebration run for %s sent %d emails", today, sent)

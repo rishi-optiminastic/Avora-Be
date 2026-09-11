@@ -231,6 +231,12 @@ class Settings(BaseSettings):
     auto_checkout_minute: int = 0
     auto_checkout_after_work_end_minutes: int = 120
 
+    # Celebrations: greetings go out at a civil hour, not whenever the worker
+    # first notices the date has changed. Midnight is when a naive daily job
+    # fires, and a 00:05 "happy birthday" reads as automated.
+    celebrations_hour: int = 12
+    celebrations_minute: int = 0
+
     # Monitoring retention: prune `activity_samples` and `screenshots` (with their
     # S3 blobs) older than this many days — nothing else is deleted. Both run once
     # a day at `activity_purge_hour` (local).
