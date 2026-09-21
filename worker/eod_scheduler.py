@@ -78,6 +78,7 @@ def _build_service(session: AsyncSession) -> EodService:
         AttendanceOverrideRepository(session),
         HolidayRepository(session),
         LeaveRepository(session),
+        AuditRepository(session),
     )
     return EodService(
         EodReportRepository(session),

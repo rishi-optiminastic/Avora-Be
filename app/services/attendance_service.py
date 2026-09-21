@@ -17,12 +17,18 @@ from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app.core.attendance import PolicySpec, classify_day, local_minute
+from app.core.attendance_export import (
+    AttendanceDailyRow,
+    AttendanceSummaryRow,
+    build_attendance_xlsx,
+)
 from app.core.exceptions import NotFoundError, ValidationError
 from app.core.payroll import is_working_day
 from app.models.attendance_override import AttendanceOverrideStatus
 from app.models.employee import Employee
 from app.repositories.activity import ActivityRepository, DailyAgg, idle_minutes
 from app.repositories.attendance_override import AttendanceOverrideRepository
+from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.holiday import HolidayRepository
 from app.repositories.leave import LeaveRepository
@@ -75,6 +81,7 @@ class AttendanceService:
         overrides: AttendanceOverrideRepository,
         holidays: HolidayRepository,
         leaves: LeaveRepository,
+        audit: AuditRepository,
     ) -> None:
         self._employees = employees
         self._activity = activity
@@ -84,6 +91,7 @@ class AttendanceService:
         self._overrides = overrides
         self._holidays = holidays
         self._leaves = leaves
+        self._audit = audit
 
     @staticmethod
     def _local_bounds(local_date: str, tz: str) -> tuple[datetime, datetime]:
@@ -496,14 +504,22 @@ class AttendanceService:
             rows = [r for r in rows if r.employee_id == employee_id]
         return rows
 
-    async def monthly_report(self, caller: CurrentUser, month: str) -> list[AttendanceMonthSummary]:
+    @staticmethod
+    def _month_bounds(month: str) -> tuple[str, str]:
+        """The first and last local date of `month` (YYYY-MM)."""
         y, m = (int(x) for x in month.split("-"))
-        first = f"{y:04d}-{m:02d}-01"
         last_day = (datetime(y + (m // 12), (m % 12) + 1, 1) - timedelta(days=1)).day
-        last = f"{y:04d}-{m:02d}-{last_day:02d}"
-        spec = await self._policy.spec()
-        rows, ids = await self._day_rows(caller, first, last, spec)
+        return f"{y:04d}-{m:02d}-01", f"{y:04d}-{m:02d}-{last_day:02d}"
 
+    @staticmethod
+    def _summarize(
+        rows: Sequence[AttendanceDayRow], ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, AttendanceMonthSummary]:
+        """Roll day rows up into one summary per employee.
+
+        The single place the month is counted: the API report and the .xlsx both
+        read it, so the sheet can never disagree with the screen.
+        """
         summary = {i: AttendanceMonthSummary(employee_id=i, **_ZERO) for i in ids}
         for r in rows:
             s = summary[r.employee_id]
@@ -520,7 +536,85 @@ class AttendanceService:
                 s.leave_days += 1
             if r.regularized:
                 s.regularized_days += 1
-        return list(summary.values())
+        return summary
+
+    async def monthly_report(self, caller: CurrentUser, month: str) -> list[AttendanceMonthSummary]:
+        first, last = self._month_bounds(month)
+        spec = await self._policy.spec()
+        rows, ids = await self._day_rows(caller, first, last, spec)
+        return list(self._summarize(rows, ids).values())
+
+    async def export_monthly_xlsx(self, caller: CurrentUser, month: str) -> tuple[bytes, str]:
+        """The month's attendance as .xlsx: a per-employee summary and every day's
+        check-in / check-out, scoped to whoever is asking.
+
+        Scope is `all_in_scope`, the same clause every other attendance read uses,
+        so HR gets the org, a manager gets their reports, and nobody gets more by
+        exporting than by looking. Audited: an export leaves the system (§5.7).
+        """
+        first, last = self._month_bounds(month)
+        spec = await self._policy.spec()
+        tz = ZoneInfo(spec.timezone)
+        rows, ids = await self._day_rows(caller, first, last, spec)
+        people = {e.id: e for e in await self._employees.all_in_scope(caller)}
+
+        def name_of(employee_id: uuid.UUID) -> tuple[str, str]:
+            person = people.get(employee_id)
+            return (person.full_name if person else "Unknown"), (
+                person.department if person and person.department else "-"
+            )
+
+        def clock(moment: datetime | None) -> str:
+            # Local time, because the sheet is read by people in the office.
+            return moment.astimezone(tz).strftime("%H:%M") if moment else "-"
+
+        summaries = self._summarize(rows, ids)
+        summary_rows = []
+        for employee_id, s in summaries.items():
+            full_name, department = name_of(employee_id)
+            summary_rows.append(
+                AttendanceSummaryRow(
+                    employee_name=full_name,
+                    department=department,
+                    full_days=s.full_days,
+                    half_days=s.half_days,
+                    late_days=s.late_days,
+                    absent_days=s.absent_days,
+                    leave_days=s.leave_days,
+                    regularized_days=s.regularized_days,
+                    # Present is what payroll counts: worked days, however late.
+                    present_days=s.full_days + s.half_days + s.late_days,
+                    worked_hours=round(s.worked_minutes / 60, 2),
+                )
+            )
+        summary_rows.sort(key=lambda r: r.employee_name)
+
+        daily_rows = [
+            AttendanceDailyRow(
+                employee_name=name_of(r.employee_id)[0],
+                department=name_of(r.employee_id)[1],
+                day=r.day,
+                weekday=date.fromisoformat(r.day).strftime("%a"),
+                status=r.status.value.replace("_", " ").title(),
+                check_in=clock(r.login_at),
+                check_out=clock(r.logout_at),
+                worked_hours=round(r.worked_minutes / 60, 2),
+                late="Yes" if r.late_login else "",
+                regularized="Yes" if r.regularized else "",
+                in_source=r.clock_in_source or "-",
+                out_source=r.clock_out_source or "-",
+            )
+            for r in rows
+        ]
+        daily_rows.sort(key=lambda r: (r.employee_name, r.day))
+
+        xlsx = build_attendance_xlsx(summary_rows, daily_rows, month_label=month)
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="attendance.export",
+            target=f"month:{month}:employees:{len(summary_rows)}",
+        )
+        return xlsx, f"attendance-{month}.xlsx"
 
 
 _ZERO = {

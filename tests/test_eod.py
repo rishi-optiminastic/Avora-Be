@@ -96,6 +96,7 @@ def _build_service(
         AttendanceOverrideRepository(db),
         HolidayRepository(db),
         LeaveRepository(db),
+        AuditRepository(db),
     )
     return EodService(
         EodReportRepository(db),

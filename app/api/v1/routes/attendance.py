@@ -7,7 +7,7 @@ import uuid
 from datetime import UTC, date, datetime, time
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Query, Request, status
+from fastapi import APIRouter, Query, Request, Response, status
 
 from app.core.deps import (
     AttendancePolicyServiceDep,
@@ -37,6 +37,7 @@ from app.schemas.work_session import BiometricTodayRead, WorkSessionRead
 
 router = APIRouter(prefix="/attendance", tags=["attendance"])
 
+_XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _MONTH = r"^\d{4}-\d{2}$"
 
 
@@ -92,6 +93,27 @@ async def monthly_report(
 ) -> list[AttendanceMonthSummary]:
     """Per-employee monthly attendance summary (YYYY-MM)."""
     return await service.monthly_report(caller, month)
+
+
+@router.get("/report/export")
+async def export_monthly_report(
+    caller: CurrentUserDep,
+    service: AttendanceServiceDep,
+    month: Annotated[str, Query(pattern=_MONTH)],
+) -> Response:
+    """The month's attendance as an .xlsx: a per-employee summary sheet and a
+    daily sheet carrying every check-in and check-out time.
+
+    Scoped like every other attendance read — HR/Admin get the org, a manager
+    gets their reports, an employee gets themselves — so exporting never reveals
+    more than the screen already does.
+    """
+    xlsx, filename = await service.export_monthly_xlsx(caller, month)
+    return Response(
+        content=xlsx,
+        media_type=_XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/reconciliation", response_model=ReconciliationReport)

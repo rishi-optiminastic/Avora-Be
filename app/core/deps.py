@@ -442,9 +442,10 @@ def get_attendance_service(
     overrides: Annotated[AttendanceOverrideRepository, Depends(get_attendance_override_repo)],
     holidays: Annotated[HolidayRepository, Depends(get_holiday_repo)],
     leaves: Annotated[LeaveRepository, Depends(get_leave_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
 ) -> AttendanceService:
     return AttendanceService(
-        employees, activity, sessions, policy, regularizations, overrides, holidays, leaves
+        employees, activity, sessions, policy, regularizations, overrides, holidays, leaves, audit
     )
 
 

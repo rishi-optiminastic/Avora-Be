@@ -79,6 +79,7 @@ def _service(db: AsyncSession, settings: Settings) -> PayrollService:
         AttendanceOverrideRepository(db),
         HolidayRepository(db),
         LeaveRepository(db),
+        AuditRepository(db),
     )
     return PayrollService(
         PayrollSettingsRepository(db),

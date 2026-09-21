@@ -67,6 +67,7 @@ def _build_service(session: AsyncSession) -> PayrollService:
         AttendanceOverrideRepository(session),
         HolidayRepository(session),
         LeaveRepository(session),
+        AuditRepository(session),
     )
     return PayrollService(
         PayrollSettingsRepository(session),
