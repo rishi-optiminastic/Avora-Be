@@ -9,7 +9,7 @@ endpoint (404 when out of scope).
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Header, Query, Request, Response, status
@@ -84,9 +84,20 @@ async def upload_screenshot(
 async def list_screenshots(
     caller: CurrentUserDep,
     service: ScreenshotServiceDep,
-    limit: Annotated[int, Query(ge=1, le=60)] = 40,
+    limit: Annotated[int, Query(ge=1, le=120)] = 40,
+    day: Annotated[
+        date | None,
+        Query(description="Office-local day (YYYY-MM-DD); omit for the newest across all days"),
+    ] = None,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[ScreenshotRead]:
-    shots = await service.list_for_caller(caller, limit)
+    """Newest screenshots the caller may see, newest first.
+
+    Scoped exactly as the rest of monitoring is — HR/Admin the org, a manager
+    their reports, anyone else themselves. `day` narrows that to one local day
+    within the browsable window; `offset` pages through a busy one.
+    """
+    shots = await service.list_for_caller(caller, limit, day=day, offset=offset)
     return [ScreenshotRead.model_validate(s) for s in shots]
 
 

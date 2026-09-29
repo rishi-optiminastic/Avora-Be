@@ -85,16 +85,32 @@ class ScreenshotRepository:
         return [by_id[i] for i in chosen if i in by_id]
 
     async def list_recent(
-        self, employee_ids: Sequence[uuid.UUID], limit: int
+        self,
+        employee_ids: Sequence[uuid.UUID],
+        limit: int,
+        *,
+        window: tuple[datetime, datetime] | None = None,
+        offset: int = 0,
     ) -> Sequence[Screenshot]:
+        """Newest first, optionally bounded to a half-open [start, end) window.
+
+        Filters and orders on `received_at`, never the agent's `captured_at`:
+        the server stamp is the one we trust (rule 5.1) and it is the indexed
+        column, so a date window stays an index range scan rather than a sort of
+        the whole table.
+        """
         if not employee_ids:
             return []
-        rows = await self._session.execute(
+        stmt = (
             select(Screenshot)
             .options(defer(Screenshot.image))
             .where(Screenshot.employee_id.in_(employee_ids))
-            .order_by(Screenshot.received_at.desc())
-            .limit(limit)
+        )
+        if window is not None:
+            start, end = window
+            stmt = stmt.where(Screenshot.received_at >= start, Screenshot.received_at < end)
+        rows = await self._session.execute(
+            stmt.order_by(Screenshot.received_at.desc()).offset(offset).limit(limit)
         )
         return rows.scalars().all()
 

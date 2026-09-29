@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from botocore.exceptions import BotoCoreError, ClientError
 
@@ -23,11 +24,17 @@ from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.screenshot import ScreenshotRepository
 from app.schemas.auth import CurrentDevice, CurrentUser
+from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.monitoring_gate import MonitoringGateService
 
 logger = get_logger("app.screenshot")
 
-MAX_LIST = 60
+# A busy day is ~380 shots across the org, so a day view needs more than one
+# screenful. Paged with `offset` rather than raised without limit.
+MAX_LIST = 120
+# How far back the date filter lets anyone look. Retention keeps 30 days of
+# images, but routine review is the last few days; older needs a deliberate ask.
+BROWSE_DAYS = 3
 # Full-screen captures (esp. multi-monitor Windows desktops) are larger than the
 # old 5 MB cap, which was silently 422-rejecting them and stalling capture. The
 # agent downscales, but keep generous headroom so a busy desktop is never dropped.
@@ -43,12 +50,14 @@ class ScreenshotService:
         settings: Settings,
         gate: MonitoringGateService,
         audit: AuditRepository,
+        policy: AttendancePolicyService,
     ) -> None:
         self._screenshots = screenshots
         self._employees = employees
         self._settings = settings
         self._gate = gate
         self._audit = audit
+        self._policy = policy
 
     async def ingest(
         self,
@@ -107,10 +116,38 @@ class ScreenshotService:
             flags=flags,
         )
 
-    async def list_for_caller(self, caller: CurrentUser, limit: int) -> Sequence[Screenshot]:
+    async def list_for_caller(
+        self,
+        caller: CurrentUser,
+        limit: int,
+        *,
+        day: date | None = None,
+        offset: int = 0,
+    ) -> Sequence[Screenshot]:
+        """Newest screenshots the caller may see, optionally just one local day.
+
+        Scope is `all_in_scope`, untouched: HR and admin see the org, a manager
+        their reports, everyone else themselves. The date filter narrows what a
+        caller already sees and can never widen it.
+        """
         employees = await self._employees.all_in_scope(caller)
         ids = [e.id for e in employees]
-        return await self._screenshots.list_recent(ids, min(max(1, limit), MAX_LIST))
+        window = await self._day_window(day) if day is not None else None
+        return await self._screenshots.list_recent(
+            ids, min(max(1, limit), MAX_LIST), window=window, offset=max(0, offset)
+        )
+
+    async def _day_window(self, day: date) -> tuple[datetime, datetime]:
+        """The UTC bounds of one office-local day, refusing anything older than
+        the browse window so the filter cannot be hand-edited into a full export
+        of the retention period."""
+        spec = await self._policy.spec()
+        tz = ZoneInfo(spec.timezone)
+        today = datetime.now(UTC).astimezone(tz).date()
+        if day > today or (today - day).days >= BROWSE_DAYS:
+            raise ValidationError(f"Screenshots are browsable for the last {BROWSE_DAYS} days.")
+        start = datetime(day.year, day.month, day.day, tzinfo=tz)
+        return start.astimezone(UTC), (start + timedelta(days=1)).astimezone(UTC)
 
     async def get_image(self, caller: CurrentUser, screenshot_id: uuid.UUID) -> Screenshot:
         shot = await self._screenshots.get(screenshot_id)

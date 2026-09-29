@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -166,3 +167,174 @@ async def test_upload_list_and_fetch_are_scoped(
         f"/api/v1/screenshots/{shot['id']}", headers=auth_headers(settings, seed.outsider)
     )
     assert blocked.status_code == 404
+
+
+# --- the date filter -------------------------------------------------------- #
+async def _seed_on(db: AsyncSession, employee_id: object, when: datetime, device_id: object) -> str:
+    """A screenshot stamped at `when`, bypassing upload so the date is controlled."""
+    from app.models.screenshot import Screenshot
+
+    shot = Screenshot(
+        device_id=device_id,
+        employee_id=employee_id,
+        captured_at=when,
+        received_at=when,
+        width=100,
+        height=100,
+        byte_size=len(IMG),
+        image=IMG,
+        content_type="image/jpeg",
+    )
+    db.add(shot)
+    await db.commit()
+    return str(shot.id)
+
+
+async def test_day_filter_returns_only_that_day(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    now = datetime.now(UTC)
+    today = await _seed_on(db, seed.report.id, now - timedelta(hours=2), seed.device.id)
+    yesterday = await _seed_on(db, seed.report.id, now - timedelta(days=1, hours=2), seed.device.id)
+
+    res = await client.get(
+        f"/api/v1/screenshots?day={now.date().isoformat()}",
+        headers=auth_headers(settings, seed.admin),
+    )
+
+    assert res.status_code == 200
+    ids = [s["id"] for s in res.json()]
+    assert today in ids
+    assert yesterday not in ids
+
+
+async def test_no_day_returns_the_newest_across_days(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    now = datetime.now(UTC)
+    today = await _seed_on(db, seed.report.id, now - timedelta(hours=2), seed.device.id)
+    yesterday = await _seed_on(db, seed.report.id, now - timedelta(days=1, hours=2), seed.device.id)
+
+    res = await client.get("/api/v1/screenshots", headers=auth_headers(settings, seed.admin))
+
+    ids = [s["id"] for s in res.json()]
+    assert today in ids and yesterday in ids
+    assert ids.index(today) < ids.index(yesterday)  # newest first
+
+
+async def test_a_day_outside_the_browse_window_is_refused(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """The window is a real limit, not a UI convenience: hand-editing the query
+    must not turn the filter into an export of the whole retention period."""
+    old = (datetime.now(UTC).date() - timedelta(days=10)).isoformat()
+
+    res = await client.get(
+        f"/api/v1/screenshots?day={old}", headers=auth_headers(settings, seed.admin)
+    )
+
+    assert res.status_code == 422
+
+
+async def test_a_future_day_is_refused(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    ahead = (datetime.now(UTC).date() + timedelta(days=1)).isoformat()
+
+    res = await client.get(
+        f"/api/v1/screenshots?day={ahead}", headers=auth_headers(settings, seed.admin)
+    )
+
+    assert res.status_code == 422
+
+
+async def test_the_day_filter_cannot_widen_scope(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """Filtering narrows what a caller already sees. An outsider asking for a
+    specific day must still not see the report's screenshots."""
+    now = datetime.now(UTC)
+    mine = await _seed_on(db, seed.report.id, now - timedelta(hours=1), seed.device.id)
+
+    res = await client.get(
+        f"/api/v1/screenshots?day={now.date().isoformat()}",
+        headers=auth_headers(settings, seed.outsider),
+    )
+
+    assert res.status_code == 200
+    assert mine not in [s["id"] for s in res.json()]
+
+
+async def test_offset_pages_without_repeating(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    now = datetime.now(UTC)
+    for i in range(5):
+        await _seed_on(db, seed.report.id, now - timedelta(minutes=i), seed.device.id)
+
+    first = await client.get(
+        "/api/v1/screenshots?limit=2", headers=auth_headers(settings, seed.admin)
+    )
+    second = await client.get(
+        "/api/v1/screenshots?limit=2&offset=2", headers=auth_headers(settings, seed.admin)
+    )
+
+    a = [s["id"] for s in first.json()]
+    b = [s["id"] for s in second.json()]
+    assert len(a) == 2 and len(b) == 2
+    assert not set(a) & set(b)  # no overlap between pages
+
+
+# --- who may delete --------------------------------------------------------- #
+async def _set_role(db: AsyncSession, employee_id: object, role: str) -> None:
+    from app.models.employee import Employee, Role
+
+    person = await db.get(Employee, employee_id)
+    assert person is not None
+    person.role = Role(role)
+    await db.commit()
+
+
+async def test_it_admin_can_delete(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """`it_admin` is a full admin for authorization, so it deletes like one.
+    The UI reads the same effective role from /me, so the button matches."""
+    await allow_capture(db, seed.report.id)
+    shot_id = (await _upload(client, seed)).json()["id"]
+    await _set_role(db, seed.outsider.id, "it_admin")
+
+    res = await client.delete(
+        f"/api/v1/screenshots/{shot_id}", headers=auth_headers(settings, seed.outsider)
+    )
+
+    assert res.status_code == 204
+
+
+async def test_hr_cannot_delete(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """The one worth pinning: HR reads everything else in the org, so it is the
+    likely accident. Deleting a screenshot stays admin and IT-admin only."""
+    await allow_capture(db, seed.report.id)
+    shot_id = (await _upload(client, seed)).json()["id"]
+    await _set_role(db, seed.outsider.id, "hr")
+
+    res = await client.delete(
+        f"/api/v1/screenshots/{shot_id}", headers=auth_headers(settings, seed.outsider)
+    )
+
+    assert res.status_code == 403
+
+
+async def test_a_manager_cannot_delete(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    await allow_capture(db, seed.report.id)
+    shot_id = (await _upload(client, seed)).json()["id"]
+
+    res = await client.delete(
+        f"/api/v1/screenshots/{shot_id}", headers=auth_headers(settings, seed.manager)
+    )
+
+    assert res.status_code == 403

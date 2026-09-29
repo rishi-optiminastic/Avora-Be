@@ -610,8 +610,9 @@ def get_screenshot_service(
     settings: SettingsDep,
     gate: Annotated[MonitoringGateService, Depends(get_monitoring_gate)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    policy: Annotated[AttendancePolicyService, Depends(get_attendance_policy_service)],
 ) -> ScreenshotService:
-    return ScreenshotService(screenshots, employees, settings, gate, audit)
+    return ScreenshotService(screenshots, employees, settings, gate, audit, policy)
 
 
 def get_ping_service(
