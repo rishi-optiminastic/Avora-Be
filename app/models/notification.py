@@ -21,6 +21,7 @@ from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 class NotificationKind(StrEnum):
     LEAVE_REQUEST = "leave_request"  # a report submitted leave you must review
     LEAVE_DECISION = "leave_decision"  # your leave was approved/rejected
+    REGULARIZATION_REQUEST = "regularization_request"  # a report asked to fix a day
     RESIGNATION_SUBMITTED = "resignation_submitted"  # someone resigned — HR/Admin
     RESIGNATION_DECISION = "resignation_decision"  # your resignation was decided
     REIMBURSEMENT_SUBMITTED = "reimbursement_submitted"  # a claim needs your review

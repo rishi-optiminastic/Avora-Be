@@ -85,29 +85,54 @@ async def test_manager_sees_report_request_outsider_does_not(
     assert out.json()["total"] == 0
 
 
-async def test_admin_approves_manager_cannot(
-    client: AsyncClient, settings: Settings, seed: _Seed
-) -> None:
+async def test_admin_approves(client: AsyncClient, settings: Settings, seed: _Seed) -> None:
     leave = await _apply_as(client, settings, seed.report)
-    # A manager can SEE the request (repo scope) but MUST NOT approve it —
-    # approval is admin-only.
-    denied = await client.post(
-        f"/api/v1/leaves/{leave['id']}/decision",
-        json={"approve": True, "note": "ok"},
-        headers=auth_headers(settings, seed.manager),
-    )
-    assert denied.status_code == 403
 
-    # The admin approves.
     resp = await client.post(
         f"/api/v1/leaves/{leave['id']}/decision",
         json={"approve": True, "note": "ok"},
         headers=auth_headers(settings, seed.admin),
     )
+
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "approved"
     assert body["reviewer_id"] == str(seed.admin.id)
+
+
+async def test_the_reporting_manager_approves_their_own_reports(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """Approval used to be admin-only, which left a manager looking at their own
+    team's requests with no way to action them and every decision queued behind
+    one person."""
+    leave = await _apply_as(client, settings, seed.report)
+
+    resp = await client.post(
+        f"/api/v1/leaves/{leave['id']}/decision",
+        json={"approve": True, "note": "covered"},
+        headers=auth_headers(settings, seed.manager),
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "approved"
+    assert resp.json()["reviewer_id"] == str(seed.manager.id)
+
+
+async def test_a_manager_cannot_approve_outside_their_team(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """Being a manager is not the permission — being THEIR manager is. The
+    outsider reports to nobody, so this manager has no say over their leave."""
+    leave = await _apply_as(client, settings, seed.outsider)
+
+    resp = await client.post(
+        f"/api/v1/leaves/{leave['id']}/decision",
+        json={"approve": True},
+        headers=auth_headers(settings, seed.manager),
+    )
+
+    assert resp.status_code in (403, 404)
 
 
 async def test_requester_cannot_approve_own(

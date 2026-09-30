@@ -198,9 +198,9 @@ class LeaveService:
             action="leave.apply",
             target=f"leave:{leave.id}:{payload.leave_type.value}",
         )
-        # Approval is admin-only → tell every admin there's a request to approve.
-        # The reporting manager can see it too (repo scope), so notify them as an
-        # FYI — unless they're already an admin (avoid a duplicate).
+        # Both the admins and the requester's own manager can decide it, so both
+        # get told there is something to action — the manager only when they are
+        # not already an admin, to avoid a duplicate.
         body = (
             f"{_leave_type_label(payload.leave_type, payload.half_day_period)} · "
             f"{payload.start_date:%d %b} - {payload.end_date:%d %b}"
@@ -222,7 +222,7 @@ class LeaveService:
             await self._notifications.notify(
                 recipient_id=caller.manager_id,
                 kind=NotificationKind.LEAVE_REQUEST,
-                title="Leave request from your team",
+                title="Leave request to approve",
                 body=body,
                 link=_LEAVES_LINK,
                 entity_type="leave",
@@ -275,15 +275,31 @@ class LeaveService:
             except EmailError:
                 logger.warning("leave_request_email_failed", extra={"leave_id": str(leave.id)})
 
+    async def _may_decide(self, caller: CurrentUser, leave: Leave) -> bool:
+        """Who may approve or reject a leave request.
+
+        An admin, or the requester's own reporting manager — the person who
+        actually knows whether the team can spare them that week. Approval used
+        to be admin-only, which left a manager staring at their team's requests
+        with no way to action them and every decision queued behind one person.
+
+        Never your own request, whatever your role: that is the segregation of
+        duties the admin-only rule was really protecting, and it survives here.
+        """
+        if caller.employee_id == leave.employee_id:
+            return False
+        if caller.is_admin:
+            return True
+        requester = await self._employees.get(leave.employee_id)
+        return requester is not None and requester.manager_id == caller.employee_id
+
     async def decide(
         self, caller: CurrentUser, leave_id: uuid.UUID, payload: LeaveDecision
     ) -> Leave:
         leave = await self._leaves.get_in_scope(caller, leave_id)
         if leave is None:
             raise NotFoundError()
-        # Approval is admin-only, and never your own request. Managers/HR can see
-        # the request (repo scope) but cannot decide it.
-        if not caller.is_admin or caller.employee_id == leave.employee_id:
+        if not await self._may_decide(caller, leave):
             raise AuthorizationError()
         if leave.status is not LeaveStatus.SUBMITTED:
             raise ConflictError("This request can no longer be decided.")

@@ -12,6 +12,7 @@ import uuid
 from collections.abc import Sequence
 
 from app.core.exceptions import AuthorizationError, NotFoundError, ValidationError
+from app.models.notification import NotificationKind
 from app.models.regularization import Regularization, RegularizationStatus
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
@@ -19,6 +20,9 @@ from app.repositories.regularization import RegularizationRepository
 from app.schemas.auth import CurrentUser
 from app.schemas.regularization import RegularizationCreate, RegularizationReview
 from app.services.attendance_policy_service import AttendancePolicyService
+from app.services.notification_service import NotificationService
+
+_ATTENDANCE_LINK = "/dashboard/time/attendance"
 
 
 class RegularizationService:
@@ -28,11 +32,13 @@ class RegularizationService:
         employees: EmployeeRepository,
         policy: AttendancePolicyService,
         audit: AuditRepository,
+        notifications: NotificationService,
     ) -> None:
         self._regs = regularizations
         self._employees = employees
         self._policy = policy
         self._audit = audit
+        self._notifications = notifications
 
     async def request(self, caller: CurrentUser, payload: RegularizationCreate) -> Regularization:
         existing = await self._regs.get_active_for_day(caller.employee_id, payload.day)
@@ -46,6 +52,21 @@ class RegularizationService:
             action="regularization.request",
             target=f"regularization:{reg.id}:{payload.day}",
         )
+        # Tell the reporting manager. Without this the request was written and
+        # nobody was told: the manager could see and approve it all along, but
+        # only if they happened to open the page — which is how seven of them
+        # sat pending.
+        if caller.manager_id is not None:
+            await self._notifications.notify(
+                recipient_id=caller.manager_id,
+                kind=NotificationKind.REGULARIZATION_REQUEST,
+                title="Attendance fix to review",
+                body=f"{payload.day} · {payload.reason}"[:200],
+                link=_ATTENDANCE_LINK,
+                entity_type="regularization",
+                entity_id=reg.id,
+                actor_id=caller.employee_id,
+            )
         return reg
 
     async def list_for_caller(

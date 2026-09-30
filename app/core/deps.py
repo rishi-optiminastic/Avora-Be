@@ -538,8 +538,9 @@ def get_regularization_service(
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     policy: Annotated[AttendancePolicyService, Depends(get_attendance_policy_service)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    notifications: Annotated[NotificationService, Depends(get_notification_service)],
 ) -> RegularizationService:
-    return RegularizationService(regularizations, employees, policy, audit)
+    return RegularizationService(regularizations, employees, policy, audit, notifications)
 
 
 def get_category_rule_service(
