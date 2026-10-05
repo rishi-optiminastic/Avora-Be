@@ -129,15 +129,18 @@ async def move_settlement_month(
     return ReimbursementRead.model_validate(row)
 
 
+# Path kept as `revoke-approval` so an already-deployed dashboard keeps working;
+# the operation itself is an unschedule, not a rejection (see the service).
 @router.post("/{reimbursement_id}/revoke-approval", response_model=ReimbursementRead)
-async def revoke_approval(
+async def unschedule(
     reimbursement_id: uuid.UUID,
     payload: ApprovalRevoke,
     caller: CurrentUserDep,
     service: ReimbursementServiceDep,
 ) -> ReimbursementRead:
-    """HR/finance: take an approved claim back out of payroll altogether."""
-    row = await service.revoke_approval(caller, reimbursement_id, payload.note)
+    """HR/finance: take an approved claim out of its payroll month, back to the
+    final-approval queue."""
+    row = await service.unschedule(caller, reimbursement_id, payload.note)
     return ReimbursementRead.model_validate(row)
 
 

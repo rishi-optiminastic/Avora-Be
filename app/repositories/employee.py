@@ -18,6 +18,15 @@ from app.core.names import clean_display_name, is_placeholder_name
 from app.models.employee import Employee, EmployeeStatus, Gender, Role, TrackingMode
 from app.schemas.auth import CurrentUser
 
+# `hr_external_id` prefixes for rows created inside the PMS rather than by HR.
+# A row carrying one is a placeholder that the first HR sync for the same work
+# email claims, instead of creating a duplicate person.
+SYNTHETIC_EXTERNAL_ID_PREFIXES = ("manual:", "invite:")
+
+
+def has_synthetic_external_id(employee: Employee) -> bool:
+    return employee.hr_external_id.startswith(SYNTHETIC_EXTERNAL_ID_PREFIXES)
+
 
 class EmployeeRepository:
     def __init__(self, session: AsyncSession) -> None:
@@ -37,6 +46,20 @@ class EmployeeRepository:
             select(Employee).where(Employee.work_email == work_email)
         )
         return result.scalar_one_or_none()
+
+    async def find_by_work_email_insensitive(self, work_email: str) -> Employee | None:
+        """Email lookup that ignores case, for matching records from another
+        system. Login keeps the exact `get_by_work_email`."""
+        result = await self._session.execute(
+            select(Employee).where(func.lower(Employee.work_email) == work_email.lower())
+        )
+        return result.scalars().first()
+
+    async def claim_for_hr(self, employee: Employee, hr_external_id: str) -> None:
+        """Hand a PMS-created placeholder row over to its HR record. Keeps the
+        row (and with it role, devices, history); only the join key changes."""
+        employee.hr_external_id = hr_external_id
+        await self._session.flush()
 
     async def get_by_biometric_id(self, biometric_id: str) -> Employee | None:
         """Resolve an employee by their attendance-device enrollment id.
@@ -216,15 +239,34 @@ class EmployeeRepository:
 
         - admin / hr: whole org.
         - senior_manager: their whole department.
-        - manager: themselves and their direct reports.
-        - executive / it_admin / viewer / employee: only themselves.
+        - viewer: themselves only, whatever the org chart says.
+        - everyone else: themselves, plus anyone who reports to them.
 
         Scope is derived from the caller's server-side record, never from a
         client-supplied field. `senior_manager` resolves the caller's department
         with a correlated subquery so we needn't widen the token/CurrentUser.
+
+        The direct-reports clause used to be gated on `role is MANAGER`, so a
+        person who ran a team while carrying the EMPLOYEE or EXECUTIVE role saw
+        only themselves - none of their reports' attendance, leave or
+        regularizations, and no way to action any of it. Three people lead teams
+        under those roles here, one of them with five requests stuck pending and
+        invisible. What makes someone a report's manager is the reporting edge HR
+        maintains, not the title beside their name, so the edge is what grants it.
+        Access is still only ever along an existing `manager_id` link, the same
+        relationship the MANAGER branch encoded - but note that this clause is
+        the ONLY guard on the monitoring reads (screenshots, activity), so a lead
+        now sees their reports' captures as a real manager always has.
+
+        VIEWER is excluded on purpose. It is defined as read-only within an
+        EXPLICITLY granted scope, so it must not pick up people implicitly just
+        because the org chart points at it; a contractor left as someone's
+        `manager_id` would otherwise gain their screenshots.
         """
         if caller.role in (Role.ADMIN, Role.HR):
             return []
+        if caller.role is Role.VIEWER:
+            return [Employee.id == caller.employee_id]
         if caller.role is Role.SENIOR_MANAGER:
             caller_department = (
                 select(Employee.department)
@@ -232,11 +274,7 @@ class EmployeeRepository:
                 .scalar_subquery()
             )
             return [Employee.department == caller_department]
-        if caller.role is Role.MANAGER:
-            return [
-                (Employee.manager_id == caller.employee_id) | (Employee.id == caller.employee_id)
-            ]
-        return [Employee.id == caller.employee_id]
+        return [(Employee.manager_id == caller.employee_id) | (Employee.id == caller.employee_id)]
 
     async def can_read(self, caller: CurrentUser, target_id: uuid.UUID) -> bool:
         stmt = select(Employee.id).where(Employee.id == target_id, *self._scope_clause(caller))
@@ -312,10 +350,12 @@ class EmployeeRepository:
         work_email: str,
         full_name: str,
         department: str | None,
-        manager_id: uuid.UUID | None,
+        manager_id: uuid.UUID | None = None,
+        update_manager: bool = True,
         status: EmployeeStatus,
         biometric_id: str | None = None,
         hire_date: date | None = None,
+        job_title: str | None = None,
     ) -> Employee:
         """Create or update from HR. Never touches `role` (rule 5.5)."""
         employee = await self.get_by_external_id(hr_external_id)
@@ -329,7 +369,8 @@ class EmployeeRepository:
         employee.work_email = work_email
         employee.full_name = full_name
         employee.department = department
-        employee.manager_id = manager_id
+        if update_manager:
+            employee.manager_id = manager_id
         employee.status = status
         employee.is_active = status is EmployeeStatus.ACTIVE
         # Only overwrite the biometric id when HR actually sends one (keep any
@@ -340,6 +381,8 @@ class EmployeeRepository:
         # one, so a manually-corrected hire date is not wiped by a later sync.
         if hire_date is not None:
             employee.hire_date = hire_date
+        if job_title is not None:
+            employee.job_title = job_title
         await self._session.flush()
         return employee
 

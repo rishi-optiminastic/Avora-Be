@@ -1,5 +1,5 @@
 @echo off
-REM Manual one-off sync, for testing. Unattended running is the scheduled task's job.
+REM Is attendance still being delivered? Double-click to find out.
 REM
 REM The interpreter path is stamped in by install-windows.ps1, so these helpers
 REM use exactly the same python the scheduled task does. Bare "python" is avoided
@@ -10,9 +10,9 @@ cd /d "%~dp0"
 set "AVORA_PY="
 if exist "avora-python-path.txt" set /p AVORA_PY=<"avora-python-path.txt"
 if defined AVORA_PY (
-    "%AVORA_PY%" avora_biometric.py
+    "%AVORA_PY%" avora_biometric.py --status
 ) else (
-    py -3 avora_biometric.py
+    py -3 avora_biometric.py --status
 )
 echo.
 pause

@@ -105,6 +105,12 @@ class Settings(BaseSettings):
     # Default invitees are per-employee (stored in the DB), not a global env list.
     quick_meet_duration_minutes: int = 30
     slack_webhook_url: str = ""  # Slack Incoming Webhook for the team channel
+
+    # Circle (HR system) - server-to-server reads of one employee's pay, bank
+    # details and documents (Circle's /api/internal/avora/*). Both empty = off:
+    # the Compensation "Import from Circle" and Circle documents simply hide.
+    circle_api_url: str = ""  # e.g. https://api.circle.optiminastic.com
+    circle_api_secret: str = ""  # Circle's AVORA_API_SECRET
     quick_meet_message: str = "{starter} started a quick meeting. Join now: {url}"
 
     # Env Sync (App Store app) -----------------------------------------------
@@ -290,6 +296,10 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def circle_configured(self) -> bool:
+        return bool(self.circle_api_url.strip() and self.circle_api_secret.strip())
 
     @property
     def hr_ip_allowlist(self) -> list[str]:

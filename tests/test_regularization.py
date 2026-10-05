@@ -63,6 +63,89 @@ async def test_non_manager_cannot_review(
     assert resp.status_code == 403
 
 
+async def test_a_team_lead_without_the_manager_role_can_still_review_their_report(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """Being a manager is not the permission - being THEIR manager is.
+
+    The gate was `caller.is_manager`, a ROLE check, so a team lead carrying the
+    EMPLOYEE or EXECUTIVE role could see their reports' requests and got a 403 on
+    every attempt to action one. Five of one lead's sat pending with nobody able
+    to clear them.
+    """
+    from app.models.employee import Employee, EmployeeStatus, Role
+
+    lead = Employee(
+        hr_external_id="hr-lead",
+        work_email="lead@corp.test",
+        full_name="Lee Lead",
+        role=Role.EMPLOYEE,  # runs a team without the title
+        status=EmployeeStatus.ACTIVE,
+        is_active=True,
+    )
+    db.add(lead)
+    await db.flush()
+    junior = Employee(
+        hr_external_id="hr-junior",
+        work_email="junior@corp.test",
+        full_name="Jun Junior",
+        role=Role.EMPLOYEE,
+        manager_id=lead.id,
+        status=EmployeeStatus.ACTIVE,
+        is_active=True,
+    )
+    db.add(junior)
+    await db.commit()
+
+    rid = (await _request(client, settings, junior, "2026-06-05")).json()["id"]
+    resp = await client.post(
+        f"/api/v1/attendance/regularizations/{rid}/review",
+        json={"approve": True},
+        headers=auth_headers(settings, lead),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "approved"
+
+
+async def test_a_team_lead_cannot_review_outside_their_own_team(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """The relationship is the permission, so it must not become a free pass:
+    a lead has no say over someone who does not report to them."""
+    from app.models.employee import Employee, EmployeeStatus, Role
+
+    lead = Employee(
+        hr_external_id="hr-lead2",
+        work_email="lead2@corp.test",
+        full_name="Lou Lead",
+        role=Role.EMPLOYEE,
+        status=EmployeeStatus.ACTIVE,
+        is_active=True,
+    )
+    db.add(lead)
+    await db.flush()
+    junior = Employee(
+        hr_external_id="hr-junior2",
+        work_email="junior2@corp.test",
+        full_name="Jay Junior",
+        role=Role.EMPLOYEE,
+        manager_id=lead.id,
+        status=EmployeeStatus.ACTIVE,
+        is_active=True,
+    )
+    db.add(junior)
+    await db.commit()
+
+    # seed.report belongs to seed.manager, not to this lead.
+    rid = (await _request(client, settings, seed.report, "2026-06-06")).json()["id"]
+    resp = await client.post(
+        f"/api/v1/attendance/regularizations/{rid}/review",
+        json={"approve": True},
+        headers=auth_headers(settings, lead),
+    )
+    assert resp.status_code in (403, 404)
+
+
 async def test_monthly_credit_cap(client: AsyncClient, settings: Settings, seed: _Seed) -> None:
     # Default policy allows 2 approvals/month; the 3rd is rejected.
     for d in ("2026-07-01", "2026-07-02", "2026-07-03"):
@@ -127,3 +210,46 @@ async def test_a_request_from_someone_with_no_manager_notifies_nobody(
         .all()
     )
     assert all(n.actor_id != seed.outsider.id for n in rows)
+
+
+async def test_a_viewer_never_picks_up_reports_from_the_org_chart(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """VIEWER is read-only within an EXPLICITLY granted scope, so it must not
+    inherit people just because `manager_id` happens to point at it - otherwise a
+    contractor left on someone's reporting line gains their screenshots."""
+    from app.models.employee import Employee, EmployeeStatus, Role
+
+    viewer = Employee(
+        hr_external_id="hr-viewer",
+        work_email="viewer@corp.test",
+        full_name="Vic Viewer",
+        role=Role.VIEWER,
+        status=EmployeeStatus.ACTIVE,
+        is_active=True,
+    )
+    db.add(viewer)
+    await db.flush()
+    intern = Employee(
+        hr_external_id="hr-intern",
+        work_email="intern@corp.test",
+        full_name="Ira Intern",
+        role=Role.EMPLOYEE,
+        manager_id=viewer.id,
+        status=EmployeeStatus.ACTIVE,
+        is_active=True,
+    )
+    db.add(intern)
+    await db.commit()
+
+    rid = (await _request(client, settings, intern, "2026-06-07")).json()["id"]
+    listed = await client.get(
+        "/api/v1/attendance/regularizations", headers=auth_headers(settings, viewer)
+    )
+    assert rid not in [r["id"] for r in listed.json()]
+    resp = await client.post(
+        f"/api/v1/attendance/regularizations/{rid}/review",
+        json={"approve": True},
+        headers=auth_headers(settings, viewer),
+    )
+    assert resp.status_code in (403, 404)

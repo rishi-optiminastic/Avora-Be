@@ -397,14 +397,22 @@ class ReimbursementService:
         )
         return row
 
-    async def revoke_approval(
+    async def unschedule(
         self, caller: CurrentUser, reimbursement_id: uuid.UUID, note: str | None
     ) -> Reimbursement:
-        """Take an approved claim back out of payroll altogether.
+        """Pull an approved claim back out of its payroll month.
 
-        For a claim that should not be paid at all, rather than one filed against
-        the wrong month. It becomes REJECTED — the history stays, the claim simply
-        stops being payable. Refused once the money has actually gone out.
+        It returns to HR's final-approval queue (MANAGER_APPROVED), where it can be
+        approved into a different month or declined outright. Refused once the
+        money has actually gone out.
+
+        This used to set REJECTED, which was wrong twice over. The employee was
+        told their claim had been *declined* when HR had only unscheduled it - the
+        button says "Remove from payroll" - and REJECTED is a terminal state with
+        no transition leading out of it, so a claim pulled out of a run could never
+        be paid at all. Three real claims were stranded that way on 1 Oct 2026.
+        Declining is still available: the claim lands back in the queue, where
+        Reject does it explicitly and says so to the employee.
         """
         row = await self._reimbursements.get(reimbursement_id)
         if row is None:
@@ -418,17 +426,30 @@ class ReimbursementService:
                 f"This claim was already paid in {row.period_month}'s released payroll. "
                 "Recover it through a payroll adjustment instead."
             )
-        row.status = ReimbursementStatus.REJECTED
-        row.hr_reviewer_id = caller.employee_id
-        row.hr_decided_at = datetime.now(UTC)
-        row.hr_note = note
+        row.status = ReimbursementStatus.MANAGER_APPROVED
+        # HR's decision is undone, so the record of it goes too - `hr_decide` sets
+        # these again when the claim is settled. Why it came back out lives in the
+        # audit log and in the note the applicant is sent.
+        row.hr_reviewer_id = None
+        row.hr_decided_at = None
+        row.hr_note = None
         await self._reimbursements.flush()
         await self._audit.append(
             actor=str(caller.employee_id),
-            action="reimbursement.approval_revoke",
+            action="reimbursement.unschedule",
             target=f"reimbursement:{row.id}",
         )
-        await self._notify_applicant(row, approved=False, note=note)
+        await self._notifications.notify(
+            recipient_id=row.employee_id,
+            kind=NotificationKind.REIMBURSEMENT_DECISION,
+            title="Reimbursement back under review",
+            body=note or f"{_money(row.amount_minor)} · taken out of this month's payroll",
+            level=NotificationLevel.INFO,
+            link=_LINK,
+            entity_type="reimbursement",
+            entity_id=row.id,
+            actor_id=caller.employee_id,
+        )
         return row
 
     async def withdraw(self, caller: CurrentUser, reimbursement_id: uuid.UUID) -> Reimbursement:

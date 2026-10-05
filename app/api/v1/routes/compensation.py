@@ -11,7 +11,8 @@ import uuid
 
 from fastapi import APIRouter
 
-from app.core.deps import CompensationServiceDep, CurrentUserDep
+from app.core.deps import CircleImportServiceDep, CompensationServiceDep, CurrentUserDep
+from app.schemas.circle import CompensationPrefill
 from app.schemas.compensation import BankDetailsWrite, CompensationRead, CompensationWrite
 
 router = APIRouter(prefix="/employees", tags=["compensation"])
@@ -45,3 +46,14 @@ async def set_bank_details(
 ) -> CompensationRead:
     """Set salary-disbursal bank details — the person themselves or HR/Admin."""
     return await service.set_bank(caller, employee_id, payload)
+
+
+@router.get("/{employee_id}/compensation/circle-prefill", response_model=CompensationPrefill)
+async def circle_compensation_prefill(
+    employee_id: uuid.UUID,
+    caller: CurrentUserDep,
+    service: CircleImportServiceDep,
+) -> CompensationPrefill:
+    """Circle's CTC and bank details shaped for the forms (HR/Admin/payroll).
+    Saves nothing: HR reviews the filled forms and saves them as usual."""
+    return await service.compensation_prefill(caller, employee_id)

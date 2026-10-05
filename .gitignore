@@ -36,3 +36,11 @@ htmlcov/
 # Local databases
 *.sqlite3
 *.db
+
+# Biometric connector runtime state (the office PC's own files, never the repo's)
+integrations/biometric-connector/avora-config.json
+integrations/biometric-connector/biometric-state.json
+integrations/biometric-connector/biometric-status.json
+integrations/biometric-connector/biometric.lock
+integrations/biometric-connector/avora_biometric.log*
+integrations/biometric-connector/avora-python-path.txt

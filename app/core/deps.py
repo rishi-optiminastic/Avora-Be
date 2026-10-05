@@ -92,6 +92,8 @@ from app.services.browsing_privacy_service import BrowsingPrivacyService
 from app.services.category_rule_service import CategoryRuleService
 from app.services.celebration_service import CelebrationService
 from app.services.changelog_service import ChangelogService
+from app.services.circle_client import CircleClient
+from app.services.circle_import_service import CircleImportService
 from app.services.compensation_service import CompensationService
 from app.services.dashboard_service import DashboardService
 from app.services.device_service import DeviceService
@@ -906,6 +908,19 @@ def get_payroll_service(
     )
 
 
+def get_circle_client(settings: SettingsDep) -> CircleClient:
+    return CircleClient(settings)
+
+
+def get_circle_import_service(
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    settings: SettingsDep,
+    client: Annotated[CircleClient, Depends(get_circle_client)],
+) -> CircleImportService:
+    return CircleImportService(employees, audit, settings, client)
+
+
 def get_document_service(
     documents: Annotated[DocumentRepository, Depends(get_document_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
@@ -927,6 +942,7 @@ def get_workspace_file_service(
 
 EmployeeServiceDep = Annotated[EmployeeService, Depends(get_employee_service)]
 HRServiceDep = Annotated[HRService, Depends(get_hr_service)]
+CircleImportServiceDep = Annotated[CircleImportService, Depends(get_circle_import_service)]
 ActivityServiceDep = Annotated[ActivityService, Depends(get_activity_service)]
 DeviceServiceDep = Annotated[DeviceService, Depends(get_device_service)]
 AgentNudgeServiceDep = Annotated[AgentNudgeService, Depends(get_agent_nudge_service)]

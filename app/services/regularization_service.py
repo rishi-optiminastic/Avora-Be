@@ -80,16 +80,36 @@ class RegularizationService:
         ids = [e.id for e in employees]
         return await self._regs.list_for_employees(ids, month=month, status=status)
 
+    async def _may_decide(self, caller: CurrentUser, reg: Regularization) -> bool:
+        """Who may approve or reject this request.
+
+        Being a manager is not the permission - being THEIR manager is. The gate
+        used to be `caller.is_manager` alone, a ROLE check, so someone who runs a
+        team while holding the EMPLOYEE or EXECUTIVE role could see their reports'
+        requests and got a 403 on every attempt to action one. Five of Rashi
+        Chheda's sat pending for exactly that reason, with nobody able to clear
+        them. Leave approval already decides this by relationship
+        (`LeaveService._may_decide`); this is the same rule.
+
+        The role check stays as an OR, not a replacement: HR and senior managers
+        action requests outside their own direct line today, and narrowing to a
+        pure relationship test would take that away.
+        """
+        if caller.is_manager:
+            return True
+        requester = await self._employees.get(reg.employee_id)
+        return requester is not None and requester.manager_id == caller.employee_id
+
     async def review(
         self, caller: CurrentUser, reg_id: uuid.UUID, payload: RegularizationReview
     ) -> Regularization:
         reg = await self._regs.get(reg_id)
         if reg is None or not await self._employees.can_read(caller, reg.employee_id):
             raise NotFoundError()
-        if not caller.is_manager:
-            raise AuthorizationError()
         if reg.employee_id == caller.employee_id:
             raise AuthorizationError()  # can't review your own
+        if not await self._may_decide(caller, reg):
+            raise AuthorizationError()
         if reg.status is not RegularizationStatus.PENDING:
             raise ValidationError("This regularization was already reviewed.")
 

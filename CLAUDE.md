@@ -92,13 +92,18 @@ tests/
 ### 5.3 Authorization (apply to EVERY endpoint)
 - Derive `role` and `team`/scope from the **server's record** of the authenticated user, looked up by verified identity — **never** from a request field or a client-set claim.
 - Resolve the caller's visible employee set on the server and filter by it. PMS scope rules:
-  - `executive` → own data only
-  - `manager` → own + direct reports
   - `senior_manager` → own department
   - `hr` → attendance / leave / payroll across the org
   - `admin` → everything
-  - `it_admin` → device + system health only (no productivity content)
+  - `it_admin` → normalized to `admin` (org decision; see `CurrentUser._normalize_role`)
   - `viewer` → read-only within an explicitly granted scope
+  - everyone else (`employee`, `executive`, `manager`) → own + **direct reports**
+- **The reporting line grants scope, not the role title.** Anyone with people
+  pointing at them via `manager_id` sees those people, whatever role they hold.
+  Gating direct reports on `role is MANAGER` left real team leads carrying the
+  `employee`/`executive` role unable to see - or action - their own reports'
+  leave, attendance and regularizations. A role never *adds* reports; the
+  `manager_id` edge HR maintains is the only thing that does.
 - **Forbid IDOR.** `GET /employees/{id}/activity` must return 403 (not data) when `{id}` is outside the caller's scope. Object access is checked against the caller, not the URL.
 - Enforce scoping in **one place** (a repository helper / dependency), so no endpoint can forget the `WHERE` clause. New read endpoints must use it.
 
@@ -113,6 +118,9 @@ tests/
 - **HMAC-verify** every call against the HR↔PMS shared secret. Reject anything unsigned. IP-allowlist if available.
 - The webhook may create/deactivate an employee and set org fields only. It must **never** set `role`, `admin`, or any privilege. Privilege changes happen only inside the PMS by an admin.
 - Only sync the minimum fields (id, name, work email, department, reporting manager, status, start date). **Never** pull HR documents or sensitive files into this system.
+- Employees arrive from id-sync (Circle -> id-sync -> here). `hr_external_id` is the id-sync registry `employee_id` (a UUID that never changes).
+- A sync for an unknown `hr_external_id` whose work email (case-insensitive) is on a `manual:`/`invite:` placeholder row **claims** that row; one owned by another real HR id is a **409**, never a merge.
+- `manager_external_id` omitted = keep the current manager; explicit `null` = clear it. `job_title`, `hire_date` and `biometric_id` are only overwritten when sent.
 
 ### 5.6 Data handling, secrets, errors
 - **Secrets** come from `Settings` (env) only. Never hardcode; never commit `.env`; never log a secret, token, or raw activity payload.

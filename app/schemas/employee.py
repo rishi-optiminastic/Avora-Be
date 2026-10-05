@@ -173,9 +173,15 @@ class HREmployeeUpsert(BaseModel):
     work_email: EmailStr
     full_name: str = Field(min_length=1, max_length=256)
     department: str | None = Field(default=None, max_length=128)
+    # Omitted = leave the current manager alone; explicit null = clear it. An HR
+    # system that can't resolve managers must omit it, or every sync would wipe
+    # the reporting edges that drive approval scope.
     manager_external_id: str | None = Field(default=None, max_length=128)
     status: EmployeeStatus
     start_date: datetime | None = None
     # Optional biometric-device enrollment id, so HR can map a person to their
     # attendance-device id in the same sync. Never a privilege field (rule 5.5).
     biometric_id: str | None = Field(default=None, max_length=64)
+    # Designation. Only overwritten when HR sends one, so a title an admin set
+    # by hand survives a sync from a system that doesn't track it.
+    job_title: str | None = Field(default=None, max_length=128)

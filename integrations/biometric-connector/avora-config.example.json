@@ -1,0 +1,6 @@
+{
+  "AVORA_API_URL": "https://api.avora.optiminastic.com",
+  "BIOMETRIC_WEBHOOK_SECRET": "PASTE-THE-BACKEND-SECRET-HERE",
+  "SQL_SERVER": "localhost",
+  "SQL_DATABASE": "SmartOfficedb"
+}

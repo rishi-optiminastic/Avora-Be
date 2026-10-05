@@ -680,22 +680,72 @@ async def test_a_claim_already_paid_out_cannot_be_moved_or_revoked(
     assert revoked.status_code == 409
 
 
-async def test_hr_revokes_an_approval_to_take_it_out_of_payroll(
+async def test_taking_a_claim_out_of_payroll_returns_it_to_the_hr_queue(
     client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
 ) -> None:
-    """For a claim that should not be paid at all. The history stays; it simply
-    stops being payable."""
+    """ "Remove from payroll" unschedules a claim; it does not decline it.
+
+    It used to set REJECTED, which told the employee their claim was declined and
+    - because nothing transitions out of REJECTED - left it permanently unpayable.
+    It now lands back in HR's final-approval queue, still awaiting a real decision.
+    """
     hr = await _hr(db)
     claim_id = await _approved_claim(client, settings, seed, hr)
 
-    revoked = await client.post(
+    pulled = await client.post(
         f"/api/v1/reimbursements/{claim_id}/revoke-approval",
-        json={"note": "Submitted twice"},
+        json={"note": "Wrong month"},
         headers=auth_headers(settings, hr),
     )
-    assert revoked.status_code == 200, revoked.text
-    assert revoked.json()["status"] == "rejected"
-    assert revoked.json()["hr_note"] == "Submitted twice"
+    assert pulled.status_code == 200, pulled.text
+    assert pulled.json()["status"] == "manager_approved"
+    assert pulled.json()["hr_note"] is None  # HR's decision is undone, not recorded
+
+
+async def test_a_claim_taken_out_of_payroll_can_still_be_paid_later(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """The point of the fix: pulling a claim out of one run must not destroy it.
+    Three real claims were stranded unpayable before this held."""
+    hr = await _hr(db)
+    claim_id = await _approved_claim(client, settings, seed, hr)
+
+    await client.post(
+        f"/api/v1/reimbursements/{claim_id}/revoke-approval",
+        json={},
+        headers=auth_headers(settings, hr),
+    )
+    reapproved = await client.post(
+        f"/api/v1/reimbursements/{claim_id}/hr-decision",
+        json={"approve": True, "settlement_month": "2099-12"},
+        headers=auth_headers(settings, hr),
+    )
+    assert reapproved.status_code == 200, reapproved.text
+    assert reapproved.json()["status"] == "approved"
+    assert reapproved.json()["period_month"] == "2099-12"
+
+
+async def test_hr_can_still_decline_a_claim_it_pulled_out_of_payroll(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """Declining is not lost, it is just explicit: the claim returns to the queue
+    and Reject there says so to the employee."""
+    hr = await _hr(db)
+    claim_id = await _approved_claim(client, settings, seed, hr)
+
+    await client.post(
+        f"/api/v1/reimbursements/{claim_id}/revoke-approval",
+        json={},
+        headers=auth_headers(settings, hr),
+    )
+    declined = await client.post(
+        f"/api/v1/reimbursements/{claim_id}/hr-decision",
+        json={"approve": False, "note": "Submitted twice"},
+        headers=auth_headers(settings, hr),
+    )
+    assert declined.status_code == 200, declined.text
+    assert declined.json()["status"] == "rejected"
+    assert declined.json()["hr_note"] == "Submitted twice"
 
 
 async def test_neither_move_nor_revoke_is_open_to_everyone(

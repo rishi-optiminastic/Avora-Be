@@ -93,6 +93,14 @@ class StorageError(AppError):
     message = "File storage is unavailable right now. Please try again."
 
 
+class UpstreamUnavailableError(AppError):
+    """A system we read from (e.g. Circle) could not be reached or failed."""
+
+    status_code = status.HTTP_502_BAD_GATEWAY
+    code = "upstream_unavailable"
+    message = "That system is unavailable right now. Try again shortly."
+
+
 class PayloadTooLargeError(AppError):
     # The request body exceeds the endpoint's cap — reject before buffering it all
     # into memory (avoids a memory-exhaustion DoS on uploads).

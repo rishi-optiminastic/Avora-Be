@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from httpx import AsyncClient
+from httpx import AsyncClient, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
-from app.models import Employee, Role
+from app.models import Employee, EmployeeStatus, Role
 from tests.conftest import _Seed, hr_headers
 
 
@@ -78,3 +78,133 @@ async def test_webhook_offboard_soft_deletes(
     body = resp.json()
     assert body["is_active"] is False
     assert body["status"] == "inactive"
+
+
+async def _post(client: AsyncClient, settings: Settings, body: dict[str, object]) -> Response:
+    raw, headers = hr_headers(settings, body)
+    return await client.post("/api/v1/hr/sync", content=raw, headers=headers)
+
+
+async def _add_employee(
+    db: AsyncSession,
+    *,
+    hr_external_id: str,
+    work_email: str,
+    role: Role = Role.EMPLOYEE,
+    manager: Employee | None = None,
+) -> Employee:
+    # The seed's `.test` addresses fail EmailStr, so payload-facing rows use corp.io.
+    employee = Employee(
+        hr_external_id=hr_external_id,
+        work_email=work_email,
+        full_name=work_email.split("@")[0].title(),
+        role=role,
+        manager_id=manager.id if manager else None,
+        status=EmployeeStatus.ACTIVE,
+        is_active=True,
+    )
+    db.add(employee)
+    await db.commit()
+    return employee
+
+
+async def test_sync_claims_invited_placeholder_by_email(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    # Someone invited before HR knew them: the first sync must adopt that row
+    # (keeping their role) instead of creating a duplicate person.
+    invited = await _add_employee(
+        db, hr_external_id="invite:abc", work_email="pat@corp.io", role=Role.MANAGER
+    )
+
+    resp = await _post(
+        client,
+        settings,
+        _payload(hr_external_id="EMP-1001", work_email="PAT@corp.io", full_name="Pat Real"),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == str(invited.id)
+    assert body["hr_external_id"] == "EMP-1001"
+    assert body["role"] == "manager"
+
+    rows = (await db.scalars(select(Employee).where(Employee.full_name == "Pat Real"))).all()
+    assert len(rows) == 1
+
+
+async def test_sync_refuses_email_owned_by_another_hr_record(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    await _add_employee(db, hr_external_id="EMP-1001", work_email="taken@corp.io")
+    resp = await _post(
+        client, settings, _payload(hr_external_id="EMP-2002", work_email="taken@corp.io")
+    )
+    assert resp.status_code == 409
+
+
+async def test_sync_refuses_email_change_onto_another_employee(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    await _add_employee(db, hr_external_id="EMP-1001", work_email="one@corp.io")
+    await _add_employee(db, hr_external_id="EMP-1002", work_email="two@corp.io")
+    resp = await _post(
+        client, settings, _payload(hr_external_id="EMP-1001", work_email="two@corp.io")
+    )
+    assert resp.status_code == 409
+
+
+async def test_omitted_manager_keeps_reporting_edge(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    await _add_employee(
+        db, hr_external_id="EMP-1001", work_email="one@corp.io", manager=seed.manager
+    )
+    body = _payload(hr_external_id="EMP-1001", work_email="one@corp.io")
+    del body["manager_external_id"]
+    resp = await _post(client, settings, body)
+    assert resp.status_code == 200
+    assert resp.json()["manager_id"] == str(seed.manager.id)
+
+
+async def test_explicit_null_manager_clears_reporting_edge(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    await _add_employee(
+        db, hr_external_id="EMP-1001", work_email="one@corp.io", manager=seed.manager
+    )
+    resp = await _post(
+        client, settings, _payload(hr_external_id="EMP-1001", work_email="one@corp.io")
+    )
+    assert resp.status_code == 200
+    assert resp.json()["manager_id"] is None
+
+
+async def test_job_title_only_overwritten_when_sent(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    resp = await _post(client, settings, _payload(job_title="Print Operator"))
+    assert resp.json()["job_title"] == "Print Operator"
+
+    resp = await _post(client, settings, _payload())
+    assert resp.json()["job_title"] == "Print Operator"
+
+
+async def test_an_unresolvable_manager_keeps_the_reporting_edge(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """A manager HR knows about but the PMS has not created yet is NOT a request
+    to clear the edge.
+
+    In a bulk sync a report routinely arrives before their manager. Treating the
+    unresolved id as null silently demoted the lead: the reporting edge is what
+    grants access to their team, so their reports' leave and regularizations
+    became invisible and un-actionable with nothing logged.
+    """
+    await _add_employee(
+        db, hr_external_id="EMP-1001", work_email="one@corp.io", manager=seed.manager
+    )
+    body = _payload(hr_external_id="EMP-1001", work_email="one@corp.io")
+    body["manager_external_id"] = "EMP-NOT-SYNCED-YET"
+    resp = await _post(client, settings, body)
+    assert resp.status_code == 200
+    assert resp.json()["manager_id"] == str(seed.manager.id)
