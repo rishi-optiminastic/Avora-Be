@@ -37,6 +37,25 @@ def _can_manage(caller: CurrentUser) -> bool:
     return caller.role in (Role.ADMIN, Role.HR)
 
 
+async def store_document_bytes(
+    settings: Settings, data: bytes, *, filename: str | None, content_type: str
+) -> tuple[str, str | None, bytes | None]:
+    """Put a document's bytes where documents live: S3 when configured (only the
+    key is kept), else the in-DB `content` column. Returns
+    (media_type, object_key, in_db_content). Shared by HR uploads and the
+    Circle copy so both store files identically."""
+    media_type = (content_type or "application/octet-stream").split(";")[0].strip().lower()
+    if not settings.s3_enabled:
+        return media_type, None, data
+    object_key = storage.workspace_object_key(uuid.uuid4().hex, filename)
+    try:
+        await storage.put_object(object_key, data, media_type)
+    except (ClientError, BotoCoreError) as exc:
+        logger.warning("document_s3_put_failed", extra={"key": object_key})
+        raise StorageError() from exc
+    return media_type, object_key, None
+
+
 class DocumentService:
     def __init__(
         self,
@@ -102,17 +121,9 @@ class DocumentService:
         if employee is None or not employee.is_active:
             raise NotFoundError()
 
-        media_type = (content_type or "application/octet-stream").split(";")[0].strip().lower()
-        object_key: str | None = None
-        stored: bytes | None = data
-        if self._settings.s3_enabled:
-            object_key = storage.workspace_object_key(uuid.uuid4().hex, filename)
-            try:
-                await storage.put_object(object_key, data, media_type)
-            except (ClientError, BotoCoreError) as exc:
-                logger.warning("document_s3_put_failed", extra={"key": object_key})
-                raise StorageError() from exc
-            stored = None
+        media_type, object_key, stored = await store_document_bytes(
+            self._settings, data, filename=filename, content_type=content_type
+        )
 
         document = await self._documents.add_file(
             employee_id,

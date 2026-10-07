@@ -16,6 +16,7 @@ from app.models.browsing_hidden_domain import BrowsingHiddenDomain
 from app.models.category_rule import CategoryRule
 from app.models.celebration_settings import CelebrationSettings
 from app.models.changelog import ChangelogEntry
+from app.models.circle_document_import import CircleDocumentImport
 from app.models.compensation import Compensation, PayPeriod
 from app.models.device import Device
 from app.models.document import DocumentCategory, EmployeeDocument
@@ -83,6 +84,7 @@ __all__ = [
     "CategoryRule",
     "CelebrationSettings",
     "ChangelogEntry",
+    "CircleDocumentImport",
     "Compensation",
     "CorrectionStatus",
     "Device",

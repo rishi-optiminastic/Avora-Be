@@ -65,20 +65,26 @@ class TaskRepository:
             )
             return (assignee_dept == caller_dept) | assigned_by_me | i_collaborate
 
-        if caller.role is Role.MANAGER:
-            assignee_manager = (
-                select(Employee.manager_id).where(Employee.id == Task.assignee_id).scalar_subquery()
-            )
-            return (
-                (Task.assignee_id == caller.employee_id)
-                | (assignee_manager == caller.employee_id)
-                | assigned_by_me
-                | i_collaborate
-            )
+        # VIEWER is read-only within an EXPLICITLY granted scope, so it never
+        # picks people up from the org chart (see EmployeeRepository._scope_clause).
+        if caller.role is Role.VIEWER:
+            return (Task.assignee_id == caller.employee_id) | assigned_by_me | i_collaborate
 
-        # executive / it_admin / viewer / employee: own tasks (+ anything they
-        # assigned, + anything they collaborate on).
-        return (Task.assignee_id == caller.employee_id) | assigned_by_me | i_collaborate
+        # Everyone else: their own tasks plus their direct reports'. This was
+        # gated on `role is MANAGER`, so a lead carrying the `employee`/
+        # `executive` role saw none of their team's work - the team overview
+        # listed every one of their reports with zero tasks, and they could not
+        # open a task to act on it. The reporting edge is what grants this, not
+        # the title beside their name.
+        assignee_manager = (
+            select(Employee.manager_id).where(Employee.id == Task.assignee_id).scalar_subquery()
+        )
+        return (
+            (Task.assignee_id == caller.employee_id)
+            | (assignee_manager == caller.employee_id)
+            | assigned_by_me
+            | i_collaborate
+        )
 
     async def create(self, payload: TaskCreate, *, assigned_by_id: uuid.UUID) -> Task:
         task = Task(
@@ -226,6 +232,34 @@ class TaskRepository:
         if clause is not None:
             stmt = stmt.where(clause)
         rows = await self._session.execute(stmt.order_by(Task.due_date.asc()))
+        return rows.scalars().all()
+
+    async def list_overdue_for_escalation(
+        self, cutoff: datetime, *, below_level: int, limit: int = 200
+    ) -> Sequence[Task]:
+        """Org-wide overdue tasks that have not yet reached `below_level`.
+
+        NOT scope-clamped: the only caller is the escalation sweep, which runs as
+        a background process with no authenticated user. It never returns data to
+        anyone - it adds collaborators and sends notifications, each of which is
+        separately scoped - so there is no caller to filter by. Mirrors
+        `ReimbursementRepository.approved_for_month`, which is org-wide for the
+        same reason.
+        """
+        rows = await self._session.execute(
+            select(Task)
+            .where(
+                Task.due_date.is_not(None),
+                Task.due_date < cutoff,
+                Task.status != TaskStatus.DONE,
+                Task.escalation_level < below_level,
+            )
+            .order_by(Task.due_date.asc())
+            # Bounded: the first sweep over a historical backlog would otherwise
+            # escalate every stale task at once. Oldest first, so the most overdue
+            # are always handled before the rest; the next tick takes the remainder.
+            .limit(limit)
+        )
         return rows.scalars().all()
 
     async def count_done_total(self, caller: CurrentUser) -> tuple[int, int]:

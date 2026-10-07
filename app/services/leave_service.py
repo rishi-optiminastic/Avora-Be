@@ -198,18 +198,25 @@ class LeaveService:
             action="leave.apply",
             target=f"leave:{leave.id}:{payload.leave_type.value}",
         )
-        # Both the admins and the requester's own manager can decide it, so both
-        # get told there is something to action — the manager only when they are
-        # not already an admin, to avoid a duplicate.
+        # Tell the person who actually decides it: the requester's reporting
+        # manager. Every admin used to be notified as well, which is now both
+        # wrong and useless - a leave request goes to the person you report to,
+        # and admins can no longer see or decide one.
+        #
+        # HR is the fallback, not a second recipient on every request: without it
+        # a request from someone with no manager on file would reach nobody who
+        # could action it.
         body = (
             f"{_leave_type_label(payload.leave_type, payload.half_day_period)} · "
             f"{payload.start_date:%d %b} - {payload.end_date:%d %b}"
         )
-        admins = await self._employees.list_by_role(Role.ADMIN)
-        admin_ids = {admin.id for admin in admins}
-        for admin in admins:
+        if caller.manager_id is not None:
+            reviewers = [caller.manager_id]
+        else:
+            reviewers = [hr.id for hr in await self._employees.list_by_role(Role.HR)]
+        for reviewer_id in reviewers:
             await self._notifications.notify(
-                recipient_id=admin.id,
+                recipient_id=reviewer_id,
                 kind=NotificationKind.LEAVE_REQUEST,
                 title="Leave request to approve",
                 body=body,
@@ -218,29 +225,19 @@ class LeaveService:
                 entity_id=leave.id,
                 actor_id=caller.employee_id,
             )
-        if caller.manager_id is not None and caller.manager_id not in admin_ids:
-            await self._notifications.notify(
-                recipient_id=caller.manager_id,
-                kind=NotificationKind.LEAVE_REQUEST,
-                title="Leave request to approve",
-                body=body,
-                link=_LEAVES_LINK,
-                entity_type="leave",
-                entity_id=leave.id,
-                actor_id=caller.employee_id,
-            )
-        await self._email_request(leave, caller, admin_ids=admin_ids)
+        await self._email_request(leave, caller, reviewer_ids=set(reviewers))
         return leave
 
     async def _email_request(
-        self, leave: Leave, caller: CurrentUser, *, admin_ids: set[uuid.UUID]
+        self, leave: Leave, caller: CurrentUser, *, reviewer_ids: set[uuid.UUID]
     ) -> None:
-        """Email a new leave request to the people who hear about it in-app: the
-        admins who can decide it, plus the requester's reporting manager.
+        """Email a new leave request to the person who decides it.
 
-        The manager's copy is explicitly framed as visibility, not an action —
-        approval is admin-only (see `decide`), so telling a manager to "approve"
-        would send them after a button they don't have.
+        That is the requester's reporting manager, or HR when they have no
+        manager on file - the same people notified in-app, so the email and the
+        bell never disagree about who is meant to act. Every admin used to be
+        mailed as well; they can no longer see or decide a leave request, so that
+        was pure noise.
 
         Best-effort per recipient: one bad address must never roll back the
         request or stop the other emails, so failures are swallowed and logged.
@@ -248,11 +245,9 @@ class LeaveService:
         requester = await self._employees.get(leave.employee_id)
         if requester is None:
             return
-        # Deliver once per person, and never back to the requester themselves —
-        # an admin applying for their own leave shouldn't email themselves.
-        recipient_ids = set(admin_ids)
-        if caller.manager_id is not None:
-            recipient_ids.add(caller.manager_id)
+        # Never back to the requester themselves - a lead applying for their own
+        # leave shouldn't email themselves.
+        recipient_ids = set(reviewer_ids)
         recipient_ids.discard(leave.employee_id)
 
         leave_type_label = _leave_type_label(leave.leave_type, leave.half_day_period)
@@ -269,7 +264,7 @@ class LeaveService:
                     leave_type_label=leave_type_label,
                     date_range_label=date_range,
                     reason=leave.reason,
-                    can_decide=recipient_id in admin_ids,
+                    can_decide=True,  # everyone mailed here is a decider now
                     link_path=_LEAVES_LINK,
                 )
             except EmailError:
@@ -278,17 +273,24 @@ class LeaveService:
     async def _may_decide(self, caller: CurrentUser, leave: Leave) -> bool:
         """Who may approve or reject a leave request.
 
-        An admin, or the requester's own reporting manager — the person who
-        actually knows whether the team can spare them that week. Approval used
-        to be admin-only, which left a manager staring at their team's requests
-        with no way to action them and every decision queued behind one person.
+        The requester's own reporting manager - the person who actually knows
+        whether the team can spare them that week - or HR.
+
+        NOT admin, unless they happen to be that manager. A leave request goes to
+        the person you report to; running the workspace is not a reason to decide
+        it (org decision), and admin can no longer see these requests either, so
+        letting the gate say yes would only produce a 404 one step later.
+
+        HR stays because it administers leave, and because a request from
+        someone with no reporting manager on file has to land somewhere - without
+        it those requests could never be actioned by anyone at all.
 
         Never your own request, whatever your role: that is the segregation of
         duties the admin-only rule was really protecting, and it survives here.
         """
         if caller.employee_id == leave.employee_id:
             return False
-        if caller.is_admin:
+        if caller.role is Role.HR:
             return True
         requester = await self._employees.get(leave.employee_id)
         return requester is not None and requester.manager_id == caller.employee_id

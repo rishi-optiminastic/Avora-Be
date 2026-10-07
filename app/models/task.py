@@ -95,6 +95,13 @@ class Task(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     blocked_reason: Mapped[str | None] = mapped_column(String(500), default=None)
     attachments: Mapped[list[dict[str, str]]] = mapped_column(JSON, default=list)
     escalated: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # How far automatic overdue escalation has already gone, so each tier fires
+    # exactly once however many times the sweep runs:
+    #   0 = untouched · 1 = assignee warned · 2 = reporting manager pulled in
+    #   3 = an admin pulled in
+    # A bool could not express this: the sweep is idempotent by comparing the
+    # level it is about to apply against the one already recorded.
+    escalation_level: Mapped[int] = mapped_column(default=0, index=True)
     # A daily task can roll up to a weekly/monthly parent; deps gate sequencing.
     parent_task_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("tasks.id", ondelete="SET NULL"), default=None, index=True

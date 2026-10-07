@@ -31,7 +31,10 @@ from app.services.notification_service import NotificationService
 
 logger = get_logger("app.resignation")
 
-_LINK = "/dashboard/time/resignations"
+# My Space: a resignation is something you submit about yourself, so it lives
+# beside My Leave. This pointed at /dashboard/time/resignations, which has
+# never existed - every resignation notification opened a 404.
+_LINK = "/dashboard/me/resignation"
 
 
 def _can_review(caller: CurrentUser) -> bool:

@@ -12,6 +12,7 @@ Coolify proxy (:80/:443, TLS) ──> api (uvicorn :8000)
                                   ├── scheduler-eod
                                   ├── scheduler-payroll
                                   ├── scheduler-autocheckout
+                                  ├── scheduler-circle-documents  (copies Circle docs; idle until CIRCLE_API_* set)
                                   └── worker-ocr   (separate Tesseract image)
 ```
 

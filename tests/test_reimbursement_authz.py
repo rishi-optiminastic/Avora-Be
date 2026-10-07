@@ -781,3 +781,63 @@ async def test_only_an_approved_claim_has_a_month_to_move(
         headers=auth_headers(settings, hr),
     )
     assert resp.status_code == 409
+
+
+async def test_a_team_lead_without_the_manager_role_sees_their_reports_claims(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """Seeing and deciding must agree.
+
+    `_is_manager_reviewer` decides by RELATIONSHIP, but the read scope was gated
+    on the MANAGER role - so a lead carrying the `employee` role was the person
+    who had to approve their report's claim and the one person who could not open
+    it. The claim sat in a queue nobody could see.
+    """
+    from app.models.employee import Employee, EmployeeStatus, Role
+
+    lead = Employee(
+        hr_external_id="hr-claim-lead",
+        work_email="claim.lead@corp.test",
+        full_name="Lena Lead",
+        role=Role.EMPLOYEE,  # runs a team without the title
+        status=EmployeeStatus.ACTIVE,
+        is_active=True,
+    )
+    db.add(lead)
+    await db.flush()
+    report = Employee(
+        hr_external_id="hr-claim-report",
+        work_email="claim.report@corp.test",
+        full_name="Rory Report",
+        role=Role.EMPLOYEE,
+        manager_id=lead.id,
+        status=EmployeeStatus.ACTIVE,
+        is_active=True,
+    )
+    db.add(report)
+    await db.commit()
+
+    submitted = await client.post(
+        "/api/v1/reimbursements",
+        json={
+            "amount_minor": 50000,
+            "category": "travel",
+            "description": "Client visit cab",
+            "expense_date": datetime.now(UTC).date().isoformat(),
+        },
+        headers=auth_headers(settings, report),
+    )
+    assert submitted.status_code == 201, submitted.text
+    claim_id = submitted.json()["id"]
+
+    listed = await client.get("/api/v1/reimbursements", headers=auth_headers(settings, lead))
+    assert listed.status_code == 200, listed.text
+    assert claim_id in [c["id"] for c in listed.json()["items"]]
+
+    decided = await client.post(
+        f"/api/v1/reimbursements/{claim_id}/manager-decision",
+        json={"approve": True},
+        headers=auth_headers(settings, lead),
+    )
+    assert decided.status_code == 200, decided.text
+    assert decided.json()["status"] == "manager_approved"

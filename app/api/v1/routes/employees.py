@@ -104,7 +104,9 @@ async def get_me(caller: CurrentUserDep, service: EmployeeServiceDep) -> Employe
     treated as a full admin for authorization — gets the admin UI. Other endpoints
     still surface the stored `it_admin` label for display/editing."""
     me = EmployeeRead.model_validate(await service.get_self(caller))
-    return me.model_copy(update={"role": caller.role})
+    return me.model_copy(
+        update={"role": caller.role, "leads_team": await service.leads_team(caller)}
+    )
 
 
 @router.patch("/me/profile", response_model=EmployeeRead)

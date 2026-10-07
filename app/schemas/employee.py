@@ -39,6 +39,12 @@ class EmployeeRead(ORMModel):
     date_of_birth: date | None
     gender: Gender | None
     has_avatar: bool
+    # Whether anyone reports to this person. Populated only on `/employees/me`
+    # (it costs a query, and no other read needs it); elsewhere it stays False.
+    # The UI gates its team views on this rather than on the role, so a lead who
+    # carries the `employee`/`executive` role gets the views their scope already
+    # allows - see EmployeeRepository._scope_clause.
+    leads_team: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -185,3 +191,8 @@ class HREmployeeUpsert(BaseModel):
     # Designation. Only overwritten when HR sends one, so a title an admin set
     # by hand survives a sync from a system that doesn't track it.
     job_title: str | None = Field(default=None, max_length=128)
+    # Work location; overwritten only when sent.
+    location: str | None = Field(default=None, max_length=128)
+    # HR's employee code (payslips, payroll exports). Only fills an EMPTY
+    # employee number, never replaces one payroll has already set.
+    employee_number: str | None = Field(default=None, max_length=32)

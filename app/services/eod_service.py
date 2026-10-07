@@ -115,7 +115,11 @@ class EodService:
     async def get_for_caller(self, caller: CurrentUser, report_id: uuid.UUID) -> EodReportRead:
         report = await self._reports.get(report_id)
         # 404 (not 403) out-of-scope so we never reveal a report exists (§7).
-        if report is None or not await self._employees.can_read(caller, report.employee_id):
+        # Personal scope: an EOD note is the person's own account of their day
+        # and goes to their reporting manager, not to every admin.
+        if report is None or not await self._employees.can_read_personal(
+            caller, report.employee_id
+        ):
             raise NotFoundError()
         return EodReportRead.from_model(report)
 
@@ -123,7 +127,7 @@ class EodService:
         self, caller: CurrentUser, now: datetime, report_date: str | None
     ) -> list[EodReportRead]:
         day = report_date or await self._local_date(now)
-        employees = await self._employees.all_in_scope(caller)
+        employees = await self._employees.all_in_personal_scope(caller)
         reports = await self._reports.list_for_employees([e.id for e in employees], day)
         return [EodReportRead.from_model(r) for r in reports]
 
@@ -139,7 +143,7 @@ class EodService:
         a manager/HR/admin may pass another `employee_id` within their scope. Out
         of scope → 404 (never reveal a report exists, §7)."""
         target = employee_id or caller.employee_id
-        if not await self._employees.can_read(caller, target):
+        if not await self._employees.can_read_personal(caller, target):
             raise NotFoundError()
         start, end = await self._resolve_range(now, from_date, to_date, _HISTORY_DEFAULT_SPAN)
         reports = await self._reports.list_for_employee_between(target, start, end)
@@ -154,10 +158,11 @@ class EodService:
     ) -> EodCumulativeRead:
         """A rolled-up digest of the caller's team over a window (defaults to a
         single day): per-person coverage, summed effort, and every report with
-        content. Scoped via the employee scope, so a manager sees only their
-        reports, a senior manager their department, HR/admin the org."""
+        content. Scoped via the PERSONAL scope, so a lead sees only their own
+        reports, a senior manager their department, HR the org - and an admin
+        only the people who actually report to them."""
         start, end = await self._resolve_range(now, from_date, to_date, 0)
-        employees = await self._employees.all_in_scope(caller)
+        employees = await self._employees.all_in_personal_scope(caller)
         member_ids = [e.id for e in employees]
         reports = await self._reports.list_for_employees_between(member_ids, start, end)
 
@@ -282,6 +287,9 @@ class EodService:
             raise AuthorizationError()
         report_date = await self._local_date(now)
         start, end = await self._day_bounds(now)
+        # Deliberately the ADMINISTRATIVE scope, not the personal one: this
+        # generates the nightly drafts for the whole roster. Narrowing it to the
+        # admin's own reports would silently stop producing EOD for everyone else.
         employees = await self._employees.all_in_scope(caller)
         ids = [e.id for e in employees]
         already = {r.employee_id for r in await self._reports.list_for_employees(ids, report_date)}

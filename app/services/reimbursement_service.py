@@ -44,7 +44,7 @@ from app.services.notification_service import NotificationService
 
 logger = get_logger("app.reimbursement")
 
-_LINK = "/dashboard/time/reimbursements"
+_LINK = "/dashboard/me/reimbursements"
 
 # An invoice is a receipt photo or a PDF, not a data dump — a tight cap keeps
 # the in-DB fallback (used when S3 is off) from bloating the row store.

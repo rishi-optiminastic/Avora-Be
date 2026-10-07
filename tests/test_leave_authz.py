@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from tests.conftest import _FakeEmailService, _Seed, auth_headers
@@ -85,8 +86,13 @@ async def test_manager_sees_report_request_outsider_does_not(
     assert out.json()["total"] == 0
 
 
-async def test_admin_approves(client: AsyncClient, settings: Settings, seed: _Seed) -> None:
-    leave = await _apply_as(client, settings, seed.report)
+async def test_an_admin_who_is_not_their_manager_cannot_approve(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """Admin used to approve anybody's leave. It no longer does: a request goes
+    to the person you report to, and an admin who is not that person cannot even
+    see it (org decision - see the visibility tests below)."""
+    leave = await _apply_as(client, settings, seed.report)  # reports to seed.manager
 
     resp = await client.post(
         f"/api/v1/leaves/{leave['id']}/decision",
@@ -94,10 +100,7 @@ async def test_admin_approves(client: AsyncClient, settings: Settings, seed: _Se
         headers=auth_headers(settings, seed.admin),
     )
 
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "approved"
-    assert body["reviewer_id"] == str(seed.admin.id)
+    assert resp.status_code in (403, 404)
 
 
 async def test_the_reporting_manager_approves_their_own_reports(
@@ -221,20 +224,20 @@ async def test_outsider_cannot_read_or_post_comments(
     ).status_code == 404
 
 
-async def test_applying_emails_the_approvers_and_the_reporting_manager(
+async def test_applying_emails_the_reporting_manager_and_nobody_else(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:
-    """Applying for leave mails the people who must act on it.
+    """Applying for leave mails the one person who must act on it.
 
-    Admins can decide (approval is admin-only — see `test_admin_approves_manager_cannot`),
-    so they get the "review it" copy; the requester's reporting manager gets a
-    visibility copy. The requester is never mailed about their own request.
+    Every admin used to be mailed too. They can no longer see or decide a leave
+    request, so that was noise - and worse, it pointed them at a page that would
+    now 404. The requester is never mailed about their own request.
     """
     await _apply_as(client, settings, seed.report)
 
     mailed = {to for kind, to in _FakeEmailService.outbox if kind == "leave_request"}
-    assert seed.admin.work_email in mailed
     assert seed.manager.work_email in mailed
+    assert seed.admin.work_email not in mailed
     assert seed.report.work_email not in mailed
 
 
@@ -245,3 +248,89 @@ async def test_an_admin_applying_does_not_email_themselves(
 
     mailed = {to for kind, to in _FakeEmailService.outbox if kind == "leave_request"}
     assert seed.admin.work_email not in mailed
+
+
+async def test_an_admin_does_not_see_or_decide_other_peoples_leave(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """Org decision: why someone took time off is theirs and their reporting
+    manager's business. Running the workspace is not a reason to read it.
+
+    An admin who manages people still sees their OWN reports - that is the next
+    test - but not the org.
+    """
+    leave = await _apply_as(client, settings, seed.report)  # reports to seed.manager
+
+    listed = await client.get("/api/v1/leaves", headers=auth_headers(settings, seed.admin))
+    assert leave["id"] not in [r["id"] for r in listed.json()["items"]]
+
+    resp = await client.post(
+        f"/api/v1/leaves/{leave['id']}/decision",
+        json={"approve": True},
+        headers=auth_headers(settings, seed.admin),
+    )
+    assert resp.status_code in (403, 404)
+
+
+async def test_an_admin_still_handles_their_own_reports_leave(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """Narrowing admin must not strand their own team: an admin who is somebody's
+    reporting manager acts as that manager, like any other lead."""
+    from app.models.employee import Employee, EmployeeStatus, Role
+
+    mine = Employee(
+        hr_external_id="hr-admin-report",
+        work_email="admin.report@corp.test",
+        full_name="Ana Report",
+        role=Role.EMPLOYEE,
+        manager_id=seed.admin.id,
+        status=EmployeeStatus.ACTIVE,
+        is_active=True,
+    )
+    db.add(mine)
+    await db.commit()
+
+    leave = await _apply_as(client, settings, mine)
+    listed = await client.get("/api/v1/leaves", headers=auth_headers(settings, seed.admin))
+    assert leave["id"] in [r["id"] for r in listed.json()["items"]]
+
+    resp = await client.post(
+        f"/api/v1/leaves/{leave['id']}/decision",
+        json={"approve": True},
+        headers=auth_headers(settings, seed.admin),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "approved"
+
+
+async def test_hr_still_sees_and_decides_so_a_managerless_request_is_not_stranded(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """HR keeps the org-wide view: it administers balances and quotas, and it is
+    who a request from someone with NO reporting manager falls to. Without this
+    such a request could never be actioned by anyone at all."""
+    from app.models.employee import Employee, EmployeeStatus, Role
+
+    hr = Employee(
+        hr_external_id="hr-person",
+        work_email="hr.person@corp.test",
+        full_name="Hana HR",
+        role=Role.HR,
+        status=EmployeeStatus.ACTIVE,
+        is_active=True,
+    )
+    db.add(hr)
+    await db.commit()
+
+    # seed.outsider reports to nobody.
+    leave = await _apply_as(client, settings, seed.outsider)
+    listed = await client.get("/api/v1/leaves", headers=auth_headers(settings, hr))
+    assert leave["id"] in [r["id"] for r in listed.json()["items"]]
+
+    resp = await client.post(
+        f"/api/v1/leaves/{leave['id']}/decision",
+        json={"approve": True},
+        headers=auth_headers(settings, hr),
+    )
+    assert resp.status_code == 200, resp.text

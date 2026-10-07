@@ -90,6 +90,17 @@ class EmployeeService:
             raise NotFoundError()
         return employee
 
+    async def leads_team(self, caller: CurrentUser) -> bool:
+        """Whether anyone reports to the caller - what the UI gates team views on.
+
+        Deliberately not the role: a person can run a team while carrying the
+        `employee` or `executive` role, and their scope already includes their
+        reports (see `EmployeeRepository._scope_clause`). Gating the UI on the
+        role instead left those leads looking at a personal view of data that
+        was already theirs to manage.
+        """
+        return await self._employees.has_reports(caller.employee_id)
+
     async def list_for_caller(
         self, caller: CurrentUser, *, offset: int, limit: int
     ) -> tuple[Sequence[Employee], int]:
@@ -101,8 +112,13 @@ class EmployeeService:
         `TaskService._can_assign_to` allows, so the assignee picker never offers a
         person the API would then reject. Individual contributors get just
         themselves, which is what the picker treats as "no one to assign to".
+
+        Scope is read unconditionally: `all_in_scope` already returns only the
+        caller for someone with no reports, so the `is_manager` guard it used to
+        carry bought nothing and cost a lead carrying the `employee`/`executive`
+        role their entire team - an empty picker, and an empty team view.
         """
-        in_scope = await self._employees.all_in_scope(caller) if caller.is_manager else []
+        in_scope = await self._employees.all_in_scope(caller)
         granted = await self._grants.assignees_for(caller.employee_id)
         by_id = {e.id: e for e in (*in_scope, *granted)}
         if caller.employee_id not in by_id:

@@ -22,7 +22,7 @@ typecheck:
 check: lint typecheck test
 
 migrate:
-	uv run alembic upgrade head
+	uv run alembic upgrade heads
 
 revision:
 	uv run alembic revision --autogenerate -m "$(m)"

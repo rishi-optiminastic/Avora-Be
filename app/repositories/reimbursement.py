@@ -45,18 +45,26 @@ class ReimbursementRepository:
                 .scalar_subquery()
             )
             return (requester_dept == caller_dept) | reviewed_by_me
-        if caller.role is Role.MANAGER:
-            requester_manager = (
-                select(Employee.manager_id)
-                .where(Employee.id == Reimbursement.employee_id)
-                .scalar_subquery()
-            )
-            return (
-                (Reimbursement.employee_id == caller.employee_id)
-                | (requester_manager == caller.employee_id)
-                | reviewed_by_me
-            )
-        return (Reimbursement.employee_id == caller.employee_id) | reviewed_by_me
+        # VIEWER is read-only within an EXPLICITLY granted scope, so it never
+        # picks people up from the org chart - see EmployeeRepository._scope_clause.
+        if caller.role is Role.VIEWER:
+            return (Reimbursement.employee_id == caller.employee_id) | reviewed_by_me
+        # Everyone else: their own claims plus their direct reports'. This was
+        # gated on `role is MANAGER`, so a lead carrying the `employee`/
+        # `executive` role could not SEE their reports' claims - while
+        # `ReimbursementService._is_manager_reviewer`, which decides by
+        # relationship, said they were the one who had to approve them. The two
+        # must agree, or the claim sits in a queue nobody can open.
+        requester_manager = (
+            select(Employee.manager_id)
+            .where(Employee.id == Reimbursement.employee_id)
+            .scalar_subquery()
+        )
+        return (
+            (Reimbursement.employee_id == caller.employee_id)
+            | (requester_manager == caller.employee_id)
+            | reviewed_by_me
+        )
 
     async def create(
         self, payload: ReimbursementCreate, *, employee_id: uuid.UUID, period_month: str

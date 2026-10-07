@@ -13,11 +13,15 @@ different HR record is a conflict, never a silent merge.
 
 from __future__ import annotations
 
-from app.core.exceptions import ConflictError
+from app.core.exceptions import ConflictError, ValidationError
 from app.core.logging import get_logger
-from app.models.employee import Employee, EmployeeStatus
+from app.models.employee import Employee, EmployeeStatus, Role
 from app.repositories.audit import AuditRepository
-from app.repositories.employee import EmployeeRepository, has_synthetic_external_id
+from app.repositories.employee import (
+    SYNTHETIC_EXTERNAL_ID_PREFIXES,
+    EmployeeRepository,
+    has_synthetic_external_id,
+)
 from app.schemas.employee import HREmployeeUpsert
 
 logger = get_logger("app.hr")
@@ -29,11 +33,21 @@ class HRService:
         self._audit = audit
 
     async def sync_employee(self, payload: HREmployeeUpsert) -> Employee:
-        await self._link_to_existing_row(payload)
+        # Login maps the (lower-case) token email to `work_email` exactly, so
+        # an address HR sends with capitals must never be stored as-is.
+        email = str(payload.work_email).strip().lower()
+        if payload.hr_external_id.startswith(SYNTHETIC_EXTERNAL_ID_PREFIXES):
+            # Those prefixes mark rows created inside Avora; letting HR mint
+            # them would make an HR record look claimable by a later sync.
+            raise ValidationError("hr_external_id may not use a reserved prefix.")
+        await self._link_to_existing_row(payload, email)
 
         # Only touch the reporting edge when HR actually sent one (see schema):
-        # omitted = keep, explicit null = clear.
-        update_manager = "manager_external_id" in payload.model_fields_set
+        # omitted = keep, explicit null = clear. An empty string is "unknown"
+        # in some HR systems, never a deliberate clear.
+        update_manager = (
+            "manager_external_id" in payload.model_fields_set and payload.manager_external_id != ""
+        )
         manager_id = None
         if payload.manager_external_id:
             manager = await self._employees.get_by_external_id(payload.manager_external_id)
@@ -56,7 +70,7 @@ class HRService:
 
         employee = await self._employees.upsert_from_hr(
             hr_external_id=payload.hr_external_id,
-            work_email=str(payload.work_email),
+            work_email=email,
             full_name=payload.full_name,
             department=payload.department,
             manager_id=manager_id,
@@ -65,6 +79,8 @@ class HRService:
             biometric_id=payload.biometric_id,
             hire_date=payload.start_date.date() if payload.start_date else None,
             job_title=payload.job_title,
+            location=payload.location,
+            employee_number=payload.employee_number,
         )
 
         action = "hr.offboard" if payload.status is EmployeeStatus.INACTIVE else "hr.sync"
@@ -75,20 +91,24 @@ class HRService:
         )
         return employee
 
-    async def _link_to_existing_row(self, payload: HREmployeeUpsert) -> None:
+    async def _link_to_existing_row(self, payload: HREmployeeUpsert, email: str) -> None:
         """Make sure the upsert lands on the right row, or refuse.
 
-        - Known HR id: fine, unless the new email belongs to someone else.
+        - Known HR id: fine, unless the new email belongs to someone else, or
+          the email would change on a privileged account (below).
         - Unknown HR id, email on a PMS-created placeholder: claim it.
         - Unknown HR id, email on another HR record: conflict.
         """
-        email = str(payload.work_email)
         email_owner = await self._employees.find_by_work_email_insensitive(email)
         current = await self._employees.get_by_external_id(payload.hr_external_id)
 
         if current is not None:
             if email_owner is not None and email_owner.id != current.id:
                 raise ConflictError("Work email already belongs to another employee.")
+            if current.work_email.lower() != email:
+                await self._guard_email_change(current, email)
+            if payload.status is EmployeeStatus.INACTIVE and current.is_active:
+                self._guard_deactivation(current)
             return
         if email_owner is None:
             return
@@ -101,3 +121,27 @@ class HRService:
             action="hr.claim",
             target=f"employee:{email_owner.id}",
         )
+
+    async def _guard_email_change(self, employee: Employee, new_email: str) -> None:
+        """Login is keyed on email, so changing it hands the account - and its
+        role - to whoever owns the new address. HR may do that for an ordinary
+        employee; on a privileged account it must be done inside Avora by an
+        admin (rule 5.5: the webhook never moves privilege)."""
+        if employee.role is not Role.EMPLOYEE or employee.payroll_manager:
+            raise ConflictError(
+                "Email change on a privileged account must be made in Avora by an admin."
+            )
+        await self._audit.append(
+            actor="hr-webhook",
+            action="hr.email_change",
+            target=f"employee:{employee.id}",
+        )
+
+    @staticmethod
+    def _guard_deactivation(employee: Employee) -> None:
+        """A wrong status in the HR system must never lock out the people who
+        run Avora: privileged accounts are deactivated by an admin in Avora."""
+        if employee.role is not Role.EMPLOYEE or employee.payroll_manager:
+            raise ConflictError(
+                "Deactivating a privileged account must be done in Avora by an admin."
+            )

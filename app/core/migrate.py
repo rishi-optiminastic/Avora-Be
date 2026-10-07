@@ -29,6 +29,8 @@ def _config() -> Config:
 
 
 def upgrade_to_head() -> None:
-    """Run `alembic upgrade head`. Sync (Alembic spins its own event loop), so
-    callers in an async context must offload it to a thread."""
-    command.upgrade(_config(), "head")
+    """Run `alembic upgrade heads` (plural, like the prod `migrate` service), so
+    parallel branches - two features adding migrations at once - never stop
+    dev startup. Sync (Alembic spins its own event loop), so callers in an
+    async context must offload it to a thread."""
+    command.upgrade(_config(), "heads")

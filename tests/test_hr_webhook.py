@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
 from httpx import AsyncClient, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
-from app.models import Employee, EmployeeStatus, Role
+from app.models import AuditLog, Employee, EmployeeStatus, Role
 from tests.conftest import _Seed, hr_headers
 
 
@@ -127,6 +128,9 @@ async def test_sync_claims_invited_placeholder_by_email(
     assert body["id"] == str(invited.id)
     assert body["hr_external_id"] == "EMP-1001"
     assert body["role"] == "manager"
+    # Stored lower-case: login matches the token email exactly, so keeping
+    # HR's capitals would lock this person out.
+    assert body["work_email"] == "pat@corp.io"
 
     rows = (await db.scalars(select(Employee).where(Employee.full_name == "Pat Real"))).all()
     assert len(rows) == 1
@@ -208,3 +212,136 @@ async def test_an_unresolvable_manager_keeps_the_reporting_edge(
     resp = await _post(client, settings, body)
     assert resp.status_code == 200
     assert resp.json()["manager_id"] == str(seed.manager.id)
+
+
+async def test_capitalised_email_is_stored_lowercase(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    resp = await _post(client, settings, _payload(work_email="New.Hire@Corp.io"))
+    assert resp.status_code == 200 and resp.json()["work_email"] == "new.hire@corp.io"
+
+
+@pytest.mark.parametrize("external_id", ["manual:x", "invite:y"])
+async def test_reserved_external_id_prefixes_are_rejected(
+    client: AsyncClient, settings: Settings, seed: _Seed, external_id: str
+) -> None:
+    resp = await _post(client, settings, _payload(hr_external_id=external_id))
+    assert resp.status_code == 422
+
+
+async def test_empty_manager_value_keeps_reporting_edge(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    await _add_employee(
+        db, hr_external_id="EMP-1001", work_email="one@corp.io", manager=seed.manager
+    )
+    resp = await _post(
+        client,
+        settings,
+        _payload(hr_external_id="EMP-1001", work_email="one@corp.io", manager_external_id=""),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["manager_id"] == str(seed.manager.id)
+
+
+async def test_hr_cannot_move_a_privileged_accounts_email(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    # Login is keyed on email: re-pointing an admin's email would hand admin to
+    # whoever owns the new address.
+    await _add_employee(db, hr_external_id="EMP-1001", work_email="boss@corp.io", role=Role.ADMIN)
+    resp = await _post(
+        client, settings, _payload(hr_external_id="EMP-1001", work_email="someone@corp.io")
+    )
+    assert resp.status_code == 409
+
+
+async def test_hr_can_change_an_ordinary_employees_email(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    await _add_employee(db, hr_external_id="EMP-1001", work_email="old@corp.io")
+    resp = await _post(
+        client, settings, _payload(hr_external_id="EMP-1001", work_email="new@corp.io")
+    )
+    assert resp.status_code == 200 and resp.json()["work_email"] == "new@corp.io"
+    actions = (await db.scalars(select(AuditLog.action))).all()
+    assert "hr.email_change" in actions
+
+
+async def test_case_variant_duplicates_are_a_conflict_not_a_guess(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    await _add_employee(db, hr_external_id="invite:a", work_email="Dup@corp.io")
+    await _add_employee(db, hr_external_id="invite:b", work_email="dup@corp.io")
+    resp = await _post(
+        client, settings, _payload(hr_external_id="EMP-3001", work_email="dup@corp.io")
+    )
+    assert resp.status_code == 409
+
+
+async def test_location_and_employee_number_are_synced(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    resp = await _post(client, settings, _payload(location="Mumbai", employee_number="EMP-5983"))
+    assert resp.json()["location"] == "Mumbai"
+    created = await db.scalar(select(Employee).where(Employee.hr_external_id == "hr-new-1"))
+    assert created is not None and created.employee_number == "EMP-5983"
+
+
+async def test_employee_number_never_replaces_one_payroll_set(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    emp = await _add_employee(db, hr_external_id="EMP-1001", work_email="one@corp.io")
+    emp.employee_number = "PAY-0042"
+    await db.commit()
+    await _post(
+        client,
+        settings,
+        _payload(hr_external_id="EMP-1001", work_email="one@corp.io", employee_number="EMP-1001"),
+    )
+    await db.refresh(emp)
+    assert emp.employee_number == "PAY-0042"
+
+
+async def test_employee_number_fills_an_empty_one(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    emp = await _add_employee(db, hr_external_id="EMP-1001", work_email="one@corp.io")
+    await _post(
+        client,
+        settings,
+        _payload(hr_external_id="EMP-1001", work_email="one@corp.io", employee_number="EMP-1001"),
+    )
+    await db.refresh(emp)
+    assert emp.employee_number == "EMP-1001"
+
+
+async def test_hire_date_is_set_from_the_joining_date(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    resp = await _post(client, settings, _payload(start_date="2026-08-21T00:00:00"))
+    assert resp.json()["hire_date"] == "2026-08-21"
+
+
+async def test_hr_cannot_deactivate_a_privileged_account(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    await _add_employee(db, hr_external_id="EMP-1001", work_email="boss@corp.io", role=Role.ADMIN)
+    resp = await _post(
+        client,
+        settings,
+        _payload(hr_external_id="EMP-1001", work_email="boss@corp.io", status="inactive"),
+    )
+    assert resp.status_code == 409
+
+
+async def test_hr_can_deactivate_an_ordinary_employee(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    await _add_employee(db, hr_external_id="EMP-1001", work_email="one@corp.io")
+    resp = await _post(
+        client,
+        settings,
+        _payload(hr_external_id="EMP-1001", work_email="one@corp.io", status="inactive"),
+    )
+    assert resp.status_code == 200 and resp.json()["is_active"] is False

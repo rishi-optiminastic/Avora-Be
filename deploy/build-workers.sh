@@ -48,6 +48,8 @@ SCHEDULERS=(
   "eod:worker.eod_scheduler"
   "payroll:worker.payroll_scheduler"
   "autocheckout:worker.auto_checkout_scheduler"
+  "task-escalation:worker.task_escalation_scheduler"
+  "circle-documents:worker.circle_documents_scheduler"
 )
 
 BASE_IMAGE="avora-worker-base:build"
@@ -93,13 +95,13 @@ echo "    ${OCR_TARGET} -> $(docker inspect "$OCR_TARGET" --format '{{json .Conf
 
 echo
 echo "==> Pushing"
-for name in eod payroll autocheckout ocr; do
+for name in eod payroll autocheckout task-escalation circle-documents ocr; do
   target="${REGISTRY}/avora-worker-${name}:latest"
   docker push "$target" | tail -1
 done
 
 echo
-echo "Done. Now redeploy these four resources in Coolify so they re-pull :latest —"
+echo "Done. Now redeploy these resources in Coolify so they re-pull :latest —"
 echo "avora-scheduler-eod, avora-scheduler-payroll, avora-scheduler-autocheckout,"
 echo "avora-worker-ocr. Deploy avora-api FIRST: it runs 'alembic upgrade heads',"
 echo "and workers on new code need the new schema already applied."

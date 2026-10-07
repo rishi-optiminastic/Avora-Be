@@ -74,4 +74,4 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new \
             "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
-            'cd /opt/avora/be/deploy && docker compose -f docker-compose.prod.yml --env-file .env.prod build && docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --force-recreate db migrate api scheduler-eod scheduler-payroll scheduler-autocheckout worker-ocr && docker compose -f docker-compose.prod.yml --env-file .env.prod ps'
+            'cd /opt/avora/be/deploy && docker compose -f docker-compose.prod.yml --env-file .env.prod build && docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --force-recreate db migrate api scheduler-eod scheduler-payroll scheduler-autocheckout scheduler-task-escalation scheduler-circle-documents worker-ocr && docker compose -f docker-compose.prod.yml --env-file .env.prod ps'

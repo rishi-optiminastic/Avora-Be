@@ -26,7 +26,18 @@ class LeaveRepository:
         self._session = session
 
     def _scope_clause(self, caller: CurrentUser) -> ColumnElement[bool] | None:
-        if caller.role in (Role.ADMIN, Role.HR):
+        # HR only - NOT admin. Why someone took time off is theirs and their
+        # reporting manager's business; running the workspace is not a reason to
+        # read it (org decision). An admin who manages people still sees their
+        # own reports through the clause below, as any lead does. HR keeps the
+        # org-wide view because it administers balances and quotas, and is who a
+        # request from someone with no manager on file falls to.
+        #
+        # Payroll and attendance are unaffected: they read approved leave through
+        # `approved_paid_in_range`, which takes an explicit id list and is not
+        # clamped by this clause, so LOP and salary are computed from the same
+        # data as before.
+        if caller.role is Role.HR:
             return None
         reviewed_by_me = Leave.reviewer_id == caller.employee_id
         if caller.role is Role.SENIOR_MANAGER:
@@ -41,18 +52,23 @@ class LeaveRepository:
                 .scalar_subquery()
             )
             return (requester_dept == caller_dept) | reviewed_by_me
-        if caller.role is Role.MANAGER:
-            requester_manager = (
-                select(Employee.manager_id)
-                .where(Employee.id == Leave.employee_id)
-                .scalar_subquery()
-            )
-            return (
-                (Leave.employee_id == caller.employee_id)
-                | (requester_manager == caller.employee_id)
-                | reviewed_by_me
-            )
-        return (Leave.employee_id == caller.employee_id) | reviewed_by_me
+        # VIEWER is read-only within an EXPLICITLY granted scope, so it never
+        # picks people up from the org chart (see EmployeeRepository._scope_clause).
+        if caller.role is Role.VIEWER:
+            return (Leave.employee_id == caller.employee_id) | reviewed_by_me
+        # Everyone else: their own leave plus their direct reports'. This was
+        # gated on `role is MANAGER` while `LeaveService._may_decide` approves by
+        # RELATIONSHIP, so a lead carrying the `employee`/`executive` role was the
+        # person required to approve their report's leave and the one person who
+        # could not see the request. Seeing and deciding must agree.
+        requester_manager = (
+            select(Employee.manager_id).where(Employee.id == Leave.employee_id).scalar_subquery()
+        )
+        return (
+            (Leave.employee_id == caller.employee_id)
+            | (requester_manager == caller.employee_id)
+            | reviewed_by_me
+        )
 
     async def create(
         self, payload: LeaveCreate, *, employee_id: uuid.UUID, reviewer_id: uuid.UUID | None

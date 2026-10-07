@@ -57,6 +57,20 @@ class AttributionCorrectionService:
         ids = [e.id for e in employees]
         return await self._corrections.list_for_employees(ids, status=status)
 
+    async def _may_decide(self, caller: CurrentUser, employee_id: uuid.UUID) -> bool:
+        """Who may approve or reject this correction.
+
+        Being a manager is not the permission - being THEIR manager is. The gate
+        was `caller.is_manager` alone, a ROLE check, so a lead carrying the
+        `employee`/`executive` role could see their report's proposal and got a
+        403 on every attempt to action it. The role check stays as an OR so HR
+        and senior managers keep the reach they have today.
+        """
+        if caller.is_manager:
+            return True
+        employee = await self._employees.get(employee_id)
+        return employee is not None and employee.manager_id == caller.employee_id
+
     async def review(
         self, caller: CurrentUser, correction_id: uuid.UUID, payload: CorrectionReview
     ) -> AttributionCorrection:
@@ -64,10 +78,10 @@ class AttributionCorrectionService:
         # 404 (not 403) when out of scope — never leak existence (rule 5.3).
         if correction is None or not await self._employees.can_read(caller, correction.employee_id):
             raise NotFoundError()
-        if not caller.is_manager:
-            raise AuthorizationError()
         if correction.employee_id == caller.employee_id:
             raise AuthorizationError()  # can't review your own proposal
+        if not await self._may_decide(caller, correction.employee_id):
+            raise AuthorizationError()
         if correction.status is not CorrectionStatus.PENDING:
             raise ValidationError("This correction was already reviewed.")
         correction.status = (

@@ -10,12 +10,11 @@ import re
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Header, Path, Query, Request, Response, status
+from fastapi import APIRouter, Header, Query, Request, Response, status
 from fastapi.responses import RedirectResponse
 
 from app.core import storage
 from app.core.deps import (
-    CircleImportServiceDep,
     CurrentUserDep,
     DocumentServiceDep,
     DownloadRateLimitDep,
@@ -24,7 +23,6 @@ from app.core.deps import (
 from app.core.exceptions import NotFoundError
 from app.core.http import read_capped_body
 from app.models.document import DocumentCategory
-from app.schemas.circle import CircleDocumentList
 from app.schemas.document import DocumentCreate, DocumentFileMeta, DocumentRead
 from app.services.document_service import MAX_DOC_BYTES
 
@@ -85,33 +83,6 @@ async def upload_document(
         caller, employee_id, meta, data, filename=filename, content_type=content_type
     )
     return DocumentRead.model_validate(document)
-
-
-@router.get("/{employee_id}/documents/circle", response_model=CircleDocumentList)
-async def list_circle_documents(
-    employee_id: uuid.UUID,
-    caller: CurrentUserDep,
-    service: CircleImportServiceDep,
-) -> CircleDocumentList:
-    """The person's documents held in Circle (read-only here)."""
-    return await service.list_documents(caller, employee_id)
-
-
-@router.get("/{employee_id}/documents/circle/{doc_id}/download")
-async def download_circle_document(
-    employee_id: uuid.UUID,
-    doc_id: Annotated[str, Path(min_length=1, max_length=64)],
-    caller: DownloadRateLimitDep,
-    service: CircleImportServiceDep,
-) -> Response:
-    """A Circle document's bytes, streamed through Avora so Avora's access rules
-    and audit apply. Served as a neutral-type attachment, like uploads."""
-    file, filename = await service.download_document(caller, employee_id, doc_id)
-    return Response(
-        content=file.content,
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{_safe_filename(filename)}"'},
-    )
 
 
 @router.get("/{employee_id}/documents/{document_id}/download")

@@ -114,6 +114,10 @@ class TaskRead(ORMModel):
     blocked_reason: str | None
     attachments: list[Attachment]
     escalated: bool
+    # How far automatic overdue escalation has gone: 0 none, 1 assignee warned,
+    # 2 reporting manager pulled in, 3 an admin pulled in. Lets the board show
+    # WHY a task is flagged rather than just that it is.
+    escalation_level: int = 0
     parent_task_id: uuid.UUID | None
     depends_on_id: uuid.UUID | None
     collaborator_ids: list[uuid.UUID] = Field(default_factory=list)

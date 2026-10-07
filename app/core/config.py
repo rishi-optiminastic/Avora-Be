@@ -221,6 +221,18 @@ class Settings(BaseSettings):
             self.eod_vision_enabled and self.openrouter_api_key and self.effective_eod_vision_model
         )
 
+    # Overdue-task escalation: a worker makes a slipping task progressively
+    # louder instead of waiting for someone to notice it. At the manager/admin
+    # thresholds the person is added as a COLLABORATOR (so the task enters their
+    # scope and they can act on it), not merely emailed. Each tier fires once -
+    # see TaskEscalationService. Off by default: it adds people to tasks, so it
+    # should be switched on deliberately.
+    task_escalation_enabled: bool = False
+    task_escalation_tick_seconds: int = 3600  # hourly is ample for day-grained tiers
+    task_escalation_warn_after_days: int = 1  # overdue this long ⇒ warn the assignee
+    task_escalation_manager_after_days: int = 3  # ⇒ add the reporting manager
+    task_escalation_admin_after_days: int = 6  # ⇒ add an admin
+
     # Auto-checkout: a worker closes work sessions left open past the office
     # window (someone forgot to check out), stamping the time their PC last showed
     # activity (≈ when it turned off) and emailing them. "PC is off" = no activity

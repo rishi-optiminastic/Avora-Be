@@ -113,6 +113,20 @@ services:
     <<: *app-image
     command: ["python", "-m", "worker.auto_checkout_scheduler"]
 
+  # Makes an overdue task progressively louder: warns the assignee, then adds
+  # the reporting manager as a collaborator, then an admin. Idle until
+  # TASK_ESCALATION_ENABLED=true. ONE instance only - two would race on the same
+  # tasks and could double-notify before either had written the level.
+  scheduler-task-escalation:
+    <<: *app-image
+    command: ["python", "-m", "worker.task_escalation_scheduler"]
+
+  # Copies employees' Circle documents into Avora (idle until CIRCLE_API_URL /
+  # CIRCLE_API_SECRET are set). Never deletes or changes anything in Circle.
+  scheduler-circle-documents:
+    <<: *app-image
+    command: ["python", "-m", "worker.circle_documents_scheduler"]
+
   # Standalone slim image (Tesseract). Talks to Postgres + S3 directly; no app
   # code, so it only needs db (not migrate). Reads DATABASE_URL + AWS_* from env.
   worker-ocr:

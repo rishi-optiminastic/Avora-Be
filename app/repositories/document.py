@@ -55,7 +55,7 @@ class DocumentRepository:
         original_filename: str | None,
         object_key: str | None,
         content: bytes | None,
-        uploaded_by: uuid.UUID,
+        uploaded_by: uuid.UUID | None,
     ) -> EmployeeDocument:
         document = EmployeeDocument(
             employee_id=employee_id,

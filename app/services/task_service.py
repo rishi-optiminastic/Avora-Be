@@ -55,6 +55,16 @@ _COMMENT_DEDUP_WINDOW = timedelta(seconds=30)
 _ASSIGNMENT_EMAIL_WINDOW = timedelta(minutes=15)
 
 
+def _moved_later(current: datetime | None, proposed: datetime | None) -> bool:
+    """Whether a due date is being pushed out. A naive stored value (SQLite under
+    test) is read as already-UTC rather than shifted by the machine's timezone."""
+    if proposed is None or current is None:
+        return proposed is not None
+    cur = current if current.tzinfo else current.replace(tzinfo=UTC)
+    new = proposed if proposed.tzinfo else proposed.replace(tzinfo=UTC)
+    return new > cur
+
+
 class TaskService:
     def __init__(
         self,
@@ -91,7 +101,14 @@ class TaskService:
         """
         if assignee_id == caller.employee_id:
             return True
-        if caller.is_manager and await self._employees.can_read(caller, assignee_id):
+        # Scope alone, NOT scope plus the manager role. `can_read` is already the
+        # reporting line (EmployeeRepository._scope_clause): it returns the
+        # caller's reports for a lead, their department for a senior manager, the
+        # org for HR/admin, and only the caller themselves for everyone else -
+        # including VIEWER - which branch 1 has already handled. Requiring the
+        # MANAGER role on top meant a lead carrying the `employee`/`executive`
+        # role could see their reports but not put a task on one.
+        if await self._employees.can_read(caller, assignee_id):
             return True
         return await self._grants.exists(caller.employee_id, assignee_id)
 
@@ -261,9 +278,15 @@ class TaskService:
             raise NotFoundError()
 
         fields = payload.model_dump(exclude_unset=True)
-        # A non-manager can only report progress (status/remarks/…) on a task they
-        # own OR collaborate on — never retitle, reassign, or change the project.
-        if not caller.is_manager:
+        # Full edit for whoever runs the assignee: `_can_assign_to` already lets a
+        # lead CREATE a task on their report and `delete` lets them remove one, so
+        # gating edits on the MANAGER role alone left them able to make and destroy
+        # a task but not fix a typo in it - the only repair was delete-and-recreate,
+        # losing the id, comments and collaborators.
+        #
+        # Everyone else can only report progress (status/remarks/…) on a task they
+        # own OR collaborate on - never retitle, reassign, or change the project.
+        if not await self._leads(caller, task.assignee_id):
             may_report = (
                 task.assignee_id == caller.employee_id
                 or await self._tasks.is_collaborator(task_id, caller.employee_id)
@@ -283,6 +306,16 @@ class TaskService:
         # must not create a cycle.
         if "parent_task_id" in fields:
             await self._validate_parent(caller, payload.parent_task_id, task_id=task_id)
+
+        # A moved deadline is a fresh deadline, so escalation starts over. Without
+        # this, a task that reached a tier kept `escalation_level` forever: it
+        # could never escalate again however far past the new date it ran, and the
+        # board went on badging it "Escalated" for a deadline that no longer
+        # existed. Only a date moved FORWARD resets - pulling one in is not a
+        # re-plan and must not clear a live escalation.
+        if "due_date" in fields and _moved_later(task.due_date, payload.due_date):
+            task.escalation_level = 0
+            task.escalated = False
 
         # Defense in depth: the FE gates a move to Blocked behind a reason
         # prompt, but any other client could still send status=blocked bare —
@@ -310,6 +343,20 @@ class TaskService:
         )
         return task
 
+    async def _leads(self, caller: CurrentUser, assignee_id: uuid.UUID) -> bool:
+        """Whether the caller runs the person this task is assigned to.
+
+        `caller.is_manager` is a ROLE check, and a lead can carry the `employee`
+        or `executive` role. OR-ing the reporting edge in gives those leads the
+        same authority over their own team without widening anyone else: it is a
+        strictly narrower test than scope, so a mere collaborator on someone
+        else's task still gets nothing.
+        """
+        if caller.is_manager:
+            return True
+        assignee = await self._employees.get(assignee_id)
+        return assignee is not None and assignee.manager_id == caller.employee_id
+
     async def escalate(self, caller: CurrentUser, task_id: uuid.UUID) -> Task:
         """Flag a task for attention (overdue/blocked). Manager-only, scoped.
 
@@ -323,11 +370,11 @@ class TaskService:
         fire again (deliberately no dedupe or throttle), so a second escalation
         still lands.
         """
-        if not caller.is_manager:
-            raise AuthorizationError()
         task = await self._tasks.get_in_scope(caller, task_id)
         if task is None:
             raise NotFoundError()
+        if not await self._leads(caller, task.assignee_id):
+            raise AuthorizationError()
         task.escalated = True
         await self._tasks.flush()
         # Ping the assignee every time so each repeated escalation is felt.
@@ -412,7 +459,9 @@ class TaskService:
         task = await self._tasks.get_in_scope(caller, task_id)
         if task is None:
             raise NotFoundError()
-        if not (caller.is_manager or task.assigned_by_id == caller.employee_id):
+        if not (
+            await self._leads(caller, task.assignee_id) or task.assigned_by_id == caller.employee_id
+        ):
             raise AuthorizationError()
         if task.status != TaskStatus.DONE:
             raise ValidationError("Only a completed task can be appreciated.")
@@ -458,7 +507,7 @@ class TaskService:
         if task is None:
             raise NotFoundError()
         if not (
-            caller.is_manager
+            await self._leads(caller, task.assignee_id)
             or task.assigned_by_id == caller.employee_id
             or task.assignee_id == caller.employee_id
         ):

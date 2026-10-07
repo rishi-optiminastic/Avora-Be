@@ -14,6 +14,7 @@ from datetime import date
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import ConflictError
 from app.core.names import clean_display_name, is_placeholder_name
 from app.models.employee import Employee, EmployeeStatus, Gender, Role, TrackingMode
 from app.schemas.auth import CurrentUser
@@ -49,11 +50,15 @@ class EmployeeRepository:
 
     async def find_by_work_email_insensitive(self, work_email: str) -> Employee | None:
         """Email lookup that ignores case, for matching records from another
-        system. Login keeps the exact `get_by_work_email`."""
+        system. Login keeps the exact `get_by_work_email`. Two rows differing
+        only in case are ambiguous: refuse rather than pick one at random."""
         result = await self._session.execute(
-            select(Employee).where(func.lower(Employee.work_email) == work_email.lower())
+            select(Employee).where(func.lower(Employee.work_email) == work_email.lower()).limit(2)
         )
-        return result.scalars().first()
+        rows = result.scalars().all()
+        if len(rows) > 1:
+            raise ConflictError("Two employees share this work email (differing only in case).")
+        return rows[0] if rows else None
 
     async def claim_for_hr(self, employee: Employee, hr_external_id: str) -> None:
         """Hand a PMS-created placeholder row over to its HR record. Keeps the
@@ -276,6 +281,56 @@ class EmployeeRepository:
             return [Employee.department == caller_department]
         return [(Employee.manager_id == caller.employee_id) | (Employee.id == caller.employee_id)]
 
+    def _personal_scope_clause(self, caller: CurrentUser) -> list[ColumnElement[bool]]:
+        """Row-level scope for PERSONAL matters: leave and EOD.
+
+        The same reporting-line rule as `_scope_clause`, with one difference:
+        **admin is not org-wide here**. Running the workspace is not a reason to
+        read what everyone asked time off for or wrote in their end-of-day note -
+        those go to the person's reporting manager (org decision). An admin who
+        manages people still sees their own reports, as any lead does.
+
+        HR is unchanged: it administers leave balances, quotas and the org leave
+        report, and it is who a request from someone with no manager on file
+        falls to.
+
+        This is deliberately NOT the scope used for administrative work. EOD
+        draft GENERATION, payroll and attendance still read org-wide, because
+        they are system operations over the roster rather than one person reading
+        another's personal record.
+        """
+        if caller.role is Role.HR:
+            return []
+        if caller.role is Role.VIEWER:
+            return [Employee.id == caller.employee_id]
+        if caller.role is Role.SENIOR_MANAGER:
+            caller_department = (
+                select(Employee.department)
+                .where(Employee.id == caller.employee_id)
+                .scalar_subquery()
+            )
+            return [Employee.department == caller_department]
+        return [(Employee.manager_id == caller.employee_id) | (Employee.id == caller.employee_id)]
+
+    async def can_read_personal(self, caller: CurrentUser, target_id: uuid.UUID) -> bool:
+        """`can_read`, but for leave/EOD - admin is not org-wide. See
+        `_personal_scope_clause`."""
+        stmt = select(Employee.id).where(
+            Employee.id == target_id, *self._personal_scope_clause(caller)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none() is not None
+
+    async def all_in_personal_scope(self, caller: CurrentUser) -> Sequence[Employee]:
+        """`all_in_scope`, but for leave/EOD - admin is not org-wide. See
+        `_personal_scope_clause`."""
+        clauses = self._personal_scope_clause(caller)
+        clauses.append(Employee.is_active.is_(True))
+        rows = await self._session.execute(
+            select(Employee).where(*clauses).order_by(Employee.full_name)
+        )
+        return rows.scalars().all()
+
     async def can_read(self, caller: CurrentUser, target_id: uuid.UUID) -> bool:
         stmt = select(Employee.id).where(Employee.id == target_id, *self._scope_clause(caller))
         result = await self._session.execute(stmt)
@@ -309,6 +364,21 @@ class EmployeeRepository:
             select(Employee).where(*clauses).order_by(Employee.full_name)
         )
         return rows.scalars().all()
+
+    async def has_reports(self, employee_id: uuid.UUID) -> bool:
+        """Whether anyone active reports to this person.
+
+        The reporting edge, not the role title, is what makes someone a team
+        lead - the same fact `_scope_clause` grants read access on. The UI needs
+        it so a lead carrying the `employee`/`executive` role is offered the team
+        views their data already supports.
+        """
+        row = await self._session.execute(
+            select(Employee.id)
+            .where(Employee.manager_id == employee_id, Employee.is_active.is_(True))
+            .limit(1)
+        )
+        return row.scalar_one_or_none() is not None
 
     async def list_by_role(self, role: Role) -> Sequence[Employee]:
         """All active employees with a given role (e.g. admins, for EOD recipients)."""
@@ -356,6 +426,8 @@ class EmployeeRepository:
         biometric_id: str | None = None,
         hire_date: date | None = None,
         job_title: str | None = None,
+        location: str | None = None,
+        employee_number: str | None = None,
     ) -> Employee:
         """Create or update from HR. Never touches `role` (rule 5.5)."""
         employee = await self.get_by_external_id(hr_external_id)
@@ -383,6 +455,10 @@ class EmployeeRepository:
             employee.hire_date = hire_date
         if job_title is not None:
             employee.job_title = job_title
+        if location is not None:
+            employee.location = location
+        if employee_number is not None and not employee.employee_number:
+            employee.employee_number = employee_number
         await self._session.flush()
         return employee
 
