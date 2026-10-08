@@ -51,6 +51,26 @@ class DeviceRead(ORMModel):
     updated_at: datetime
 
 
+class DeviceReassign(BaseModel):
+    """Admin/IT re-points a device at the employee who actually uses it."""
+
+    employee_id: uuid.UUID
+    # When the machine changed hands. Omitted ⇒ leave history alone and only fix
+    # what the device captures from now on. Supplied ⇒ also re-file the rows
+    # captured from that moment, which is what makes BOTH people's records true.
+    history_from: datetime | None = Field(default=None)
+
+
+class DeviceReassigned(ORMModel):
+    """The updated device plus what the re-filing actually touched, so the UI
+    can tell the admin exactly what changed rather than claiming success."""
+
+    device: DeviceRead
+    previous_employee_id: uuid.UUID
+    screenshots_moved: int
+    activity_samples_moved: int
+
+
 class DeviceNudge(BaseModel):
     """Admin/manager nudges an employee to keep/reinstall the agent."""
 

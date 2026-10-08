@@ -13,6 +13,8 @@ from app.schemas.device import (
     DeviceNudge,
     DeviceNudgeResult,
     DeviceRead,
+    DeviceReassign,
+    DeviceReassigned,
     DeviceSelfEnroll,
     FleetUpdateResult,
 )
@@ -67,6 +69,30 @@ async def revoke_device(
     service: DeviceServiceDep,
 ) -> DeviceRead:
     return DeviceRead.model_validate(await service.revoke(caller, device_id))
+
+
+@router.post("/{device_id}/reassign", response_model=DeviceReassigned)
+async def reassign_device(
+    device_id: uuid.UUID,
+    payload: DeviceReassign,
+    caller: CurrentUserDep,
+    service: DeviceServiceDep,
+) -> DeviceReassigned:
+    """Admin/IT: re-point a device at the employee who actually uses it.
+
+    A device is bound to its owner once, at enrollment, from whoever was signed
+    in to Avora in that machine's browser. When the laptop changes hands nothing
+    re-checks it, so the new user's screenshots and activity keep filing under
+    the old one. `history_from` additionally re-files what was captured from
+    that moment on.
+    """
+    device, previous, shots, samples = await service.reassign(caller, device_id, payload)
+    return DeviceReassigned(
+        device=DeviceRead.model_validate(device),
+        previous_employee_id=previous,
+        screenshots_moved=shots,
+        activity_samples_moved=samples,
+    )
 
 
 @router.post("/nudge", response_model=DeviceNudgeResult)

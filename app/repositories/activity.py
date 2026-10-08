@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, cast
 
-from sqlalchemy import case, delete, func, select
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -197,6 +197,22 @@ class ActivityRepository:
             .order_by(ActivitySample.received_at.asc())
         )
         return rows.scalars().all()
+
+    async def reassign_device_rows(
+        self, device_id: uuid.UUID, employee_id: uuid.UUID, since: datetime | None
+    ) -> int:
+        """Re-file this device's activity samples under `employee_id`.
+
+        These feed attendance (agent activity is the fallback when there is no
+        punch) as well as the browsing views, so moving them corrects BOTH
+        people's records - which is exactly why `since` matters and why the
+        service audits the change.
+        """
+        stmt = update(ActivitySample).where(ActivitySample.device_id == device_id)
+        if since is not None:
+            stmt = stmt.where(ActivitySample.received_at >= since)
+        result = await self._session.execute(stmt.values(employee_id=employee_id))
+        return cast("CursorResult[Any]", result).rowcount or 0
 
     async def purge_before(self, cutoff: datetime) -> int:
         """Delete activity samples received before `cutoff` (retention). Returns

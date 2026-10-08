@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, cast
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
@@ -173,6 +173,22 @@ class ScreenshotRepository:
             )
         )
         return [k for k in rows.scalars().all() if k]
+
+    async def reassign_device_rows(
+        self, device_id: uuid.UUID, employee_id: uuid.UUID, since: datetime | None
+    ) -> int:
+        """Re-file this device's screenshots under `employee_id`; returns the count.
+
+        `since` is the moment the machine changed hands. Rows before it belong
+        to the previous owner and are left alone - re-filing a device's whole
+        history would hand one person's work to another for a period when it
+        genuinely was not theirs.
+        """
+        stmt = update(Screenshot).where(Screenshot.device_id == device_id)
+        if since is not None:
+            stmt = stmt.where(Screenshot.received_at >= since)
+        result = await self._session.execute(stmt.values(employee_id=employee_id))
+        return cast("CursorResult[Any]", result).rowcount or 0
 
     async def purge_before(self, cutoff: datetime) -> int:
         result = await self._session.execute(

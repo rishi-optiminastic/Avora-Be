@@ -73,6 +73,20 @@ class DeviceRepository:
         )
         return rows.scalars().all()
 
+    async def reassign(self, device: Device, employee_id: uuid.UUID) -> Device:
+        """Re-point a device at the employee who actually uses it.
+
+        The binding is set once at enrollment, from whoever happened to be
+        signed in to Avora in that machine's browser, and nothing ever re-checks
+        it. When a laptop changes hands the agent keeps filing the new user's
+        screenshots, activity and EOD under the old one, silently and forever.
+        This is the only way to correct that without revoking the device and
+        making someone re-enroll on the machine.
+        """
+        device.employee_id = employee_id
+        await self._session.flush()
+        return device
+
     async def revoke(self, device: Device) -> Device:
         device.is_revoked = True
         await self._session.flush()
