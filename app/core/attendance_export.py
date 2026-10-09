@@ -37,6 +37,10 @@ class AttendanceSummaryRow:
     regularized_days: int
     present_days: int
     worked_hours: float
+    # Already formatted HH:MM (or "-") by the service, which owns the org
+    # timezone. A clock position is not a duration, so it is not a number here.
+    avg_check_in: str
+    avg_check_out: str
 
     def as_cells(self) -> list[object]:
         return [
@@ -50,6 +54,8 @@ class AttendanceSummaryRow:
             self.leave_days,
             self.regularized_days,
             self.worked_hours,
+            self.avg_check_in,
+            self.avg_check_out,
         ]
 
 
@@ -96,6 +102,8 @@ _SUMMARY_HEADERS = [
     "Leave days",
     "Regularised days",
     "Total hours",
+    "Avg check in",
+    "Avg check out",
 ]
 _DAILY_HEADERS = [
     "Employee",

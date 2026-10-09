@@ -37,3 +37,9 @@ class AttendanceMonthSummary(BaseModel):
     leave_days: int
     regularized_days: int
     worked_minutes: int
+    # The typical clock-in / clock-out for the month, as local minutes past
+    # midnight, averaged over the days that actually had one. None - not 0 -
+    # when there were none all month: 0 renders as 00:00 and would read as a
+    # midnight arrival rather than "never came in".
+    avg_check_in_minutes: int | None = None
+    avg_check_out_minutes: int | None = None

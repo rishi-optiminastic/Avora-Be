@@ -11,6 +11,7 @@ policy + approved regularizations (Security rule 5.3 — scoped via `all_in_scop
 from __future__ import annotations
 
 import uuid
+from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -513,7 +514,7 @@ class AttendanceService:
 
     @staticmethod
     def _summarize(
-        rows: Sequence[AttendanceDayRow], ids: Sequence[uuid.UUID]
+        rows: Sequence[AttendanceDayRow], ids: Sequence[uuid.UUID], tz: str
     ) -> dict[uuid.UUID, AttendanceMonthSummary]:
         """Roll day rows up into one summary per employee.
 
@@ -521,9 +522,18 @@ class AttendanceService:
         read it, so the sheet can never disagree with the screen.
         """
         summary = {i: AttendanceMonthSummary(employee_id=i, **_ZERO) for i in ids}
+        # Collected per person so the average covers only the days that actually
+        # had a punch. Folding a zero in for every absent or not-yet-worked day
+        # would drag everyone's typical arrival toward midnight.
+        arrivals: dict[uuid.UUID, list[int]] = defaultdict(list)
+        departures: dict[uuid.UUID, list[int]] = defaultdict(list)
         for r in rows:
             s = summary[r.employee_id]
             s.worked_minutes += r.worked_minutes
+            if r.login_at is not None:
+                arrivals[r.employee_id].append(local_minute(r.login_at, tz))
+            if r.logout_at is not None:
+                departures[r.employee_id].append(local_minute(r.logout_at, tz))
             if r.status is AttendanceStatus.FULL_DAY:
                 s.full_days += 1
             elif r.status is AttendanceStatus.HALF_DAY:
@@ -536,13 +546,16 @@ class AttendanceService:
                 s.leave_days += 1
             if r.regularized:
                 s.regularized_days += 1
+        for employee_id, s in summary.items():
+            s.avg_check_in_minutes = _mean_minute(arrivals.get(employee_id))
+            s.avg_check_out_minutes = _mean_minute(departures.get(employee_id))
         return summary
 
     async def monthly_report(self, caller: CurrentUser, month: str) -> list[AttendanceMonthSummary]:
         first, last = self._month_bounds(month)
         spec = await self._policy.spec()
         rows, ids = await self._day_rows(caller, first, last, spec)
-        return list(self._summarize(rows, ids).values())
+        return list(self._summarize(rows, ids, spec.timezone).values())
 
     async def export_monthly_xlsx(self, caller: CurrentUser, month: str) -> tuple[bytes, str]:
         """The month's attendance as .xlsx: a per-employee summary and every day's
@@ -568,7 +581,7 @@ class AttendanceService:
             # Local time, because the sheet is read by people in the office.
             return moment.astimezone(tz).strftime("%H:%M") if moment else "-"
 
-        summaries = self._summarize(rows, ids)
+        summaries = self._summarize(rows, ids, spec.timezone)
         summary_rows = []
         for employee_id, s in summaries.items():
             full_name, department = name_of(employee_id)
@@ -585,6 +598,8 @@ class AttendanceService:
                     # Present is what payroll counts: worked days, however late.
                     present_days=s.full_days + s.half_days + s.late_days,
                     worked_hours=round(s.worked_minutes / 60, 2),
+                    avg_check_in=_clock_minute(s.avg_check_in_minutes),
+                    avg_check_out=_clock_minute(s.avg_check_out_minutes),
                 )
             )
         summary_rows.sort(key=lambda r: r.employee_name)
@@ -615,6 +630,24 @@ class AttendanceService:
             target=f"month:{month}:employees:{len(summary_rows)}",
         )
         return xlsx, f"attendance-{month}.xlsx"
+
+
+def _mean_minute(values: list[int] | None) -> int | None:
+    """The mean clock position of a set of local minute-of-day values.
+
+    None when there is nothing to average, so the caller can say "never checked
+    in" instead of reporting midnight.
+    """
+    if not values:
+        return None
+    return round(sum(values) / len(values))
+
+
+def _clock_minute(minutes: int | None) -> str:
+    """A local minute-of-day as HH:MM for the sheet, or "-" when unknown."""
+    if minutes is None:
+        return "-"
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
 _ZERO = {
