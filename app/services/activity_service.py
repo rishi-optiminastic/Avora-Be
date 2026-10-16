@@ -22,6 +22,7 @@ from app.repositories.device import DeviceRepository
 from app.repositories.employee import EmployeeRepository
 from app.schemas.activity import ActivityIngest
 from app.schemas.auth import CurrentDevice
+from app.services.device_health_service import DeviceHealthService
 from app.services.monitoring_gate import MonitoringGateService
 
 
@@ -34,6 +35,7 @@ class ActivityService:
         employees: EmployeeRepository,
         audit: AuditRepository,
         gate: MonitoringGateService,
+        health: DeviceHealthService,
     ) -> None:
         self._settings = settings
         self._devices = devices
@@ -41,6 +43,7 @@ class ActivityService:
         self._employees = employees
         self._audit = audit
         self._gate = gate
+        self._health = health
 
     async def _advance_device(self, device: CurrentDevice, seq: int, at: datetime) -> None:
         """Keep the per-device sequence monotonic + mark it alive (also after a
@@ -49,6 +52,8 @@ class ActivityService:
         if db_device is not None:
             await self._devices.advance_sequence(db_device, seq)
             await self._devices.touch_last_seen(db_device, at)
+            # Alive but its health loop went quiet? Only a live device can tell us.
+            await self._health.check_stale(db_device, at)
 
     def _flags(self, payload: ActivityIngest, received_at: datetime) -> list[str]:
         flags: list[str] = []

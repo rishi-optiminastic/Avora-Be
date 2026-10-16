@@ -6,10 +6,17 @@ import uuid
 
 from fastapi import APIRouter, status
 
-from app.core.deps import AgentNudgeServiceDep, CurrentUserDep, DeviceServiceDep
+from app.core.deps import (
+    AgentNudgeServiceDep,
+    CurrentDeviceDep,
+    CurrentUserDep,
+    DeviceHealthServiceDep,
+    DeviceServiceDep,
+)
 from app.schemas.device import (
     DeviceCreate,
     DeviceCreated,
+    DeviceHealthReport,
     DeviceNudge,
     DeviceNudgeResult,
     DeviceRead,
@@ -24,8 +31,7 @@ router = APIRouter(prefix="/devices", tags=["devices"])
 
 @router.get("", response_model=list[DeviceRead])
 async def list_devices(caller: CurrentUserDep, service: DeviceServiceDep) -> list[DeviceRead]:
-    devices = await service.list_for_caller(caller)
-    return [DeviceRead.model_validate(d) for d in devices]
+    return await service.list_for_caller(caller)
 
 
 @router.post("", response_model=DeviceCreated, status_code=status.HTTP_201_CREATED)
@@ -62,13 +68,25 @@ async def self_enroll_device(
     )
 
 
+@router.post("/health", status_code=status.HTTP_204_NO_CONTENT)
+async def report_device_health(
+    payload: DeviceHealthReport,
+    device: CurrentDeviceDep,
+    service: DeviceHealthServiceDep,
+) -> None:
+    """Agent-only: the calling device's capture health. Device token + HMAC +
+    per-device rate limit are enforced by `CurrentDeviceDep`, exactly as on
+    activity ingest; the device is the authenticated one, never a body field."""
+    await service.record_report(device, payload)
+
+
 @router.post("/{device_id}/revoke", response_model=DeviceRead)
 async def revoke_device(
     device_id: uuid.UUID,
     caller: CurrentUserDep,
     service: DeviceServiceDep,
 ) -> DeviceRead:
-    return DeviceRead.model_validate(await service.revoke(caller, device_id))
+    return service.to_read(caller, await service.revoke(caller, device_id))
 
 
 @router.post("/{device_id}/reassign", response_model=DeviceReassigned)
@@ -88,7 +106,7 @@ async def reassign_device(
     """
     device, previous, shots, samples = await service.reassign(caller, device_id, payload)
     return DeviceReassigned(
-        device=DeviceRead.model_validate(device),
+        device=service.to_read(caller, device),
         previous_employee_id=previous,
         screenshots_moved=shots,
         activity_samples_moved=samples,

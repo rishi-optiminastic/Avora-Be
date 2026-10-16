@@ -5,13 +5,16 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from datetime import datetime
+from typing import Any, cast
 
-from sqlalchemy import ColumnElement, select
+from sqlalchemy import ColumnElement, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.device import Device
 from app.models.employee import Employee, Role
 from app.schemas.auth import CurrentUser
+from app.schemas.device import DeviceHealthReport
 
 
 class DeviceRepository:
@@ -110,3 +113,38 @@ class DeviceRepository:
         `sequence > device.last_sequence`."""
         device.last_sequence = sequence
         await self._session.flush()
+
+    async def save_health(
+        self, device: Device, fields: DeviceHealthReport, received_at: datetime
+    ) -> None:
+        """Overwrite the device's latest health report (server receive time)."""
+        device.health_agent_version = fields.agent_version
+        device.health_os = fields.os
+        device.health_screen_capture = fields.screen_capture
+        device.health_window_info = fields.window_info
+        device.health_browser_url = fields.browser_url
+        device.health_last_error = fields.last_error
+        device.health_queue_items = fields.queue_items
+        device.health_queue_bytes = fields.queue_bytes
+        device.health_oldest_queued_age_seconds = fields.oldest_queued_age_seconds
+        device.health_reported_at = received_at
+        await self._session.flush()
+
+    async def open_health_incident(self, device_id: uuid.UUID, at: datetime) -> bool:
+        """Atomically mark a device as needing attention. True only for the one
+        caller that flipped it, so concurrent requests alert exactly once."""
+        result = await self._session.execute(
+            update(Device)
+            .where(Device.id == device_id, Device.health_attention_since.is_(None))
+            .values(health_attention_since=at)
+        )
+        return cast(CursorResult[Any], result).rowcount == 1
+
+    async def close_health_incident(self, device_id: uuid.UUID) -> bool:
+        """Atomically clear an open incident. True only for the caller that did."""
+        result = await self._session.execute(
+            update(Device)
+            .where(Device.id == device_id, Device.health_attention_since.is_not(None))
+            .values(health_attention_since=None)
+        )
+        return cast(CursorResult[Any], result).rowcount == 1

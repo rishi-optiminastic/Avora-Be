@@ -31,6 +31,7 @@ class NotificationKind(StrEnum):
     UNDERPERFORMANCE = "underperformance"  # a person you manage is at risk
     ESCALATION = "escalation"  # a repeated issue escalated up to you
     APPRECIATION = "appreciation"  # a manager thanked you for completing a task
+    DEVICE_HEALTH = "device_health"  # an agent stopped capturing (or recovered)
     SYSTEM = "system"
 
 

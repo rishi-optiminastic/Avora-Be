@@ -8,7 +8,7 @@ peppered hash is stored (rule 5.2). Reads are scoped in the repository.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from datetime import UTC, datetime
 
 from app.core.config import Settings
 from app.core.exceptions import AuthorizationError, NotFoundError, ValidationError
@@ -21,7 +21,8 @@ from app.repositories.device import DeviceRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.screenshot import ScreenshotRepository
 from app.schemas.auth import CurrentUser
-from app.schemas.device import DeviceCreate, DeviceReassign, DeviceSelfEnroll
+from app.schemas.device import DeviceCreate, DeviceRead, DeviceReassign, DeviceSelfEnroll
+from app.services.device_health_service import build_health_read, can_see_health_errors
 
 
 def _can_manage(caller: CurrentUser) -> bool:
@@ -53,8 +54,20 @@ class DeviceService:
         self._screenshots = screenshots
         self._activity = activity
 
-    async def list_for_caller(self, caller: CurrentUser) -> Sequence[Device]:
-        return await self._devices.list_for_scope(caller)
+    async def list_for_caller(self, caller: CurrentUser) -> list[DeviceRead]:
+        devices = await self._devices.list_for_scope(caller)
+        now = datetime.now(UTC)
+        return [self._read(caller, device, now) for device in devices]
+
+    def to_read(self, caller: CurrentUser, device: Device) -> DeviceRead:
+        """The response shape for a device the caller may already see, with its
+        capture-health verdict computed here rather than in the client."""
+        return self._read(caller, device, datetime.now(UTC))
+
+    @staticmethod
+    def _read(caller: CurrentUser, device: Device, now: datetime) -> DeviceRead:
+        health = build_health_read(device, now, include_error=can_see_health_errors(caller))
+        return DeviceRead.model_validate(device).model_copy(update={"health": health})
 
     async def enroll(self, caller: CurrentUser, payload: DeviceCreate) -> tuple[Device, str]:
         """Returns (device, raw_token). The raw token is shown to the admin once."""

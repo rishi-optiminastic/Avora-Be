@@ -102,6 +102,7 @@ from app.services.circle_client import CircleClient
 from app.services.circle_import_service import CircleImportService
 from app.services.compensation_service import CompensationService
 from app.services.dashboard_service import DashboardService
+from app.services.device_health_service import DeviceHealthService
 from app.services.device_service import DeviceService
 from app.services.document_service import DocumentService
 from app.services.email_service import EmailService
@@ -660,17 +661,6 @@ def get_attribution_service(
     return AttributionService(activity, screenshots, entities, employees)
 
 
-def get_activity_service(
-    settings: SettingsDep,
-    devices: Annotated[DeviceRepository, Depends(get_device_repo)],
-    activity: Annotated[ActivityRepository, Depends(get_activity_repo)],
-    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
-    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
-    gate: Annotated[MonitoringGateService, Depends(get_monitoring_gate)],
-) -> ActivityService:
-    return ActivityService(settings, devices, activity, employees, audit, gate)
-
-
 def get_invitation_service(
     settings: SettingsDep,
     invitations: Annotated[InvitationRepository, Depends(get_invitation_repo)],
@@ -685,6 +675,26 @@ def get_notification_service(
     notifications: Annotated[NotificationRepository, Depends(get_notification_repo)],
 ) -> NotificationService:
     return NotificationService(notifications)
+
+
+def get_device_health_service(
+    devices: Annotated[DeviceRepository, Depends(get_device_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    notifications: Annotated[NotificationService, Depends(get_notification_service)],
+) -> DeviceHealthService:
+    return DeviceHealthService(devices, employees, notifications)
+
+
+def get_activity_service(
+    settings: SettingsDep,
+    devices: Annotated[DeviceRepository, Depends(get_device_repo)],
+    activity: Annotated[ActivityRepository, Depends(get_activity_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    gate: Annotated[MonitoringGateService, Depends(get_monitoring_gate)],
+    health: Annotated[DeviceHealthService, Depends(get_device_health_service)],
+) -> ActivityService:
+    return ActivityService(settings, devices, activity, employees, audit, gate, health)
 
 
 def get_llm_credit_service(
@@ -1000,6 +1010,7 @@ HRServiceDep = Annotated[HRService, Depends(get_hr_service)]
 CircleImportServiceDep = Annotated[CircleImportService, Depends(get_circle_import_service)]
 ActivityServiceDep = Annotated[ActivityService, Depends(get_activity_service)]
 DeviceServiceDep = Annotated[DeviceService, Depends(get_device_service)]
+DeviceHealthServiceDep = Annotated[DeviceHealthService, Depends(get_device_health_service)]
 AgentNudgeServiceDep = Annotated[AgentNudgeService, Depends(get_agent_nudge_service)]
 MonitoringServiceDep = Annotated[MonitoringService, Depends(get_monitoring_service)]
 BrowsingPrivacyServiceDep = Annotated[BrowsingPrivacyService, Depends(get_browsing_privacy_service)]

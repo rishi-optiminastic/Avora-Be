@@ -24,7 +24,7 @@ from app.schemas.regularization import RegularizationCreate, RegularizationRevie
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.notification_service import NotificationService
 
-_ATTENDANCE_LINK = "/dashboard/time/attendance"
+_REGULARIZATIONS_LINK = "/dashboard/time/regularizations"
 
 
 class RegularizationService:
@@ -60,7 +60,7 @@ class RegularizationService:
                 kind=NotificationKind.REGULARIZATION_REQUEST,
                 title="Attendance fix to review",
                 body=f"{payload.day} · {payload.reason}"[:200],
-                link=_ATTENDANCE_LINK,
+                link=_REGULARIZATIONS_LINK,
                 entity_type="regularization",
                 entity_id=reg.id,
                 actor_id=caller.employee_id,
@@ -158,7 +158,7 @@ class RegularizationService:
             title=f"Attendance fix {'approved' if approved else 'rejected'}",
             body=(f"{reg.day} · {reg.review_note}" if reg.review_note else reg.day)[:200],
             level=NotificationLevel.INFO if approved else NotificationLevel.WARNING,
-            link=_ATTENDANCE_LINK,
+            link=_REGULARIZATIONS_LINK,
             entity_type="regularization",
             entity_id=reg.id,
             actor_id=caller.employee_id,
