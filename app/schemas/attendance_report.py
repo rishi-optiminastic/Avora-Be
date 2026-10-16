@@ -30,6 +30,10 @@ class AttendanceMonthSummary(BaseModel):
     """An employee's month: day counts + total hours (for the monthly report)."""
 
     employee_id: uuid.UUID
+    # Carried on the row because the roster includes leavers, whom the live
+    # employee directory no longer lists: without them the UI can't name them.
+    employee_name: str | None = None
+    department: str | None = None
     full_days: int
     half_days: int
     late_days: int

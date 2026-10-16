@@ -77,6 +77,14 @@ def _can_review_hr(caller: CurrentUser) -> bool:
     return caller.can_review_reimbursements
 
 
+def _may_manager_step(caller: CurrentUser, applicant_manager_id: uuid.UUID | None) -> bool:
+    """Step 1 belongs to the applicant's direct manager, or HR / a payroll grant
+    holder. (Never your own claim - callers check that separately.)"""
+    if _can_review_hr(caller):
+        return True
+    return applicant_manager_id is not None and applicant_manager_id == caller.employee_id
+
+
 def _money(amount_minor: int) -> str:
     return f"₹{amount_minor / 100:,.2f}"
 
@@ -246,14 +254,18 @@ class ReimbursementService:
         return row
 
     async def _notify_step1_reviewers(self, caller: CurrentUser, row: Reimbursement) -> None:
-        """Ping whoever performs the manager step: the reporting manager, or every
-        HR/Admin when the employee has no manager on file."""
+        """Ping whoever performs the manager step: the reporting manager, or HR
+        and the payroll managers when the employee has no manager on file - or
+        the one on file has left (inactive), who could never act on it."""
         applicant = await self._employees.get(caller.employee_id)
         who = applicant.full_name if applicant is not None else "An employee"
         body = f"{who} · {_money(row.amount_minor)} · {row.category.value}"
-        recipients: list[uuid.UUID] = []
-        if caller.manager_id is not None:
-            recipients.append(caller.manager_id)
+        manager = (
+            await self._employees.get(caller.manager_id) if caller.manager_id is not None else None
+        )
+        recipients: list[uuid.UUID]
+        if manager is not None and manager.is_active:
+            recipients = [manager.id]
         else:
             recipients = [
                 r.id
@@ -473,12 +485,35 @@ class ReimbursementService:
         return row
 
     async def _is_manager_reviewer(self, caller: CurrentUser, row: Reimbursement) -> bool:
-        """The manager step is for the applicant's reporting manager. HR/Admin may
-        also act here (e.g. when the applicant has no manager on file)."""
-        if _can_review_hr(caller):
-            return True
+        """The manager step is for the applicant's reporting manager. HR and the
+        payroll managers may also act here (e.g. when there is no manager)."""
         applicant = await self._employees.get(row.employee_id)
-        return applicant is not None and applicant.manager_id == caller.employee_id
+        return _may_manager_step(caller, applicant.manager_id if applicant else None)
+
+    async def decidable_ids(
+        self, caller: CurrentUser, rows: Sequence[Reimbursement]
+    ) -> set[uuid.UUID]:
+        """The claims in `rows` the caller can act on right now - the exact rules
+        `manager_decide` / `hr_decide` enforce, batched (one employee lookup).
+
+        The UI builds its review queues from this. Inferring "a non-own submitted
+        claim in my list is mine to review" offered senior managers every claim in
+        their department, and Approve then 403'd on all but their direct reports'.
+        """
+        applicants = await self._employees.get_many(list({r.employee_id for r in rows}))
+        out: set[uuid.UUID] = set()
+        for row in rows:
+            if row.employee_id == caller.employee_id:
+                continue
+            applicant = applicants.get(row.employee_id)
+            manager_id = applicant.manager_id if applicant is not None else None
+            if row.status is ReimbursementStatus.SUBMITTED and _may_manager_step(
+                caller, manager_id
+            ):
+                out.add(row.id)
+            elif row.status is ReimbursementStatus.MANAGER_APPROVED and _can_review_hr(caller):
+                out.add(row.id)
+        return out
 
     async def _notify_hr_reviewers(self, caller: CurrentUser, row: Reimbursement) -> None:
         applicant = await self._employees.get(row.employee_id)

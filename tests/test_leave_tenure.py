@@ -419,3 +419,13 @@ async def test_probation_still_explains_itself(
     rows = {r["leave_type"]: r for r in payload["balances"]}  # type: ignore[union-attr]
     assert rows[LeaveType.PLANNED.value]["eligible"] is False
     assert "probation" in rows[LeaveType.PLANNED.value]["ineligible_reason"].lower()
+
+
+def test_month_end_joiners_are_confirmed_on_the_end_date_the_ui_shows() -> None:
+    """Aug 31 + 6 months is Feb 28 (`probation_end`); the band must flip that
+    same day, not a few days later when Feb 31 would have been."""
+    for hired in (date(2026, 8, 31), date(2026, 8, 30), date(2024, 2, 29)):
+        end = probation_end(hired, 6)
+        before = tenure_status(hired, end - timedelta(days=1), probation_months=6)
+        assert before is TenureStatus.PROBATION
+        assert tenure_status(hired, end, probation_months=6) is TenureStatus.CONFIRMED

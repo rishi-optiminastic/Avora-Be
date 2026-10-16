@@ -33,12 +33,19 @@ def _month_of(day: date) -> str:
 
 
 async def _worked(db: AsyncSession, employee_id: object, day: date) -> None:
-    """A 9:30-to-18:00 day, in UTC (the test org runs on UTC)."""
+    """A 9:30-to-18:00 office-time day (the policy timezone is Asia/Kolkata).
+
+    Written as office wall-clock times so the sheet's local rendering is
+    checked for real; bare UTC hours only read back unchanged on an IST laptop.
+    """
+    office = ZoneInfo("Asia/Kolkata")
+    start = datetime(day.year, day.month, day.day, 9, 30, tzinfo=office)
+    end = datetime(day.year, day.month, day.day, 18, 0, tzinfo=office)
     db.add(
         WorkSession(
             employee_id=employee_id,
-            clock_in_at=datetime(day.year, day.month, day.day, 9, 30, tzinfo=UTC),
-            clock_out_at=datetime(day.year, day.month, day.day, 18, 0, tzinfo=UTC),
+            clock_in_at=start.astimezone(UTC),
+            clock_out_at=end.astimezone(UTC),
             source="dashboard",
         )
     )

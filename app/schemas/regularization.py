@@ -34,3 +34,6 @@ class RegularizationRead(BaseModel):
     review_note: str | None
     created_at: datetime.datetime
     updated_at: datetime.datetime
+    # Whether the CALLER may approve/reject it now, from the same server rule the
+    # review endpoint enforces - so the UI never offers a button that 403s.
+    can_decide: bool = False

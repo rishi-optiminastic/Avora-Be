@@ -102,3 +102,6 @@ class ReimbursementRead(ORMModel):
     hr_note: str | None
     created_at: datetime
     updated_at: datetime
+    # Whether the CALLER can approve/reject it at its current step, from the same
+    # rules the decision endpoints enforce - the UI's review queues read this.
+    can_decide: bool = False

@@ -841,3 +841,98 @@ async def test_a_team_lead_without_the_manager_role_sees_their_reports_claims(
     )
     assert decided.status_code == 200, decided.text
     assert decided.json()["status"] == "manager_approved"
+
+
+async def _listed(client: AsyncClient, settings: Settings, actor: Employee) -> dict[str, dict]:
+    resp = await client.get("/api/v1/reimbursements", headers=auth_headers(settings, actor))
+    assert resp.status_code == 200, resp.text
+    return {r["id"]: r for r in resp.json()["items"]}
+
+
+async def test_a_senior_manager_sees_department_claims_but_can_decide_only_their_reports(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """The UI used to put every visible non-own submitted claim under "Pending
+    your review"; for a senior manager that was the whole department, and Approve
+    403'd on all but their direct reports'. `can_decide` is the server's answer."""
+    senior = Employee(
+        hr_external_id="hr-senior",
+        work_email="senior@corp.test",
+        full_name="Sam Senior",
+        role=Role.SENIOR_MANAGER,
+        department="Ops",
+        status=EmployeeStatus.ACTIVE,
+        is_active=True,
+    )
+    db.add(senior)
+    await db.flush()
+    direct = Employee(
+        hr_external_id="hr-direct",
+        work_email="direct@corp.test",
+        full_name="Dee Direct",
+        role=Role.EMPLOYEE,
+        department="Ops",
+        manager_id=senior.id,
+        status=EmployeeStatus.ACTIVE,
+        is_active=True,
+    )
+    seed.report.department = "Ops"
+    db.add(direct)
+    await db.commit()
+
+    theirs = await _submit(client, settings, direct)
+    dept = await _submit(client, settings, seed.report)  # reports to seed.manager
+
+    rows = await _listed(client, settings, senior)
+    assert rows[theirs["id"]]["can_decide"] is True
+    # Visible by department, but not theirs to decide.
+    assert rows[dept["id"]]["can_decide"] is False
+    denied = await client.post(
+        f"/api/v1/reimbursements/{dept['id']}/manager-decision",
+        json={"approve": True},
+        headers=auth_headers(settings, senior),
+    )
+    assert denied.status_code == 403
+
+
+async def test_can_decide_follows_the_step(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    hr = await _hr(db)
+    claim = await _submit(client, settings, seed.report)
+    cid = claim["id"]
+
+    assert (await _listed(client, settings, seed.manager))[cid]["can_decide"] is True
+    assert (await _listed(client, settings, seed.report))[cid]["can_decide"] is False
+
+    step1 = await client.post(
+        f"/api/v1/reimbursements/{cid}/manager-decision",
+        json={"approve": True},
+        headers=auth_headers(settings, seed.manager),
+    )
+    assert step1.status_code == 200, step1.text
+    # Step 2 is HR's: the manager no longer can, HR now can.
+    assert step1.json()["can_decide"] is False
+    assert (await _listed(client, settings, hr))[cid]["can_decide"] is True
+
+
+async def test_an_inactive_manager_falls_back_to_hr_and_payroll_managers(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    from app.models.notification import Notification, NotificationKind
+
+    hr = await _hr(db)
+    seed.outsider.payroll_manager = True
+    seed.manager.is_active = False
+    await db.commit()
+
+    await _submit(client, settings, seed.report)
+
+    rows = await db.execute(
+        select(Notification.recipient_id).where(
+            Notification.kind == NotificationKind.REIMBURSEMENT_SUBMITTED
+        )
+    )
+    told = set(rows.scalars().all())
+    assert {hr.id, seed.outsider.id} <= told
+    assert seed.manager.id not in told

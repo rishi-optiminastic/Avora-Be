@@ -7,8 +7,10 @@ payroll flags. Kept free of DB/ORM so it can be unit-tested directly.
 
 from __future__ import annotations
 
+import calendar
+import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 from app.schemas.monitoring import AttendanceStatus
@@ -70,6 +72,30 @@ class DayVerdict:
     regularized: bool
     early_logout: bool
     arrival_minute: int | None  # local minutes from midnight, for display
+
+
+# A report month is YYYY-MM with a real month (01-12). The year is bounded so a
+# typo like 0000-01 or 9999-12 is a clear 422 rather than a date overflow later.
+_REPORT_MONTH_RE = re.compile(r"(\d{4})-(0[1-9]|1[0-2])")
+_MIN_REPORT_YEAR = 2000
+_MAX_REPORT_YEAR = 2100
+BAD_REPORT_MONTH = "Month must be a real month in YYYY-MM form, for example 2026-09."
+
+
+def report_month_bounds(month: str) -> tuple[date, date]:
+    """The first and last calendar day of a YYYY-MM report month.
+
+    Raises ValueError (with a message safe to show the user) for anything that
+    is not a real month, such as 2026-13 or 2026-00.
+    """
+    match = _REPORT_MONTH_RE.fullmatch(month)
+    if match is None:
+        raise ValueError(BAD_REPORT_MONTH)
+    year, month_no = int(match.group(1)), int(match.group(2))
+    if not _MIN_REPORT_YEAR <= year <= _MAX_REPORT_YEAR:
+        raise ValueError(BAD_REPORT_MONTH)
+    last_day = calendar.monthrange(year, month_no)[1]
+    return date(year, month_no, 1), date(year, month_no, last_day)
 
 
 def local_minute(when: datetime, tz: str) -> int:

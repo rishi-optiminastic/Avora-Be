@@ -46,6 +46,11 @@ from app.repositories.envsync import EnvSyncRepository
 from app.repositories.eod_report import EodReportRepository
 from app.repositories.eod_settings import EodSettingsRepository
 from app.repositories.festival import FestivalRepository
+from app.repositories.form import (
+    FormAssignmentRepository,
+    FormRepository,
+    FormResponseRepository,
+)
 from app.repositories.holiday import HolidayRepository
 from app.repositories.idempotency import IdempotencyRepository
 from app.repositories.invitation import InvitationRepository
@@ -59,6 +64,7 @@ from app.repositories.notification import NotificationRepository
 from app.repositories.office_location import OfficeLocationRepository
 from app.repositories.onboarding_config import OnboardingConfigRepository
 from app.repositories.org_settings import OrgSettingsRepository
+from app.repositories.payout_verification import PayoutVerificationRepository
 from app.repositories.payroll_adjustment import PayrollAdjustmentRepository
 from app.repositories.payroll_run import PayrollRunRepository
 from app.repositories.payroll_settings import PayrollSettingsRepository
@@ -103,6 +109,8 @@ from app.services.employee_service import EmployeeService
 from app.services.envsync_service import EnvSyncService
 from app.services.eod_service import EodService
 from app.services.eod_settings_service import EodSettingsService
+from app.services.form_assignment_service import FormAssignmentService
+from app.services.form_service import FormService
 from app.services.holiday_service import HolidayService
 from app.services.hr_service import HRService
 from app.services.idempotency import IdempotencyService
@@ -110,6 +118,7 @@ from app.services.invitation_service import InvitationService
 from app.services.leave_allocation_service import LeaveAllocationService
 from app.services.leave_policy_service import LeavePolicyService
 from app.services.leave_service import LeaveService
+from app.services.llm_credit_service import LlmCreditService
 from app.services.llm_service import LlmService
 from app.services.meeting_service import MeetingService
 from app.services.monitoring_gate import MonitoringGateService
@@ -120,9 +129,12 @@ from app.services.office_location_service import OfficeLocationService
 from app.services.onboarding_service import OnboardingService
 from app.services.org_settings_service import OrgSettingsService
 from app.services.pat_service import PatService
+from app.services.payout_verification_service import PayoutVerificationService
 from app.services.payroll_adjustment_service import PayrollAdjustmentService
 from app.services.payroll_service import PayrollService
 from app.services.ping_service import PingService
+from app.services.probation_form_panel import ProbationFormPanelService
+from app.services.probation_forms import ProbationFormLink
 from app.services.probation_service import ProbationService
 from app.services.reconciliation_service import ReconciliationService
 from app.services.regularization_service import RegularizationService
@@ -324,6 +336,10 @@ def get_payroll_run_repo(db: DbDep) -> PayrollRunRepository:
 
 def get_payslip_repo(db: DbDep) -> PayslipRepository:
     return PayslipRepository(db)
+
+
+def get_payout_verification_repo(db: DbDep) -> PayoutVerificationRepository:
+    return PayoutVerificationRepository(db)
 
 
 def get_document_repo(db: DbDep) -> DocumentRepository:
@@ -671,6 +687,17 @@ def get_notification_service(
     return NotificationService(notifications)
 
 
+def get_llm_credit_service(
+    settings: SettingsDep,
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    notifications: Annotated[NotificationService, Depends(get_notification_service)],
+) -> LlmCreditService:
+    return LlmCreditService(settings, employees, notifications)
+
+
+LlmCreditServiceDep = Annotated[LlmCreditService, Depends(get_llm_credit_service)]
+
+
 def get_note_service(
     notes: Annotated[NoteRepository, Depends(get_note_repo)],
 ) -> NoteService:
@@ -910,6 +937,32 @@ def get_payroll_service(
     )
 
 
+def get_payout_verification_service(
+    payouts: Annotated[PayoutVerificationRepository, Depends(get_payout_verification_repo)],
+    payslips: Annotated[PayslipRepository, Depends(get_payslip_repo)],
+    reimbursements: Annotated[ReimbursementRepository, Depends(get_reimbursement_repo)],
+    compensation: Annotated[CompensationRepository, Depends(get_compensation_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    payroll_settings: Annotated[PayrollSettingsRepository, Depends(get_payroll_settings_repo)],
+    notifications: Annotated[NotificationService, Depends(get_notification_service)],
+    email: Annotated[EmailService, Depends(get_email_service)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    settings: SettingsDep,
+) -> PayoutVerificationService:
+    return PayoutVerificationService(
+        payouts,
+        payslips,
+        reimbursements,
+        compensation,
+        employees,
+        payroll_settings,
+        notifications,
+        email,
+        audit,
+        settings,
+    )
+
+
 def get_circle_client(settings: SettingsDep) -> CircleClient:
     return CircleClient(settings)
 
@@ -986,6 +1039,9 @@ AnnouncementServiceDep = Annotated[AnnouncementService, Depends(get_announcement
 ChangelogServiceDep = Annotated[ChangelogService, Depends(get_changelog_service)]
 CompensationServiceDep = Annotated[CompensationService, Depends(get_compensation_service)]
 PayrollServiceDep = Annotated[PayrollService, Depends(get_payroll_service)]
+PayoutVerificationServiceDep = Annotated[
+    PayoutVerificationService, Depends(get_payout_verification_service)
+]
 DocumentServiceDep = Annotated[DocumentService, Depends(get_document_service)]
 WorkspaceFileServiceDep = Annotated[WorkspaceFileService, Depends(get_workspace_file_service)]
 WorkSessionServiceDep = Annotated[WorkSessionService, Depends(get_work_session_service)]
@@ -1296,3 +1352,70 @@ async def verify_biometric_webhook(
     ):
         raise AuthenticationError()
     return body
+
+
+# --------------------------------------------------------------------------- #
+# Forms
+# --------------------------------------------------------------------------- #
+def get_form_repo(db: DbDep) -> FormRepository:
+    return FormRepository(db)
+
+
+def get_form_assignment_repo(db: DbDep) -> FormAssignmentRepository:
+    return FormAssignmentRepository(db)
+
+
+def get_form_response_repo(db: DbDep) -> FormResponseRepository:
+    return FormResponseRepository(db)
+
+
+def get_probation_form_link(
+    checklist: Annotated[ProbationChecklistRepository, Depends(get_probation_repo)],
+    leave_policy: Annotated[LeavePolicyRepository, Depends(get_leave_policy_repo)],
+    attendance_policy: Annotated[AttendancePolicyRepository, Depends(get_attendance_policy_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+) -> ProbationFormLink:
+    return ProbationFormLink(checklist, leave_policy, attendance_policy, employees)
+
+
+def get_form_service(
+    forms: Annotated[FormRepository, Depends(get_form_repo)],
+    responses: Annotated[FormResponseRepository, Depends(get_form_response_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    probation: Annotated[ProbationFormLink, Depends(get_probation_form_link)],
+) -> FormService:
+    return FormService(forms, responses, employees, audit, probation)
+
+
+def get_probation_form_panel_service(
+    forms: Annotated[FormRepository, Depends(get_form_repo)],
+    assignments: Annotated[FormAssignmentRepository, Depends(get_form_assignment_repo)],
+    responses: Annotated[FormResponseRepository, Depends(get_form_response_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> ProbationFormPanelService:
+    return ProbationFormPanelService(forms, assignments, responses, employees, audit)
+
+
+def get_form_assignment_service(
+    forms: Annotated[FormRepository, Depends(get_form_repo)],
+    assignments: Annotated[FormAssignmentRepository, Depends(get_form_assignment_repo)],
+    responses: Annotated[FormResponseRepository, Depends(get_form_response_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    notifications: NotificationServiceDep,
+    email: Annotated[EmailService, Depends(get_email_service)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    settings: SettingsDep,
+    probation: Annotated[ProbationFormLink, Depends(get_probation_form_link)],
+) -> FormAssignmentService:
+    return FormAssignmentService(
+        forms, assignments, responses, employees, notifications, email, audit, settings, probation
+    )
+
+
+FormServiceDep = Annotated[FormService, Depends(get_form_service)]
+FormAssignmentServiceDep = Annotated[FormAssignmentService, Depends(get_form_assignment_service)]
+ProbationFormPanelServiceDep = Annotated[
+    ProbationFormPanelService, Depends(get_probation_form_panel_service)
+]

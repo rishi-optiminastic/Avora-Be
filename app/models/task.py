@@ -17,6 +17,7 @@ from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.models.employee import Role
 
 if TYPE_CHECKING:
     from app.models.employee import Employee
@@ -44,6 +45,11 @@ class TaskCadence(StrEnum):
     DAILY = "daily"
     WEEKLY = "weekly"
     MONTHLY = "monthly"
+
+
+# Roles that count as "an admin" for the escalation badge - IT_ADMIN is a full
+# admin org-wide (`CurrentUser._normalize_role`, `EmployeeRepository.list_admins`).
+_ADMIN_ROLES = frozenset({Role.ADMIN, Role.IT_ADMIN})
 
 
 class Task(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -97,8 +103,10 @@ class Task(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     escalated: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     # How far automatic overdue escalation has already gone, so each tier fires
     # exactly once however many times the sweep runs:
-    #   0 = untouched · 1 = assignee warned · 2 = reporting manager pulled in
-    #   3 = an admin pulled in
+    #   0 = untouched · 1 = assignee warned · 2 = manager tier processed
+    #   3 = admin tier processed
+    # A tier is "processed" even when it found nobody to pull in, so the level
+    # alone never says who is on the task - see `escalated_to` for that.
     # A bool could not express this: the sweep is idempotent by comparing the
     # level it is about to apply against the one already recorded.
     escalation_level: Mapped[int] = mapped_column(default=0, index=True)
@@ -125,6 +133,25 @@ class Task(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     def collaborator_ids(self) -> list[uuid.UUID]:
         """The collaborator employee ids — surfaced on `TaskRead`."""
         return [collaborator.id for collaborator in self.collaborators]
+
+    @property
+    def escalated_to(self) -> str | None:
+        """Who an escalation actually brought onto the task: "admin", "manager",
+        or None. Surfaced on `TaskRead` for the board badge.
+
+        Derived from the collaborators, never from `escalation_level` alone: the
+        level advances even when a tier found nobody (no manager on file, no
+        admin left to pick), so "level 3" used to badge "Escalated - admin" on
+        tasks no admin was ever added to.
+        """
+        if not self.escalated:
+            return None
+        others = [c for c in self.collaborators if c.id != self.assignee_id]
+        if self.escalation_level >= 3 and any(c.role in _ADMIN_ROLES for c in others):
+            return "admin"
+        if self.escalation_level >= 2 and others:
+            return "manager"
+        return None
 
     @property
     def project_name(self) -> str | None:

@@ -6,6 +6,9 @@ internal details never cross the boundary (Security rule 5.6).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+from typing import Any
+
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -113,6 +116,20 @@ def _error_body(code: str, message: str) -> dict[str, dict[str, str]]:
     return {"error": {"code": code, "message": message}}
 
 
+_VALUE_ERROR_PREFIX = "Value error, "
+
+
+def _validation_message(errors: Sequence[Any]) -> str:
+    """The sentence a schema's own rule raised (e.g. "A form with rating
+    questions needs a label for each of 1 to 5."), so the person knows what to
+    fix. Those sentences are written by us and never contain submitted values;
+    anything else stays generic."""
+    for error in errors:
+        if error.get("type") == "value_error":
+            return str(error.get("msg", "")).removeprefix(_VALUE_ERROR_PREFIX)
+    return "Request validation failed."
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def _app_error(_: Request, exc: AppError) -> JSONResponse:
@@ -133,13 +150,14 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(RequestValidationError)
     async def _validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
         # Echo *which* fields failed, but never the submitted values (may be PII).
-        fields = [".".join(str(p) for p in e["loc"][1:]) for e in exc.errors()]
+        errors = exc.errors()
+        fields = [".".join(str(p) for p in e["loc"][1:]) for e in errors]
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             content={
                 "error": {
                     "code": "validation_error",
-                    "message": "Request validation failed.",
+                    "message": _validation_message(errors),
                     "fields": fields,
                 }
             },

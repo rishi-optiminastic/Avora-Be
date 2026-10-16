@@ -1,7 +1,9 @@
 """Resignation endpoints — employee submits/withdraws; HR/Admin decide.
 
-Reads are scoped to the caller (own + HR/Admin all). Authorization lives in the
-service; every read is scoped in the repository (Golden rule #3).
+Reads are scoped to the caller (own, a reporting manager's direct reports, HR/Admin
+all). Authorization lives in the service; every read is scoped in the repository
+(Golden rule #3), and `read_for` withholds the reason and decision note from a
+manager reading a report's resignation.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from app.schemas.resignation import (
     ResignationDecision,
     ResignationRead,
 )
+from app.services.resignation_service import read_for
 
 router = APIRouter(prefix="/resignations", tags=["resignations"])
 
@@ -31,7 +34,7 @@ async def list_resignations(
 ) -> Page[ResignationRead]:
     rows, total = await service.list_for_caller(caller, offset=(page - 1) * size, limit=size)
     return Page(
-        items=[ResignationRead.model_validate(r) for r in rows],
+        items=[read_for(caller, r) for r in rows],
         page=page,
         size=size,
         total=total,
@@ -44,7 +47,7 @@ async def submit_resignation(
     caller: CurrentUserDep,
     service: ResignationServiceDep,
 ) -> ResignationRead:
-    return ResignationRead.model_validate(await service.submit(caller, payload))
+    return read_for(caller, await service.submit(caller, payload))
 
 
 @router.get("/{resignation_id}", response_model=ResignationRead)
@@ -53,7 +56,7 @@ async def get_resignation(
     caller: CurrentUserDep,
     service: ResignationServiceDep,
 ) -> ResignationRead:
-    return ResignationRead.model_validate(await service.get_for_caller(caller, resignation_id))
+    return read_for(caller, await service.get_for_caller(caller, resignation_id))
 
 
 @router.post("/{resignation_id}/decision", response_model=ResignationRead)
@@ -64,7 +67,7 @@ async def decide_resignation(
     service: ResignationServiceDep,
 ) -> ResignationRead:
     """Accept or reject a submitted resignation (HR/Admin, never your own)."""
-    return ResignationRead.model_validate(await service.decide(caller, resignation_id, payload))
+    return read_for(caller, await service.decide(caller, resignation_id, payload))
 
 
 @router.post("/{resignation_id}/withdraw", response_model=ResignationRead)
@@ -73,4 +76,4 @@ async def withdraw_resignation(
     caller: CurrentUserDep,
     service: ResignationServiceDep,
 ) -> ResignationRead:
-    return ResignationRead.model_validate(await service.withdraw(caller, resignation_id))
+    return read_for(caller, await service.withdraw(caller, resignation_id))

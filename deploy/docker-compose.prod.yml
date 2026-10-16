@@ -9,7 +9,7 @@
 #   api (uvicorn)
 #   ├── db        (self-hosted Postgres + named volume)
 #   ├── migrate   (one-shot: alembic upgrade head, runs before api)
-#   └── workers   ocr · eod · payroll · auto-checkout
+#   └── workers   ocr · eod · payroll · auto-checkout · task-escalation
 #
 # Build then start:
 #   docker compose -f docker-compose.prod.yml --env-file .env.prod build
@@ -126,6 +126,12 @@ services:
   scheduler-circle-documents:
     <<: *app-image
     command: ["python", "-m", "worker.circle_documents_scheduler"]
+
+  # Sends the onboarding feedback forms on their day (joiner +15, buddy +30)
+  # and tells HR about joiners with no buddy. Idle until a form is published.
+  scheduler-forms:
+    <<: *app-image
+    command: ["python", "-m", "worker.forms_scheduler"]
 
   # Standalone slim image (Tesseract). Talks to Postgres + S3 directly; no app
   # code, so it only needs db (not migrate). Reads DATABASE_URL + AWS_* from env.

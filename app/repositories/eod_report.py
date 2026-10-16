@@ -89,7 +89,10 @@ class EodReportRepository:
         self, employee_ids: Sequence[uuid.UUID], start_date: str, end_date: str
     ) -> Sequence[EodReport]:
         """Every report for a set of employees within [start_date, end_date]
-        (inclusive). Feeds the team cumulative digest; newest first."""
+        (inclusive), whatever its status. Feeds both the team cumulative digest
+        and the per-department rollup, which needs the whole day: reports
+        approved early (already SENT), ones the scheduler just flushed, FAILED
+        runs and SKIPPED_ABSENT rows. Newest first."""
         if not employee_ids:
             return []
         rows = await self._session.execute(

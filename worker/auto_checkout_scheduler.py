@@ -22,7 +22,6 @@ import os
 from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from worker.heartbeat import beat
 
 from app.core.config import get_settings
 from app.db.session import SessionFactory, engine
@@ -34,6 +33,7 @@ from app.repositories.work_session import WorkSessionRepository
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.auto_checkout_service import AutoCheckoutService
 from app.services.email_service import EmailService
+from worker.heartbeat import beat
 
 log = logging.getLogger("auto_checkout_scheduler")
 

@@ -108,6 +108,15 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         index=True,
     )
 
+    # Onboarding buddy, copied from the buddy HR assigns in Circle. Like the
+    # reporting line, it is an edge between two people; unlike it, it grants no
+    # access to anything. It decides who gets the buddy feedback form.
+    buddy_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("employees.id", ondelete="SET NULL"),
+        default=None,
+        index=True,
+    )
+
     # Privilege — PMS-owned, NEVER set by HR.
     role: Mapped[Role] = mapped_column(default=Role.EMPLOYEE)
     # Capability grant (orthogonal to `role`): lets a non-HR person (e.g. a finance
@@ -134,6 +143,8 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     manager: Mapped[Employee | None] = relationship(
         remote_side="Employee.id",
+        # Named: `buddy_id` is a second link to `employees.id`.
+        foreign_keys="Employee.manager_id",
         backref="reports",
     )
 

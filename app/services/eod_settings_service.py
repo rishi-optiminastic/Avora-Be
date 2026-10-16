@@ -68,6 +68,20 @@ class EodSettingsService:
             send_minute=s.send_minute,
         )
 
+    async def digest_sent_on(self) -> str | None:
+        """Local YYYY-MM-DD the per-department digests last went out, or None if
+        never. Read live from the row rather than off `spec()` so a digest run
+        later in the same tick can't act on a stale value."""
+        return (await self.get_or_create()).digest_sent_on
+
+    async def mark_digest_sent(self, report_date: str) -> None:
+        """Stamp the day the per-department digests went out. Not audited and not
+        permission-checked: this is the scheduler's own bookkeeping, not a change
+        to the schedule anyone configured."""
+        row = await self.get_or_create()
+        row.digest_sent_on = report_date
+        await self._settings_repo.flush()
+
     async def update(self, caller: CurrentUser, payload: EodSettingsUpdate) -> EodSettings:
         if not _can_manage(caller):
             raise AuthorizationError()

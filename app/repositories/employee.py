@@ -9,14 +9,18 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from datetime import date
+from dataclasses import dataclass
+from datetime import date, datetime
 
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError
 from app.core.names import clean_display_name, is_placeholder_name
 from app.models.employee import Employee, EmployeeStatus, Gender, Role, TrackingMode
+from app.models.leave import Leave, LeaveStatus
+from app.models.resignation import Resignation, ResignationStatus
+from app.models.work_session import WorkSession
 from app.schemas.auth import CurrentUser
 
 # `hr_external_id` prefixes for rows created inside the PMS rather than by HR.
@@ -27,6 +31,25 @@ SYNTHETIC_EXTERNAL_ID_PREFIXES = ("manual:", "invite:")
 
 def has_synthetic_external_id(employee: Employee) -> bool:
     return employee.hr_external_id.startswith(SYNTHETIC_EXTERNAL_ID_PREFIXES)
+
+
+@dataclass(frozen=True, slots=True)
+class EmploymentPeriod:
+    """A span of local office days and the UTC instants that bound it."""
+
+    first_day: date
+    last_day: date
+    start_utc: datetime
+    end_utc: datetime  # exclusive
+
+
+@dataclass(frozen=True, slots=True)
+class LeaverEvidence:
+    """What the database knows about when an offboarded person last worked."""
+
+    last_working_day: date | None
+    last_session_at: datetime | None
+    last_leave_end_at: datetime | None
 
 
 class EmployeeRepository:
@@ -141,6 +164,10 @@ class EmployeeRepository:
         for key, value in fields.items():
             if key in self._ADMIN_PROFILE_FIELDS:
                 setattr(employee, key, value)
+        await self._session.flush()
+
+    async def set_buddy(self, employee: Employee, buddy_id: uuid.UUID | None) -> None:
+        employee.buddy_id = buddy_id
         await self._session.flush()
 
     async def set_active(self, employee: Employee, is_active: bool) -> None:
@@ -365,6 +392,104 @@ class EmployeeRepository:
         )
         return rows.scalars().all()
 
+    async def all_in_scope_for_period(
+        self, caller: CurrentUser, period: EmploymentPeriod, *, org_wide: bool = False
+    ) -> Sequence[Employee]:
+        """Everyone visible to the caller who was on the books at some point in
+        `period` - the roster for a historical register such as the monthly
+        attendance report.
+
+        Same scope clause as `all_in_scope` (Security rule 5.3); the difference
+        is who counts as "on the books". People hired after the period ended are
+        left out, and an inactive (offboarded) person is kept when there is
+        evidence they were still employed during it, because HR settles a
+        leaver's final month from this register.
+
+        There is no "deactivated on" column, so the evidence is: an accepted
+        resignation whose last working day falls on or after the period start,
+        or any work session or approved leave inside the period. A leaver with
+        none of those (offboarded without a resignation and never punched that
+        month) cannot be told apart from someone who left years ago, and is
+        omitted.
+
+        `org_wide` drops the caller's viewing scope. Only for payroll, which
+        authorizes the payroll grant itself before asking: a finance person
+        who holds the grant processes everyone's salary, whatever their own
+        role's viewing scope is.
+        """
+        start, end = period.start_utc, period.end_utc
+        worked = select(WorkSession.id).where(
+            WorkSession.employee_id == Employee.id,
+            WorkSession.clock_in_at >= start,
+            WorkSession.clock_in_at < end,
+        )
+        on_leave = select(Leave.id).where(
+            Leave.employee_id == Employee.id,
+            Leave.status == LeaveStatus.APPROVED,
+            Leave.start_date < end,
+            Leave.end_date >= start,
+        )
+        resigned = select(Resignation.id).where(
+            Resignation.employee_id == Employee.id,
+            Resignation.status == ResignationStatus.ACCEPTED,
+            Resignation.last_working_day >= period.first_day,
+        )
+        clauses = [] if org_wide else self._scope_clause(caller)
+        clauses.append(or_(Employee.hire_date.is_(None), Employee.hire_date <= period.last_day))
+        clauses.append(
+            or_(
+                Employee.is_active.is_(True),
+                exists(worked),
+                exists(on_leave),
+                exists(resigned),
+            )
+        )
+        rows = await self._session.execute(
+            select(Employee).where(*clauses).order_by(Employee.full_name)
+        )
+        return rows.scalars().all()
+
+    async def last_known_days(
+        self, employee_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, LeaverEvidence]:
+        """For offboarded people: the facts that bound their last day employed.
+
+        The latest accepted resignation's last working day when there is one,
+        plus the most recent work session and approved-leave end, so the caller
+        can stop counting a leaver absent after they left.
+        """
+        if not employee_ids:
+            return {}
+        resigned = await self._session.execute(
+            select(Resignation.employee_id, func.max(Resignation.last_working_day))
+            .where(
+                Resignation.employee_id.in_(employee_ids),
+                Resignation.status == ResignationStatus.ACCEPTED,
+            )
+            .group_by(Resignation.employee_id)
+        )
+        sessions = await self._session.execute(
+            select(WorkSession.employee_id, func.max(WorkSession.clock_in_at))
+            .where(WorkSession.employee_id.in_(employee_ids))
+            .group_by(WorkSession.employee_id)
+        )
+        leaves = await self._session.execute(
+            select(Leave.employee_id, func.max(Leave.end_date))
+            .where(Leave.employee_id.in_(employee_ids), Leave.status == LeaveStatus.APPROVED)
+            .group_by(Leave.employee_id)
+        )
+        last_working: dict[uuid.UUID, date] = dict(resigned.tuples().all())
+        last_session: dict[uuid.UUID, datetime] = dict(sessions.tuples().all())
+        last_leave: dict[uuid.UUID, datetime] = dict(leaves.tuples().all())
+        return {
+            emp_id: LeaverEvidence(
+                last_working_day=last_working.get(emp_id),
+                last_session_at=last_session.get(emp_id),
+                last_leave_end_at=last_leave.get(emp_id),
+            )
+            for emp_id in employee_ids
+        }
+
     async def has_reports(self, employee_id: uuid.UUID) -> bool:
         """Whether anyone active reports to this person.
 
@@ -381,10 +506,32 @@ class EmployeeRepository:
         return row.scalar_one_or_none() is not None
 
     async def list_by_role(self, role: Role) -> Sequence[Employee]:
-        """All active employees with a given role (e.g. admins, for EOD recipients)."""
+        """All active employees with a given STORED role.
+
+        For "the admins" use `list_admins()` instead: this matches the stored
+        column exactly, so `Role.ADMIN` here excludes IT admins.
+        """
         rows = await self._session.execute(
             select(Employee)
             .where(Employee.role == role, Employee.is_active.is_(True))
+            .order_by(Employee.full_name)
+        )
+        return rows.scalars().all()
+
+    async def list_admins(self) -> Sequence[Employee]:
+        """Everyone who is effectively an admin, for notifying and addressing.
+
+        Use this, NOT `list_by_role(Role.ADMIN)`, whenever you need "the admins".
+        `CurrentUser._normalize_role` collapses IT_ADMIN into ADMIN for
+        authorization, but it is deliberately only applied to the token-derived
+        caller - the stored `employees.role` column keeps `it_admin`. A query on
+        the stored column therefore misses every IT admin, so anything addressed
+        to "the admins" silently skipped them. The org decision is that an IT
+        admin IS an admin; this is where that holds for reads of the roster.
+        """
+        rows = await self._session.execute(
+            select(Employee)
+            .where(Employee.role.in_((Role.ADMIN, Role.IT_ADMIN)), Employee.is_active.is_(True))
             .order_by(Employee.full_name)
         )
         return rows.scalars().all()

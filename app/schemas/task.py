@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator
 
@@ -115,9 +116,13 @@ class TaskRead(ORMModel):
     attachments: list[Attachment]
     escalated: bool
     # How far automatic overdue escalation has gone: 0 none, 1 assignee warned,
-    # 2 reporting manager pulled in, 3 an admin pulled in. Lets the board show
-    # WHY a task is flagged rather than just that it is.
+    # 2 manager tier processed, 3 admin tier processed. A tier counts as
+    # processed even when it found nobody to add - `escalated_to` says who.
     escalation_level: int = 0
+    # Who an escalation actually brought onto the task ("manager" / "admin"),
+    # derived from the collaborators - the badge reads this, not the level,
+    # because a tier that found nobody still advances the level.
+    escalated_to: Literal["manager", "admin"] | None = None
     parent_task_id: uuid.UUID | None
     depends_on_id: uuid.UUID | None
     collaborator_ids: list[uuid.UUID] = Field(default_factory=list)

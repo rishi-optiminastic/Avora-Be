@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 #
-# Build + push the four Avora worker images to the VPS's local registry, so a
+# Build + push the Avora worker images to the VPS's local registry, so a
 # Coolify redeploy pulls fresh code into the background workers.
 #
 # WHY THIS SCRIPT EXISTS
 # ----------------------
-# On the Coolify box the four background workers - the eod / payroll /
-# auto-checkout schedulers plus the OCR worker - are Coolify applications with
+# On the Coolify box the background workers - the eod / payroll /
+# auto-checkout / task-escalation (and other) schedulers plus the OCR worker -
+# are Coolify applications with
 # build pack `dockerimage`. They do not track git at all: each one simply pulls
 # a tag out of the local registry. A Coolify deploy of `avora-api` rebuilds the
 # API from git, but leaves the workers on whatever was last pushed here. So
@@ -35,7 +36,8 @@
 # USAGE (on the VPS):
 #   bash deploy/build-workers.sh            # builds from a clean clone of main
 #   REGISTRY=localhost:5000 bash deploy/build-workers.sh
-# then redeploy the four worker resources in Coolify so they re-pull the tags.
+# then redeploy every worker resource in Coolify (task-escalation included) so
+# they re-pull the tags.
 
 set -euo pipefail
 
@@ -50,6 +52,7 @@ SCHEDULERS=(
   "autocheckout:worker.auto_checkout_scheduler"
   "task-escalation:worker.task_escalation_scheduler"
   "circle-documents:worker.circle_documents_scheduler"
+  "forms:worker.forms_scheduler"
 )
 
 BASE_IMAGE="avora-worker-base:build"
@@ -95,13 +98,15 @@ echo "    ${OCR_TARGET} -> $(docker inspect "$OCR_TARGET" --format '{{json .Conf
 
 echo
 echo "==> Pushing"
-for name in eod payroll autocheckout task-escalation circle-documents ocr; do
+for name in eod payroll autocheckout task-escalation circle-documents forms ocr; do
   target="${REGISTRY}/avora-worker-${name}:latest"
   docker push "$target" | tail -1
 done
 
 echo
-echo "Done. Now redeploy these resources in Coolify so they re-pull :latest —"
+echo "Done. Now redeploy these resources in Coolify so they re-pull :latest -"
 echo "avora-scheduler-eod, avora-scheduler-payroll, avora-scheduler-autocheckout,"
-echo "avora-worker-ocr. Deploy avora-api FIRST: it runs 'alembic upgrade heads',"
+echo "avora-scheduler-task-escalation (idle until TASK_ESCALATION_ENABLED=true),"
+echo "the other schedulers listed above, and avora-worker-ocr."
+echo "Deploy avora-api FIRST: it runs 'alembic upgrade heads',"
 echo "and workers on new code need the new schema already applied."

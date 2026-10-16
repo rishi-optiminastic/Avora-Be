@@ -35,6 +35,7 @@ from app.schemas.task import (
 from app.services.email_service import EmailError, EmailService
 from app.services.llm_service import LlmError, LlmService
 from app.services.notification_service import NotificationService
+from app.services.task_paste import parse_paste, resolve_named_tasks
 
 logger = get_logger("app.task")
 
@@ -53,6 +54,10 @@ _COMMENT_DEDUP_WINDOW = timedelta(seconds=30)
 # tasks one-by-one doesn't flood an inbox. The in-app notification still fires on
 # every task; only the email is throttled (paste-import sends no email at all).
 _ASSIGNMENT_EMAIL_WINDOW = timedelta(minutes=15)
+
+# Most overdue tasks `/tasks/mine/overdue` returns. The reminder names the
+# oldest and counts the rest; it never needs a whole backlog.
+MY_OVERDUE_LIMIT = 50
 
 
 def _moved_later(current: datetime | None, proposed: datetime | None) -> bool:
@@ -161,6 +166,11 @@ class TaskService:
             assignee_id=assignee_id,
         )
 
+    async def my_overdue(self, caller: CurrentUser, now: datetime) -> Sequence[Task]:
+        """The caller's own overdue open tasks (the once-a-day reminder), capped
+        so a long backlog never turns a background poll into a big payload."""
+        return await self._tasks.list_overdue_assigned_to(caller, now, limit=MY_OVERDUE_LIMIT)
+
     async def get_for_caller(self, caller: CurrentUser, task_id: uuid.UUID) -> Task:
         task = await self._tasks.get_in_scope(caller, task_id)
         if task is None:
@@ -256,21 +266,48 @@ class TaskService:
         return tasks
 
     async def parse_tasks(self, caller: CurrentUser, text: str) -> list[ParsedTask]:
-        """Turn a pasted blob into structured tasks via the LLM. Manager-only; the
-        model only ever sees the caller's VISIBLE roster, so it can't resolve a
-        name to anyone outside the caller's scope."""
+        """Turn a pasted blob into structured tasks. Manager-only.
+
+        The deterministic parser runs first and handles the format people
+        actually paste (a name header, then one task per line) with no model call
+        at all - so the feature keeps working when the LLM is unconfigured or the
+        provider is down, which is how it used to fail outright. The model is the
+        fallback for text that carried no structure to read.
+
+        Either way the assignee is resolved HERE, against the caller's visible
+        roster, so a name can never resolve to someone outside their scope and
+        the model is never trusted with an id.
+        """
         if not caller.is_manager:
             raise AuthorizationError()
-        if not self._llm.task_parse_ready:
-            raise ValidationError("Task parsing isn't configured.")
         roster = [(e.id, e.full_name) for e in await self._employees.all_in_scope(caller)]
+        direct = parse_paste(text, roster)
+        if direct.structured:
+            return direct.tasks
+
+        if not self._llm.task_parse_ready:
+            # Nothing structured to read and no model to fall back on. Return
+            # whatever the line split found rather than failing the paste - the
+            # user reviews and edits every row before anything is created.
+            if direct.tasks:
+                return direct.tasks
+            raise ValidationError(
+                "Couldn't find any tasks in that text. Put each task on its own "
+                "line, with a name and a dash above each group (e.g. 'Tushar -')."
+            )
         try:
-            return await self._llm.parse_tasks(text, roster)
+            named = await self._llm.parse_tasks(text)
         except LlmError as exc:
             logger.warning("task_parse_failed")
+            if direct.tasks:
+                return direct.tasks  # degraded but usable, and already reviewable
             raise ValidationError(
                 "Couldn't read those tasks. Try again or add them manually."
             ) from exc
+        resolved = resolve_named_tasks(named, roster)
+        # The model found nothing either - prefer the line split over an empty
+        # dialog, since the user can fix rows but cannot fix nothing.
+        return resolved or direct.tasks
 
     async def update(self, caller: CurrentUser, task_id: uuid.UUID, payload: TaskUpdate) -> Task:
         task = await self._tasks.get_in_scope(caller, task_id)

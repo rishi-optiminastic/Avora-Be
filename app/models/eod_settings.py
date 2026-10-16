@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import ForeignKey
+from sqlalchemy import ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -28,10 +28,19 @@ class EodSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # review/edit (default 16:30 local = 4:30 PM IST).
     draft_hour: Mapped[int] = mapped_column(default=16)
     draft_minute: Mapped[int] = mapped_column(default=30)
-    # SEND time — email the (edited-or-as-is) report to manager + admins
-    # (default 18:00 local = 6:00 PM IST). The draft→send gap is the review window.
+    # SEND time — email the (edited-or-as-is) report to the reporting manager,
+    # then mail admins the per-department rollup (default 18:00 local = 6:00 PM
+    # IST). The draft→send gap is the review window.
     send_hour: Mapped[int] = mapped_column(default=18)
     send_minute: Mapped[int] = mapped_column(default=0)
+
+    # Local YYYY-MM-DD of the last day the per-department digests went out to
+    # admins, or NULL if never. The scheduler ticks every 15 minutes and flushes
+    # any still-pending draft each time, so without a marker the admins would be
+    # mailed a fresh digest on every tick from the send time until midnight. The
+    # date lives here rather than being inferred from the reports because
+    # "already mailed" is a fact about the run, not about any one report.
+    digest_sent_on: Mapped[str | None] = mapped_column(String(10), default=None)
 
     updated_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("employees.id", ondelete="SET NULL"), default=None

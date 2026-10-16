@@ -191,25 +191,132 @@ async def test_requesting_notifies_the_reporting_manager(
     assert note.actor_id == seed.report.id
 
 
-async def test_a_request_from_someone_with_no_manager_notifies_nobody(
+async def _hr(db: AsyncSession):
+    from app.models.employee import Employee, EmployeeStatus, Role
+
+    hr = Employee(
+        hr_external_id="hr-person",
+        work_email="hr.person@corp.test",
+        full_name="Hana HR",
+        role=Role.HR,
+        status=EmployeeStatus.ACTIVE,
+        is_active=True,
+    )
+    db.add(hr)
+    await db.commit()
+    return hr
+
+
+async def _request_recipients(db: AsyncSession) -> set[object]:
+    rows = await db.execute(
+        select(Notification.recipient_id).where(
+            Notification.kind == NotificationKind.REGULARIZATION_REQUEST
+        )
+    )
+    return set(rows.scalars().all())
+
+
+async def test_a_request_from_someone_with_no_manager_falls_back_to_hr_and_admins(
     client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
 ) -> None:
-    """The outsider reports to nobody — that must be a quiet no-op, not a crash."""
+    """The outsider reports to nobody. Their request used to reach nobody and sit
+    stranded; it now goes to HR (who can decide it) and the admins (who can fix
+    the missing reporting line)."""
+    hr = await _hr(db)
+
     resp = await _request(client, settings, seed.outsider, "2026-06-10")
 
     assert resp.status_code == 201
-    rows = (
-        (
-            await db.execute(
-                select(Notification).where(
-                    Notification.kind == NotificationKind.REGULARIZATION_REQUEST
-                )
-            )
-        )
-        .scalars()
-        .all()
+    recipients = await _request_recipients(db)
+    assert hr.id in recipients
+    assert seed.admin.id in recipients
+    assert seed.outsider.id not in recipients
+
+
+async def test_an_inactive_manager_falls_back_to_hr_and_admins(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    hr = await _hr(db)
+    seed.manager.is_active = False
+    await db.commit()
+
+    resp = await _request(client, settings, seed.report, "2026-06-11")
+
+    assert resp.status_code == 201
+    recipients = await _request_recipients(db)
+    assert {hr.id, seed.admin.id} <= recipients
+    assert seed.manager.id not in recipients
+
+
+async def test_hr_decides_a_managerless_request_and_the_requester_is_told(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    hr = await _hr(db)
+    rid = (await _request(client, settings, seed.outsider, "2026-06-12")).json()["id"]
+
+    listed = await client.get(
+        "/api/v1/attendance/regularizations", headers=auth_headers(settings, hr)
     )
-    assert all(n.actor_id != seed.outsider.id for n in rows)
+    assert next(r for r in listed.json() if r["id"] == rid)["can_decide"] is True
+    resp = await client.post(
+        f"/api/v1/attendance/regularizations/{rid}/review",
+        json={"approve": False, "review_note": "Badge shows 11:40"},
+        headers=auth_headers(settings, hr),
+    )
+
+    assert resp.status_code == 200, resp.text
+    rows = await db.execute(
+        select(Notification).where(Notification.recipient_id == seed.outsider.id)
+    )
+    told = [n for n in rows.scalars().all() if n.title == "Attendance fix rejected"]
+    assert len(told) == 1
+    assert "Badge shows 11:40" in (told[0].body or "")
+
+
+async def test_the_manager_approving_notifies_the_requester(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    rid = (await _request(client, settings, seed.report, "2026-06-13")).json()["id"]
+    await client.post(
+        f"/api/v1/attendance/regularizations/{rid}/review",
+        json={"approve": True},
+        headers=auth_headers(settings, seed.manager),
+    )
+    rows = await db.execute(
+        select(Notification.title).where(Notification.recipient_id == seed.report.id)
+    )
+    assert "Attendance fix approved" in rows.scalars().all()
+
+
+async def test_an_admin_who_is_not_the_manager_cannot_decide(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """Aligned with leave: the direct manager or HR decides. An admin can see the
+    request (org-wide attendance) but is not offered, nor allowed, the decision."""
+    rid = (await _request(client, settings, seed.report, "2026-06-14")).json()["id"]
+    admin = auth_headers(settings, seed.admin)
+
+    listed = await client.get("/api/v1/attendance/regularizations", headers=admin)
+    row = next(r for r in listed.json() if r["id"] == rid)
+    assert row["can_decide"] is False
+    resp = await client.post(
+        f"/api/v1/attendance/regularizations/{rid}/review", json={"approve": True}, headers=admin
+    )
+    assert resp.status_code == 403
+
+
+async def test_the_requester_never_sees_can_decide_on_their_own(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    rid = (await _request(client, settings, seed.report, "2026-06-15")).json()["id"]
+    mine = await client.get(
+        "/api/v1/attendance/regularizations", headers=auth_headers(settings, seed.report)
+    )
+    assert next(r for r in mine.json() if r["id"] == rid)["can_decide"] is False
+    theirs = await client.get(
+        "/api/v1/attendance/regularizations", headers=auth_headers(settings, seed.manager)
+    )
+    assert next(r for r in theirs.json() if r["id"] == rid)["can_decide"] is True
 
 
 async def test_a_viewer_never_picks_up_reports_from_the_org_chart(

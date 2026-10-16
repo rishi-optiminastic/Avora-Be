@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.employee import Employee, Role
 from app.models.leave import Leave, LeaveStatus, LeaveType
 from app.models.leave_comment import LeaveComment
+from app.models.payslip import Payslip
 from app.schemas.auth import CurrentUser
 from app.schemas.leave import LeaveCreate
 
@@ -90,12 +91,51 @@ class LeaveRepository:
     async def get(self, leave_id: uuid.UUID) -> Leave | None:
         return await self._session.get(Leave, leave_id)
 
-    async def get_in_scope(self, caller: CurrentUser, leave_id: uuid.UUID) -> Leave | None:
+    async def get_for_update(self, leave_id: uuid.UUID) -> Leave | None:
+        """The leave row, locked (`SELECT ... FOR UPDATE`) until the transaction
+        ends and re-read from the database, so a concurrent decide / cancel /
+        withdraw waits and then sees the status this one committed."""
+        stmt = (
+            select(Leave)
+            .where(Leave.id == leave_id)
+            .with_for_update(of=Leave)
+            .execution_options(populate_existing=True)
+        )
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
+    async def get_in_scope(
+        self, caller: CurrentUser, leave_id: uuid.UUID, *, for_update: bool = False
+    ) -> Leave | None:
+        """The leave if the caller may see it. `for_update` locks the row and
+        re-reads it (see `get_for_update`) for a write that depends on its status."""
         clause = self._scope_clause(caller)
         stmt = select(Leave).where(Leave.id == leave_id)
         if clause is not None:
             stmt = stmt.where(clause)
+        if for_update:
+            stmt = stmt.with_for_update(of=Leave).execution_options(populate_existing=True)
         return (await self._session.execute(stmt)).scalar_one_or_none()
+
+    async def lock_employee(self, employee_id: uuid.UUID) -> None:
+        """Serialize leave writes for one employee: lock their employee row until
+        the transaction ends. Applying and approving both check the balance and
+        overlaps and then write; without this, two concurrent requests could each
+        pass the check against the same state and together overspend or
+        double-book. A no-op on SQLite (tests), which has no row locks."""
+        await self._session.execute(
+            select(Employee.id).where(Employee.id == employee_id).with_for_update(of=Employee)
+        )
+
+    async def released_payroll_months(self, months: Sequence[str]) -> list[str]:
+        """Which of these `YYYY-MM` months already have released payslips. A
+        released payslip is a frozen snapshot, so leave in that month can no
+        longer change pay (mirrors the reimbursement settlement guard)."""
+        if not months:
+            return []
+        rows = await self._session.execute(
+            select(Payslip.period_month).where(Payslip.period_month.in_(months)).distinct()
+        )
+        return sorted(rows.scalars().all())
 
     async def list_for_scope(
         self,
@@ -175,6 +215,33 @@ class LeaveRepository:
             )
         )
         return [(s, e, kind, status) for s, e, kind, status in rows.all()]
+
+    async def overlapping(
+        self,
+        employee_id: uuid.UUID,
+        start: datetime,
+        end: datetime,
+        statuses: Sequence[LeaveStatus],
+        *,
+        exclude_id: uuid.UUID | None = None,
+    ) -> Sequence[Leave]:
+        """One employee's leaves in `statuses` overlapping the inclusive range
+        [start, end] (bounds are stored at UTC midnight of the first/last day).
+
+        Used to refuse a request that double-books the employee's own time off.
+        The service authorizes before calling in, so this is not scope-clamped.
+        """
+        if not statuses:
+            return []
+        stmt = select(Leave).where(
+            Leave.employee_id == employee_id,
+            Leave.status.in_(statuses),
+            Leave.start_date <= end,
+            Leave.end_date >= start,
+        )
+        if exclude_id is not None:
+            stmt = stmt.where(Leave.id != exclude_id)
+        return (await self._session.execute(stmt)).scalars().all()
 
     async def count_on_leave(
         self, employee_ids: Sequence[uuid.UUID], start: datetime, end: datetime

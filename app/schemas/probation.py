@@ -5,9 +5,10 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.probation import StepOwner
+from app.core.probation_letter_pdf import MAX_EXPECTATION_CHARS, MAX_EXPECTATIONS
 from app.models.probation_checklist import ProbationStepStatus
 from app.models.probation_decision import ProbationOutcome
 
@@ -77,6 +78,12 @@ class ProbationDecisionRead(BaseModel):
     decided_by_name: str | None
     decided_at: datetime | None
     letter_sent_at: datetime | None
+    # EXTENDED only: the end the extension replaced, and what HR expects by the new one.
+    original_end_date: date | None
+    expectations: list[str]
+    # Whether the standard letter can be generated for this decision, so the UI
+    # only offers a download that will work.
+    letter_available: bool
 
 
 class ProbationDecisionCreate(BaseModel):
@@ -92,3 +99,22 @@ class ProbationDecisionCreate(BaseModel):
     job_title: str | None = Field(default=None, max_length=128)
     note: str | None = Field(default=None, max_length=1000)
     send_letter: bool = True
+    # EXTENDED only: the numbered expectations in the extension letter. Required
+    # (by the service) when Avora generates that letter rather than HR uploading one.
+    expectations: list[str] = Field(default_factory=list, max_length=MAX_EXPECTATIONS)
+
+    @field_validator("expectations")
+    @classmethod
+    def _clean_expectations(cls, value: list[str]) -> list[str]:
+        cleaned = [item.strip() for item in value]
+        if any(not item for item in cleaned):
+            raise ValueError("Each expectation needs some text.")
+        if any(len(item) > MAX_EXPECTATION_CHARS for item in cleaned):
+            raise ValueError(f"Keep each expectation to {MAX_EXPECTATION_CHARS} characters.")
+        return cleaned
+
+    @model_validator(mode="after")
+    def _expectations_only_for_extensions(self) -> ProbationDecisionCreate:
+        if self.expectations and self.outcome is not ProbationOutcome.EXTENDED:
+            raise ValueError("Expectations only apply to a probation extension.")
+        return self

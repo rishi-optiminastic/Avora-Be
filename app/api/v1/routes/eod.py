@@ -24,8 +24,14 @@ from app.core.deps import (
     SettingsDep,
 )
 from app.core.exceptions import NotFoundError
-from app.schemas.eod import EodCumulativeRead, EodReportRead, EodReportUpdate
+from app.schemas.eod import (
+    EodCumulativeRead,
+    EodDepartmentDigest,
+    EodReportRead,
+    EodReportUpdate,
+)
 from app.schemas.eod_settings import EodSettingsRead, EodSettingsUpdate
+from app.services.eod_service import MAX_DIGEST_DAYS
 
 router = APIRouter(prefix="/eod", tags=["eod"])
 
@@ -33,6 +39,7 @@ router = APIRouter(prefix="/eod", tags=["eod"])
 class EodTickResult(BaseModel):
     generated: int
     sent: int
+    department_digests: int
     purged_activity: int
     purged_screenshots: int
 
@@ -74,10 +81,37 @@ async def eod_cumulative(
     service: EodServiceDep,
     from_date: Annotated[str | None, Query(alias="from", pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
     to_date: Annotated[str | None, Query(alias="to", pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
+    days: Annotated[int | None, Query(ge=1, le=MAX_DIGEST_DAYS)] = None,
 ) -> EodCumulativeRead:
     """Rolled-up team digest over a window (defaults to today): coverage, summed
     effort, and every report with content. Scoped to the caller's team."""
-    return await service.cumulative_for_scope(caller, from_date, to_date, datetime.now(UTC))
+    return await service.cumulative_for_scope(
+        caller, from_date, to_date, datetime.now(UTC), days=days
+    )
+
+
+@router.get("/departments", response_model=list[EodDepartmentDigest])
+async def eod_departments(
+    caller: CurrentUserDep,
+    service: EodServiceDep,
+    from_date: Annotated[str | None, Query(alias="from", pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
+    to_date: Annotated[str | None, Query(alias="to", pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
+    days: Annotated[int | None, Query(ge=1, le=MAX_DIGEST_DAYS)] = None,
+) -> list[EodDepartmentDigest]:
+    """Per-department EOD rollups over a window (defaults to today): coverage,
+    summed effort and the blockers each department raised — no narratives.
+
+    `days` asks for the last N days ending today, resolved in the ORG timezone
+    (so the client never computes a date range on its own clock); an explicit
+    `from` wins over it.
+
+    Admin/HR get every department; a senior manager gets their own. Anyone else
+    gets 403: a lead's own team digest is `/eod/cumulative`. Which departments
+    come back is decided server-side from the caller's record, never from a
+    query param (§5.3)."""
+    return await service.department_digests(
+        caller, from_date, to_date, datetime.now(UTC), days=days
+    )
 
 
 @router.get("/settings", response_model=EodSettingsRead)
@@ -119,7 +153,7 @@ async def update_report(
 async def approve_report(
     report_id: uuid.UUID, caller: CurrentUserDep, service: EodServiceDep
 ) -> EodReportRead:
-    """Approve the draft and send it to the manager + admins (author only)."""
+    """Approve the draft and send it to the reporting manager (author only)."""
     return await service.approve(caller, report_id)
 
 
@@ -160,11 +194,16 @@ async def cron_tick(
     # Secrets (LLM key/model) gate here; the on/off switch + schedule are in the DB
     # and applied inside run_due (so toggling EOD never needs a redeploy).
     if not settings.eod_secrets_present:
-        return EodTickResult(generated=0, sent=0, purged_activity=0, purged_screenshots=0)
-    generated, sent, purged_activity, purged_shots = await service.run_due(datetime.now(UTC))
+        return EodTickResult(
+            generated=0, sent=0, department_digests=0, purged_activity=0, purged_screenshots=0
+        )
+    generated, sent, digests, purged_activity, purged_shots = await service.run_due(
+        datetime.now(UTC)
+    )
     return EodTickResult(
         generated=generated,
         sent=sent,
+        department_digests=digests,
         purged_activity=purged_activity,
         purged_screenshots=purged_shots,
     )

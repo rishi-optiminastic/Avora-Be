@@ -590,6 +590,38 @@ async def test_oversized_photo_is_skipped(
     assert not (await _reload(db, seed.report.id)).has_avatar
 
 
+# --- onboarding buddy: follows Circle, but is never cleared by a mismatch ------
+
+
+async def test_buddy_follows_circle(
+    scheduler: tuple[Any, FakeCircle], seed: _Seed, db: AsyncSession
+) -> None:
+    module, fake = scheduler
+    fake.profile["buddy_email"] = "Outsider@Corp.Test"
+    assert "buddy" in await module.fill_profile_for(seed.report.id)
+    assert (await _reload(db, seed.report.id)).buddy_id == seed.outsider.id
+    # HR reassigns the buddy in Circle: Avora follows.
+    fake.profile["buddy_email"] = "manager@corp.test"
+    assert "buddy" in await module.fill_profile_for(seed.report.id)
+    assert (await _reload(db, seed.report.id)).buddy_id == seed.manager.id
+    # Nothing changed: nothing reported.
+    assert "buddy" not in await module.fill_profile_for(seed.report.id)
+
+
+@pytest.mark.parametrize("named", [None, "", "nobody@corp.test", "report@corp.test"])
+async def test_buddy_is_kept_when_circle_names_nobody_usable(
+    scheduler: tuple[Any, FakeCircle], seed: _Seed, db: AsyncSession, named: str | None
+) -> None:
+    module, fake = scheduler
+    report = await _reload(db, seed.report.id)
+    report.buddy_id = seed.outsider.id
+    await db.commit()
+    # None/"" = no buddy in Circle; an unknown person; the joiner themselves.
+    fake.profile["buddy_email"] = named
+    assert "buddy" not in await module.fill_profile_for(seed.report.id)
+    assert (await _reload(db, seed.report.id)).buddy_id == seed.outsider.id
+
+
 def test_gender_and_birth_date_parsing() -> None:
     assert map_gender(" Female ") is Gender.FEMALE
     assert map_gender("M") is Gender.MALE

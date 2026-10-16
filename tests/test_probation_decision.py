@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
+from app.core.tenure import months_to_reach
 from app.models.employee import Employee
 from app.models.probation_decision import ProbationDecision, ProbationOutcome
 from app.services.email_templates import (
@@ -32,6 +33,11 @@ async def _probationer(db: AsyncSession, seed: _Seed) -> None:
     person.hire_date = datetime.now(UTC).date() - timedelta(days=30)
     person.job_title = "Software Engineer"
     await db.commit()
+
+
+def _past_the_end() -> str:
+    """An extension date safely after a `_probationer`'s default end date."""
+    return (datetime.now(UTC).date() + timedelta(days=270)).isoformat()
 
 
 async def _decide(
@@ -131,7 +137,7 @@ async def test_the_outcome_is_recorded_even_when_no_letter_is_sent(
         settings,
         seed.admin,
         seed.report,
-        {"outcome": "extended", "effective_date": "2027-01-27", "send_letter": "false"},
+        {"outcome": "extended", "effective_date": _past_the_end(), "send_letter": "false"},
     )
 
     assert res.status_code == 200
@@ -292,3 +298,89 @@ async def test_a_non_pdf_letter_is_rejected_on_its_CONTENT(
 
 def test_effective_date_is_a_real_date() -> None:
     assert date.fromisoformat("2026-10-27") == date(2026, 10, 27)
+
+
+# --- the outcome changes the probation window -------------------------------- #
+async def _checklist(client: AsyncClient, settings: Settings, caller: Employee, target: Employee):
+    res = await client.get(f"/api/v1/probation/{target.id}", headers=auth_headers(settings, caller))
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+async def test_an_extension_really_extends_probation(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """Recording "extended" must move the end date everything else reads, or the
+    person silently counts as confirmed on the original date anyway."""
+    await _probationer(db, seed)
+    before = await _checklist(client, settings, seed.admin, seed.report)
+    original_end = date.fromisoformat(before["probation_end_date"])
+    asked = original_end + timedelta(days=75)
+
+    res = await _decide(
+        client,
+        settings,
+        seed.admin,
+        seed.report,
+        {"outcome": "extended", "effective_date": asked.isoformat(), "send_letter": "false"},
+    )
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    new_end = date.fromisoformat(body["probation_end_date"])
+    # Snapped to the next monthly anniversary, and the letter date agrees.
+    assert asked <= new_end < asked + timedelta(days=32)
+    assert body["decision"]["effective_date"] == new_end.isoformat()
+    assert body["is_on_probation"] is True
+    await db.refresh(seed.report)
+    assert seed.report.probation_months is not None and seed.report.probation_months > 6
+
+
+async def test_an_extension_must_end_after_the_current_end(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    await _probationer(db, seed)
+    before = await _checklist(client, settings, seed.admin, seed.report)
+    original_end = date.fromisoformat(before["probation_end_date"])
+
+    res = await _decide(
+        client,
+        settings,
+        seed.admin,
+        seed.report,
+        {
+            "outcome": "extended",
+            "effective_date": (original_end - timedelta(days=40)).isoformat(),
+            "send_letter": "false",
+        },
+    )
+
+    assert res.status_code == 422, res.text
+    assert "after the current probation end date" in res.json()["error"]["message"]
+
+
+async def test_an_early_confirmation_ends_probation(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    await _probationer(db, seed)
+    today = datetime.now(UTC).date()
+
+    res = await _decide(
+        client,
+        settings,
+        seed.admin,
+        seed.report,
+        {"outcome": "confirmed", "effective_date": today.isoformat(), "send_letter": "false"},
+    )
+
+    assert res.status_code == 200, res.text
+    assert res.json()["is_on_probation"] is False
+    assert res.json()["decision"]["effective_date"] == today.isoformat()
+
+
+def test_months_to_reach_snaps_to_the_next_anniversary() -> None:
+    hired = date(2026, 8, 31)
+    assert months_to_reach(hired, hired) == 0
+    assert months_to_reach(hired, date(2027, 2, 28)) == 6  # clamped Feb anniversary
+    assert months_to_reach(hired, date(2027, 3, 1)) == 7
+    assert months_to_reach(hired, date(2026, 1, 1)) == 0

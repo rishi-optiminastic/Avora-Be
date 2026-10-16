@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Query, status
@@ -15,10 +16,12 @@ from app.core.deps import (
     LeavePolicyServiceDep,
     LeaveServiceDep,
 )
-from app.models.leave import LeaveStatus
+from app.models.leave import Leave, LeaveStatus
+from app.schemas.auth import CurrentUser
 from app.schemas.common import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Page
 from app.schemas.leave import (
     LeaveBalanceRead,
+    LeaveCancel,
     LeaveCommentCreate,
     LeaveCommentRead,
     LeaveCreate,
@@ -26,8 +29,29 @@ from app.schemas.leave import (
     LeaveRead,
 )
 from app.schemas.leave_policy import LeavePolicyRead, LeavePolicyUpdate
+from app.services.leave_service import LeaveService
 
 router = APIRouter(prefix="/leaves", tags=["leaves"])
+
+
+async def _reads(
+    service: LeaveService, caller: CurrentUser, rows: Sequence[tuple[Leave, int]]
+) -> list[LeaveRead]:
+    """Response models carrying the caller's `can_decide` / `can_cancel`, as the
+    service computes them (the same rules the write endpoints enforce)."""
+    perms = await service.permissions(caller, [leave for leave, _ in rows])
+    out: list[LeaveRead] = []
+    for leave, count in rows:
+        read = LeaveRead.model_validate(leave)
+        read.comment_count = count
+        read.can_decide = perms[leave.id].can_decide
+        read.can_cancel = perms[leave.id].can_cancel
+        out.append(read)
+    return out
+
+
+async def _read(service: LeaveService, caller: CurrentUser, leave: Leave) -> LeaveRead:
+    return (await _reads(service, caller, [(leave, 0)]))[0]
 
 
 @router.get("/balance", response_model=LeaveBalanceRead)
@@ -69,14 +93,8 @@ async def list_leaves(
     items, total = await service.list_for_caller(
         caller, offset=offset, limit=size, status=leave_status
     )
-
-    def _read(leave: object, count: int) -> LeaveRead:
-        read = LeaveRead.model_validate(leave)
-        read.comment_count = count
-        return read
-
     return Page[LeaveRead](
-        items=[_read(leave, count) for leave, count in items],
+        items=await _reads(service, caller, items),
         page=page,
         size=size,
         total=total,
@@ -92,7 +110,7 @@ async def apply_leave(
     idempotency_key: IdempotencyKeyHeader = None,
 ) -> Any:
     async def _op() -> LeaveRead:
-        return LeaveRead.model_validate(await service.apply(caller, payload))
+        return await _read(service, caller, await service.apply(caller, payload))
 
     return await idem.run(
         principal_id=caller.employee_id,
@@ -110,7 +128,7 @@ async def get_leave(
     caller: CurrentUserDep,
     service: LeaveServiceDep,
 ) -> LeaveRead:
-    return LeaveRead.model_validate(await service.get_for_caller(caller, leave_id))
+    return await _read(service, caller, await service.get_for_caller(caller, leave_id))
 
 
 @router.post("/{leave_id}/decision", response_model=LeaveRead)
@@ -120,8 +138,8 @@ async def decide_leave(
     caller: CurrentUserDep,
     service: LeaveServiceDep,
 ) -> LeaveRead:
-    """Approve or reject a submitted request (reviewer / HR / admin only)."""
-    return LeaveRead.model_validate(await service.decide(caller, leave_id, payload))
+    """Approve or reject a submitted request (the requester's manager or HR)."""
+    return await _read(service, caller, await service.decide(caller, leave_id, payload))
 
 
 @router.post("/{leave_id}/withdraw", response_model=LeaveRead)
@@ -131,7 +149,20 @@ async def withdraw_leave(
     service: LeaveServiceDep,
 ) -> LeaveRead:
     """The requester withdraws their own pending request."""
-    return LeaveRead.model_validate(await service.cancel(caller, leave_id))
+    return await _read(service, caller, await service.withdraw(caller, leave_id))
+
+
+@router.post("/{leave_id}/cancel", response_model=LeaveRead)
+async def cancel_leave(
+    leave_id: uuid.UUID,
+    caller: CurrentUserDep,
+    service: LeaveServiceDep,
+    payload: LeaveCancel | None = None,
+) -> LeaveRead:
+    """Cancel an approved leave: the employee before it starts, or HR / their
+    manager at any time. Out-of-scope callers get 404."""
+    leave = await service.cancel_approved(caller, leave_id, payload or LeaveCancel())
+    return await _read(service, caller, leave)
 
 
 @router.get("/{leave_id}/comments", response_model=list[LeaveCommentRead])

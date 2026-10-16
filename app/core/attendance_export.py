@@ -2,8 +2,9 @@
 
 Two sheets, because the month is two questions. **Summary** answers "how did
 each person's month go" - one row per employee, the day counts and total hours.
-**Daily** answers "what happened on the 14th" - one row per employee per day,
-with the check-in and check-out times.
+**Daily** answers "what happened on the 14th" - one row per employee for every
+calendar day of the month, with the check-in and check-out times. Days with no
+attendance say why (weekend, holiday, not yet joined, left, upcoming).
 
 Times are rendered in the org's timezone, already converted by the caller. A UTC
 timestamp in a sheet HR reads is a support ticket waiting to happen.

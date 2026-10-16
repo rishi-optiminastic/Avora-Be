@@ -25,7 +25,19 @@ from app.core.probation import (
     StepOwner,
     step_or_none,
 )
-from app.core.tenure import TenureStatus, probation_end, tenure_status
+from app.core.probation_letter_pdf import (
+    ConfirmationLetter,
+    ExtensionLetter,
+    render_confirmation_letter,
+    render_extension_letter,
+)
+from app.core.tenure import (
+    TenureStatus,
+    anniversaries_reached,
+    months_to_reach,
+    probation_end,
+    tenure_status,
+)
 from app.models.employee import Employee, Role
 from app.models.probation_checklist import ProbationChecklistItem, ProbationStepStatus
 from app.models.probation_decision import ProbationDecision, ProbationOutcome
@@ -47,6 +59,10 @@ from app.services.email_service import EmailAttachment, EmailError, EmailService
 from app.services.leave_policy_service import LeavePolicyService
 
 logger = get_logger("app.probation")
+
+# The longest probation an extension may run to, in months from the joining
+# date. Matches the per-person override's own limit on the employee schema.
+MAX_PROBATION_MONTHS = 24
 
 
 class ProbationService:
@@ -70,8 +86,12 @@ class ProbationService:
 
     async def _org_today(self) -> date:
         """Today in the org's timezone, never the server's clock."""
+        return await self._org_date(datetime.now(UTC))
+
+    async def _org_date(self, moment: datetime) -> date:
+        """The calendar date `moment` falls on in the org's timezone."""
         spec = await self._attendance_policy.spec()
-        return datetime.now(UTC).astimezone(ZoneInfo(spec.timezone)).date()
+        return moment.astimezone(ZoneInfo(spec.timezone)).date()
 
     async def _default_probation_months(self) -> int:
         policy = await self._leave_policy.get_or_create()
@@ -256,6 +276,9 @@ class ProbationService:
             decided_by_name=decider.full_name if decider else None,
             decided_at=decision.decided_at,
             letter_sent_at=decision.letter_sent_at,
+            original_end_date=decision.original_end_date,
+            expectations=list(decision.expectations or []),
+            letter_available=_letter_available(decision),
         )
 
     # ----------------------------------------------------------------- writes
@@ -311,14 +334,20 @@ class ProbationService:
         if not self._may_manage(caller):
             raise AuthorizationError("Only HR or an admin can record a probation outcome.")
 
+        _check_standard_letter_inputs(employee, payload, uploaded=letter is not None)
+
         decision = await self._decisions.get(employee.id)
+        original_end = await self._end_before_extension(employee, decision, payload)
+        effective_date = await self._apply_outcome(employee, decision, payload)
         if decision is None:
             decision = ProbationDecision(employee_id=employee.id, outcome=payload.outcome)
             self._decisions.add(decision)
         decision.outcome = payload.outcome
-        decision.effective_date = payload.effective_date
+        decision.effective_date = effective_date
         decision.job_title = payload.job_title or employee.job_title
         decision.note = payload.note
+        decision.original_end_date = original_end
+        decision.expectations = list(payload.expectations) or None
         decision.decided_by = caller.employee_id
         decision.decided_at = datetime.now(UTC)
         # A re-decision has not been communicated yet, whatever the last one was.
@@ -326,7 +355,9 @@ class ProbationService:
         await self._decisions.flush()
 
         if payload.send_letter:
-            await self._send_letter(employee, decision, letter)
+            # HR's own signed letter wins; otherwise the standard one from HR's template.
+            attachment = letter or await self._standard_letter(employee, decision)
+            await self._send_letter(employee, decision, attachment)
 
         await self._audit.append(
             actor=str(caller.employee_id),
@@ -334,6 +365,139 @@ class ProbationService:
             target=f"employee:{employee.id}:{payload.outcome.value}",
         )
         return await self._build(caller, employee)
+
+    async def _end_before_extension(
+        self,
+        employee: Employee,
+        previous: ProbationDecision | None,
+        payload: ProbationDecisionCreate,
+    ) -> date | None:
+        """The end date an extension replaces - what its letter calls "originally
+        set to end on". Read BEFORE `_apply_outcome` moves the window.
+
+        A re-extension keeps the date from before the first one: the probation was
+        originally due to end then, whatever intermediate end the last letter named.
+        """
+        if payload.outcome is not ProbationOutcome.EXTENDED or employee.hire_date is None:
+            return None
+        if (
+            previous is not None
+            and previous.outcome is ProbationOutcome.EXTENDED
+            and previous.original_end_date is not None
+        ):
+            return previous.original_end_date
+        return probation_end(employee.hire_date, await self._probation_months(employee))
+
+    async def _apply_outcome(
+        self,
+        employee: Employee,
+        previous: ProbationDecision | None,
+        payload: ProbationDecisionCreate,
+    ) -> date:
+        """Make the outcome real for everything that reads the probation window
+        (leave eligibility, the roster, tenure), and return the effective date
+        to record.
+
+        Probation is held as whole months from the joining date
+        (`Employee.probation_months`), so:
+          EXTENDED   - the end moves to the first monthly anniversary on or after
+                       the date HR picked, and that is the date the letter names,
+                       so nobody counts as confirmed before the letter says so.
+          CONFIRMED  - if the window still runs past the confirmation date (an
+                       early confirmation, or a reverted extension) it is cut
+                       back to the last anniversary on or before it.
+          TERMINATED - the window is left alone; offboarding ends employment.
+        """
+        if payload.outcome is ProbationOutcome.TERMINATED:
+            return payload.effective_date
+        hired_on = employee.hire_date
+        if hired_on is None:
+            raise ValidationError("Set a joining date before recording a probation outcome.")
+        current_end = probation_end(hired_on, await self._probation_months(employee))
+
+        if payload.outcome is ProbationOutcome.CONFIRMED:
+            if current_end > payload.effective_date:
+                employee.probation_months = max(
+                    1, anniversaries_reached(hired_on, payload.effective_date)
+                )
+            return payload.effective_date
+
+        months = months_to_reach(hired_on, payload.effective_date)
+        new_end = probation_end(hired_on, months)
+        if new_end <= await self._org_today():
+            raise ValidationError("The new probation end date must be in the future.")
+        re_extending = previous is not None and previous.outcome is ProbationOutcome.EXTENDED
+        if not re_extending and new_end <= current_end:
+            raise ValidationError(
+                f"An extension must end after the current probation end date "
+                f"({current_end:%d %b %Y})."
+            )
+        if months > MAX_PROBATION_MONTHS:
+            raise ValidationError(
+                f"Probation can run at most {MAX_PROBATION_MONTHS} months from the joining date."
+            )
+        employee.probation_months = months
+        return new_end
+
+    # ---------------------------------------------------------------- letters
+
+    async def letter_pdf(self, caller: CurrentUser, employee_id: uuid.UUID) -> tuple[bytes, str]:
+        """The standard letter for the recorded decision, re-rendered from the row.
+
+        HR/Admin only, like issuing it. 404 when there is nothing to render: no
+        decision, a termination (HR has no template for it), or an extension
+        recorded without expectations.
+        """
+        employee = await self._visible_employee(caller, employee_id)
+        if not self._may_manage(caller):
+            raise AuthorizationError("Only HR or an admin can download probation letters.")
+        decision = await self._decisions.get(employee.id)
+        attachment = (
+            await self._standard_letter(employee, decision) if decision is not None else None
+        )
+        if attachment is None:
+            raise NotFoundError("There is no standard letter for this probation outcome.")
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="probation.letter.download",
+            target=f"employee:{employee.id}:{attachment.filename}",
+        )
+        return attachment.content, attachment.filename
+
+    async def _standard_letter(
+        self, employee: Employee, decision: ProbationDecision
+    ) -> EmailAttachment | None:
+        """HR's template filled from the decision, or None when it cannot be."""
+        if not _letter_available(decision) or decision.job_title is None:
+            return None
+        issued_on = await self._org_date(decision.decided_at or datetime.now(UTC))
+        if decision.outcome is ProbationOutcome.CONFIRMED:
+            pdf = render_confirmation_letter(
+                ConfirmationLetter(
+                    issued_on=issued_on,
+                    employee_name=employee.full_name,
+                    job_title=decision.job_title,
+                    effective_date=decision.effective_date,
+                )
+            )
+            kind = "confirmation"
+        elif decision.original_end_date is not None and decision.expectations:
+            pdf = render_extension_letter(
+                ExtensionLetter(
+                    issued_on=issued_on,
+                    employee_name=employee.full_name,
+                    job_title=decision.job_title,
+                    original_end_date=decision.original_end_date,
+                    new_end_date=decision.effective_date,
+                    expectations=tuple(decision.expectations),
+                )
+            )
+            kind = "extension"
+        else:
+            return None
+        return EmailAttachment(
+            filename=f"probation-{kind}-letter.pdf", content=pdf, content_type="application/pdf"
+        )
 
     async def _send_letter(
         self,
@@ -370,3 +534,32 @@ class ProbationService:
             return
         decision.letter_sent_at = datetime.now(UTC)
         await self._decisions.flush()
+
+
+def _letter_available(decision: ProbationDecision) -> bool:
+    """Whether HR's template can be filled for this decision."""
+    if decision.job_title is None:
+        return False
+    if decision.outcome is ProbationOutcome.CONFIRMED:
+        return True
+    if decision.outcome is ProbationOutcome.EXTENDED:
+        return bool(decision.expectations) and decision.original_end_date is not None
+    return False  # TERMINATED: HR supplied no template, and we do not invent one
+
+
+def _check_standard_letter_inputs(
+    employee: Employee, payload: ProbationDecisionCreate, *, uploaded: bool
+) -> None:
+    """Refuse up front, before anything is recorded, a decision whose standard
+    letter is due but cannot be filled in."""
+    generating = (
+        payload.send_letter and not uploaded and payload.outcome is not ProbationOutcome.TERMINATED
+    )
+    if not generating:
+        return
+    if not (payload.job_title or employee.job_title):
+        raise ValidationError("Add the job title the letter should name.")
+    if payload.outcome is ProbationOutcome.EXTENDED and not payload.expectations:
+        raise ValidationError(
+            "List at least one expectation for the extension letter, or upload a signed letter."
+        )

@@ -10,7 +10,9 @@ import uuid
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, File, Form, Path, UploadFile
+from fastapi import APIRouter, File, Form, Path, Response, UploadFile
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError as PydanticValidationError
 
 from app.core.deps import CurrentUserDep, ProbationServiceDep
 from app.core.exceptions import ValidationError
@@ -69,6 +71,7 @@ async def record_probation_decision(
     job_title: Annotated[str | None, Form()] = None,
     note: Annotated[str | None, Form()] = None,
     send_letter: Annotated[bool, Form()] = True,
+    expectations: Annotated[list[str] | None, Form()] = None,
     letter: Annotated[UploadFile | None, File()] = None,
 ) -> ProbationChecklistRead:
     """Record confirmation, extension or termination, and email the letter.
@@ -76,7 +79,8 @@ async def record_probation_decision(
     Multipart because the signed letter rides along: the email only claims an
     attachment when one is genuinely attached. `effective_date` is the
     confirmation date, the new probation end date, or the last working day,
-    depending on `outcome`.
+    depending on `outcome`. Without an uploaded letter, Avora generates HR's
+    standard one; an extension then needs 1-5 `expectations` (repeat the field).
     """
     attachment: EmailAttachment | None = None
     if letter is not None:
@@ -91,11 +95,33 @@ async def record_probation_decision(
             content=data,
             content_type=_LETTER_TYPE,
         )
-    payload = ProbationDecisionCreate(
-        outcome=outcome,
-        effective_date=effective_date,
-        job_title=job_title,
-        note=note,
-        send_letter=send_letter,
-    )
+    try:
+        payload = ProbationDecisionCreate(
+            outcome=outcome,
+            effective_date=effective_date,
+            job_title=job_title,
+            note=note,
+            send_letter=send_letter,
+            expectations=expectations or [],
+        )
+    except PydanticValidationError as exc:
+        # Form fields are validated here rather than by FastAPI, so hand the
+        # errors to the same 422 handler a JSON body would reach.
+        raise RequestValidationError(
+            [{**err, "loc": ("body", *err["loc"])} for err in exc.errors(include_url=False)]
+        ) from exc
     return await service.decide(caller, employee_id, payload, attachment)
+
+
+@router.get("/{employee_id}/decision/letter")
+async def download_probation_letter(
+    employee_id: uuid.UUID, caller: CurrentUserDep, service: ProbationServiceDep
+) -> Response:
+    """The standard confirmation or extension letter for the recorded decision.
+    HR/Admin only; 404 when there is none (no decision, or a termination)."""
+    pdf, filename = await service.letter_pdf(caller, employee_id)
+    return Response(
+        content=pdf,
+        media_type=_LETTER_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

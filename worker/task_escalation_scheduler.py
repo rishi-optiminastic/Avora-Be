@@ -12,6 +12,10 @@ Each tier fires exactly once per task (`tasks.escalation_level`), so the sweep i
 idempotent - running it hourly, or re-running after a crash, never re-notifies or
 re-adds anyone. Completing a task stops it escalating immediately.
 
+Safe over a backlog: a task found past several tiers at once (first switch-on, or
+after downtime) gets its highest tier applied once with ONE pop-up, and each
+person gets at most a few pop-ups per sweep plus one "N more" summary.
+
 Deploy alongside the API (ONE instance - two would race on the same tasks). Env:
   DATABASE_URL                          Postgres URL (same as the API).
   TASK_ESCALATION_ENABLED               "true" to turn it on (default off).
@@ -71,10 +75,12 @@ async def _tick() -> None:
             await session.commit()
             if outcome.total:
                 log.info(
-                    "escalated: %d warned, %d manager(s) added, %d admin(s) added",
+                    "escalated: %d warned, %d manager(s) added, %d admin(s) added, "
+                    "%d summary pop-up(s)",
                     outcome.assignee_warned,
                     outcome.managers_added,
                     outcome.admins_added,
+                    outcome.summaries_sent,
                 )
         except Exception:
             await session.rollback()

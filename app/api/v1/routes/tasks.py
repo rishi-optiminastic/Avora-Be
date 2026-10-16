@@ -8,6 +8,7 @@ and we return the schema, never the ORM object (Golden rule #5).
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Header, Query, status
@@ -134,6 +135,15 @@ async def parse_tasks(
         request=payload,
         operation=_op,
     )
+
+
+@router.get("/mine/overdue", response_model=list[TaskRead])
+async def my_overdue_tasks(caller: CurrentUserDep, service: TaskServiceDep) -> list[TaskRead]:
+    """The caller's OWN open tasks past their due date, oldest due first and
+    capped - the overdue reminder's feed. Never anyone else's tasks, whatever
+    the caller's role (unlike `/dashboard/delayed-tasks`, the whole scope)."""
+    rows = await service.my_overdue(caller, datetime.now(UTC))
+    return [TaskRead.model_validate(t) for t in rows]
 
 
 @router.get("/{task_id}", response_model=TaskRead)

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.tenure import TenureStatus
 from app.models.leave import HalfDayPeriod, LeaveStatus, LeaveType
@@ -20,6 +20,15 @@ class LeaveCreate(BaseModel):
     end_date: datetime
     half_day_period: HalfDayPeriod | None = None
     reason: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("start_date", "end_date")
+    @classmethod
+    def _as_utc_day(cls, value: datetime) -> datetime:
+        """Leave days are stored as UTC midnight. A date sent without a zone
+        ("2026-11-06") would otherwise be stored at the DATABASE's local
+        midnight, and day-based checks (overlap, balance) would miss it by the
+        offset. The app sends "...T00:00:00Z"; this makes every caller agree."""
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value
 
     @model_validator(mode="after")
     def _check_range(self) -> LeaveCreate:
@@ -42,6 +51,13 @@ class LeaveDecision(BaseModel):
     note: str | None = Field(default=None, max_length=1000)
 
 
+class LeaveCancel(BaseModel):
+    """Cancel an APPROVED leave (the employee before it starts; HR or their
+    manager at any time). The note is passed on to whoever is notified."""
+
+    note: str | None = Field(default=None, max_length=1000)
+
+
 class LeaveRead(ORMModel):
     id: uuid.UUID
     employee_id: uuid.UUID
@@ -58,6 +74,11 @@ class LeaveRead(ORMModel):
     updated_at: datetime
     # Populated on list responses so the UI can badge the thread count.
     comment_count: int = 0
+    # What the CALLER may do with this request, computed by the same server rules
+    # that enforce the action (`app/services/leave_rules.py`), so the UI renders
+    # exactly the buttons the API will honour instead of re-deriving the policy.
+    can_decide: bool = False
+    can_cancel: bool = False
 
 
 class TierQuotaRead(BaseModel):

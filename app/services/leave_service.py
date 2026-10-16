@@ -1,16 +1,22 @@
 """Leave business rules.
 
-Reads are scoped in the repository so the requester's manager, HR and admin can
-all *see* a request. But **only an admin may approve/reject** it (never the
-requester) — approval is a segregation-of-duties action reserved to admins; a
-manager or HR can view a request but not decide it. Only the requester may
-withdraw their own pending request. No FastAPI objects here (Layering §4).
+Reads are scoped in the repository so the requester, their manager and HR can
+*see* a request. Deciding it belongs to the requester's direct manager or HR
+(never the requester, and not admin as such - see `leave_rules.may_decide`).
+Only the requester may withdraw their own pending request; an APPROVED leave can
+be cancelled by the employee before it starts, or by HR / their manager at any
+time (`leave_rules.may_cancel_approved`).
+
+Applying (and approving) also enforces the leave rules the UI warns about:
+tenure eligibility, the available balance and no double-booked days.
+No FastAPI objects here (Layering §4).
 """
 
 from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -23,7 +29,7 @@ from app.core.exceptions import (
 from app.core.logging import get_logger
 from app.core.payroll import working_days_between
 from app.core.tenure import TenureStatus, accrued_units, probation_end, tenure_status
-from app.models.employee import Gender, Role
+from app.models.employee import Employee, Gender, Role
 from app.models.leave import HalfDayPeriod, Leave, LeaveStatus, LeaveType
 from app.models.leave_comment import LeaveComment
 from app.models.notification import NotificationKind, NotificationLevel
@@ -37,6 +43,7 @@ from app.repositories.leave_tier_quota import LeaveTierQuotaRepository
 from app.schemas.auth import CurrentUser
 from app.schemas.leave import (
     LeaveBalanceRead,
+    LeaveCancel,
     LeaveCommentCreate,
     LeaveCreate,
     LeaveDecision,
@@ -45,12 +52,22 @@ from app.schemas.leave import (
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.email_service import EmailError, EmailService
 from app.services.leave_policy_service import LeavePolicyService
+from app.services.leave_rules import (
+    can_decide_now,
+    clashes,
+    days_in_window,
+    leave_weight,
+    may_cancel_approved,
+    may_decide,
+    utc_date,
+)
 from app.services.notification_service import NotificationService
 
-# A half-day leave consumes half a working day; full-day types consume one.
-_HALF_DAY_WEIGHT = 0.5
 # Half-day time off draws from the planned-leave quota (it is planned time off).
 _PLANNED_TYPES = (LeaveType.PLANNED, LeaveType.HALF_DAY)
+# Paid half days a person on probation may book per calendar month. Planned
+# leave is locked then, so this is the only limit on them.
+PROBATION_HALF_DAYS_PER_MONTH = 2
 
 # Types that must be applied in advance (planned time off). Event-based leave
 # (sick, bereavement, birthday, maternity, paternity, marriage) and unpaid can be
@@ -74,6 +91,45 @@ _TRACKED_LEAVE: tuple[tuple[LeaveType, str, str, tuple[LeaveType, ...]], ...] = 
 )
 
 _LEAVES_LINK = "/dashboard/time/leaves"
+
+
+def _quota_bucket(leave_type: LeaveType) -> LeaveType | None:
+    """The tracked quota a leave type spends from (half-day -> planned), or None
+    for an uncapped type such as unpaid leave."""
+    for bucket, _policy_attr, _alloc_attr, members in _TRACKED_LEAVE:
+        if leave_type in members:
+            return bucket
+    return None
+
+
+@dataclass(frozen=True)
+class _Request:
+    """The part of a leave the apply/approve rules look at, from either a new
+    request or a stored one."""
+
+    leave_type: LeaveType
+    start: datetime
+    end: datetime
+    half_day: HalfDayPeriod | None
+
+    @classmethod
+    def from_create(cls, payload: LeaveCreate) -> _Request:
+        return cls(
+            payload.leave_type, payload.start_date, payload.end_date, payload.half_day_period
+        )
+
+    @classmethod
+    def from_leave(cls, leave: Leave) -> _Request:
+        return cls(leave.leave_type, leave.start_date, leave.end_date, leave.half_day_period)
+
+
+@dataclass(frozen=True)
+class LeavePermissions:
+    """What one caller may do with one leave right now."""
+
+    can_decide: bool
+    can_cancel: bool
+
 
 logger = get_logger("app.leave")
 
@@ -129,7 +185,7 @@ class LeaveService:
         'Today' is the org's policy-timezone date, never the server's clock."""
         backdate = (await self._policy.get_or_create()).max_backdate_days
         earliest = await self._org_today() - timedelta(days=max(0, backdate))
-        if _utc_date(payload.start_date) < earliest:
+        if utc_date(payload.start_date) < earliest:
             if backdate <= 0:
                 raise ValidationError("You can't apply for leave for a past date.")
             raise ValidationError(
@@ -153,7 +209,7 @@ class LeaveService:
         required = (await self._policy.get_or_create()).planned_min_notice_days
         if required <= 0:
             return
-        days_ahead = (_utc_date(payload.start_date) - await self._org_today()).days
+        days_ahead = (utc_date(payload.start_date) - await self._org_today()).days
         if days_ahead < 0:
             return
         if days_ahead < required:
@@ -163,16 +219,15 @@ class LeaveService:
                 "Use sick leave if you need time off sooner."
             )
 
-    async def _enforce_eligibility(self, caller: CurrentUser, payload: LeaveCreate) -> None:
+    async def _enforce_eligibility(
+        self, employee: Employee, leave_type: LeaveType, start: datetime
+    ) -> None:
         """Gender/DOB-gated leave: maternity (female only), paternity (male only),
         and birthday (needs a date of birth on file, and must fall in the person's
-        birth month). Other types are open to everyone."""
-        leave_type = payload.leave_type
+        birth month). Other types are open to everyone. Tenure eligibility is
+        checked with the balance (`_enforce_balance`), which already knows it."""
         if leave_type not in (LeaveType.MATERNITY, LeaveType.PATERNITY, LeaveType.BIRTHDAY):
             return
-        employee = await self._employees.get(caller.employee_id)
-        if employee is None:
-            raise NotFoundError()
         if leave_type is LeaveType.MATERNITY and employee.gender is not Gender.FEMALE:
             raise ValidationError("Maternity leave is available to female employees.")
         if leave_type is LeaveType.PATERNITY and employee.gender is not Gender.MALE:
@@ -182,13 +237,203 @@ class LeaveService:
                 raise ValidationError(
                     "Add your date of birth to your profile to take birthday leave."
                 )
-            if _utc_date(payload.start_date).month != employee.date_of_birth.month:
+            if utc_date(start).month != employee.date_of_birth.month:
                 raise ValidationError("Birthday leave must fall in your birth month.")
 
+    async def _enforce_balance(
+        self, employee: Employee, request: _Request, *, at_approval: bool
+    ) -> None:
+        """Refuse a type the employee's tenure band has not granted yet, or a
+        request bigger than what is left of its quota.
+
+        Unpaid leave is uncapped and exempt. A request is split into the leave
+        years it touches and each part is checked against THAT year's balance
+        (`_compute_balance(on=...)`): leave after 31 March spends next year's
+        quota, never nothing. Without the split a request entirely in the next
+        leave year counted 0 days and was never capped.
+        """
+        bucket = _quota_bucket(request.leave_type)
+        if bucket is None:
+            return
+        first, last = utc_date(request.start), utc_date(request.end)
+        current = _leave_year_window(await self._org_today())
+        for window in _leave_year_windows(first, last):
+            await self._enforce_year_balance(
+                employee,
+                request,
+                bucket,
+                window=window,
+                at_approval=at_approval,
+                label_year=window != current,
+            )
+
+    async def _enforce_year_balance(
+        self,
+        employee: Employee,
+        request: _Request,
+        bucket: LeaveType,
+        *,
+        window: tuple[date, date],
+        at_approval: bool,
+        label_year: bool,
+    ) -> None:
+        """The balance rule for the part of a request inside one leave year.
+
+        Reuses the exact numbers the balance panel shows (`_compute_balance`), so
+        the UI warning and this refusal can never disagree. Days are working days
+        (half days count 0.5).
+
+        On apply the part must fit in `remaining` (other pending requests are
+        already reserved). On approval it must fit in what is left after APPROVED
+        leave only - the request itself is one of the pending ones, and the other
+        pending requests may still be rejected.
+        """
+        balance = await self._compute_balance(employee, on=window[0])
+        row = next((b for b in balance.balances if b.leave_type is bucket), None)
+        if row is None:
+            return
+        label = _leave_type_label(bucket, None)
+        year = f" for the {_leave_year_label(window)} leave year" if label_year else ""
+        if not row.eligible:
+            # Half-day is deliberately never withheld for tenure: it only spends
+            # from the planned bucket and the leave policy does not lock it during
+            # probation (see fe features/leaves/eligibility.ts). With planned
+            # locked there is no quota to measure it against, so it is capped
+            # per calendar month instead of being unlimited.
+            if request.leave_type is not bucket:
+                await self._enforce_probation_half_day_cap(
+                    employee, request, at_approval=at_approval
+                )
+                return
+            raise ValidationError(
+                row.ineligible_reason or f"You are not eligible for {label} leave yet."
+            )
+        holidays = await self._holidays.dates_in_range(*window)
+        requested = days_in_window(
+            leave_type=request.leave_type,
+            span=(request.start, request.end),
+            window=window,
+            holidays=holidays,
+            working_days_per_week=(await self._attendance_policy.spec()).working_days_per_week,
+        )
+        available = row.allocated - row.used if at_approval else row.remaining
+        if requested > available:
+            raise ValidationError(
+                f"Not enough {label} leave{year}: {requested:g} day"
+                f"{'s' if requested != 1 else ''} requested, {max(available, 0.0):g} available."
+            )
+
+    async def _enforce_probation_half_day_cap(
+        self, employee: Employee, request: _Request, *, at_approval: bool
+    ) -> None:
+        """Refuse a half day during probation once the month already holds
+        `PROBATION_HALF_DAYS_PER_MONTH` of them.
+
+        On apply pending and approved half days count; on approval only approved
+        ones do, for the same reason as the balance rule above.
+        """
+        if request.leave_type is not LeaveType.HALF_DAY:
+            return
+        day = utc_date(request.start)
+        month_start = date(day.year, day.month, 1)
+        next_month = (month_start + timedelta(days=32)).replace(day=1)
+        statuses = (
+            (LeaveStatus.APPROVED,)
+            if at_approval
+            else (LeaveStatus.SUBMITTED, LeaveStatus.APPROVED)
+        )
+        booked = await self._leaves.overlapping(
+            employee.id,
+            datetime(month_start.year, month_start.month, month_start.day, tzinfo=UTC),
+            datetime(next_month.year, next_month.month, next_month.day, tzinfo=UTC)
+            - timedelta(microseconds=1),
+            statuses,
+        )
+        taken = sum(1 for row in booked if row.leave_type is LeaveType.HALF_DAY)
+        if taken < PROBATION_HALF_DAYS_PER_MONTH:
+            return
+        if at_approval:
+            raise ValidationError(
+                f"{employee.full_name} is on probation and already has {taken} approved "
+                f"half days in {day:%B %Y}; the limit is {PROBATION_HALF_DAYS_PER_MONTH} "
+                "a month. Ask them to apply for unpaid leave instead."
+            )
+        raise ValidationError(
+            f"During probation you can take up to {PROBATION_HALF_DAYS_PER_MONTH} "
+            f"half days a month; {day:%B %Y} already has {taken}. "
+            "Apply for unpaid leave instead."
+        )
+
+    async def _enforce_no_overlap(
+        self, employee: Employee, request: _Request, *, exclude_id: uuid.UUID | None
+    ) -> None:
+        """Refuse leave that double-books days already covered by the employee's
+        own leave (two different halves of one day are fine).
+
+        On apply both pending and approved leave block. On approval
+        (`exclude_id` set) only APPROVED leave does: another still-pending
+        request is not a booking yet, and must not stop the approver deciding
+        this one - whichever is approved first makes the other one clash. The
+        message then speaks to the approver, not the employee.
+        """
+        at_approval = exclude_id is not None
+        statuses = (
+            (LeaveStatus.APPROVED,)
+            if at_approval
+            else (LeaveStatus.SUBMITTED, LeaveStatus.APPROVED)
+        )
+        first_day = utc_date(request.start)
+        last_day = utc_date(request.end)
+        existing = await self._leaves.overlapping(
+            employee.id,
+            datetime(first_day.year, first_day.month, first_day.day, tzinfo=UTC),
+            datetime(last_day.year, last_day.month, last_day.day, tzinfo=UTC)
+            + timedelta(days=1, microseconds=-1),
+            statuses,
+            exclude_id=exclude_id,
+        )
+        clash = next(
+            (row for row in existing if clashes(row, request.leave_type, request.half_day)),
+            None,
+        )
+        if clash is None:
+            return
+        dates = f"{clash.start_date:%d %b} - {clash.end_date:%d %b}"
+        if at_approval:
+            raise ValidationError(
+                f"{employee.full_name} already has approved leave on {dates} "
+                "that overlaps these dates."
+            )
+        raise ValidationError(
+            f"You already have {clash.status.value} leave on {dates} that overlaps these dates."
+        )
+
+    async def _enforce_leave_rules(
+        self,
+        employee: Employee,
+        request: _Request,
+        *,
+        exclude_id: uuid.UUID | None = None,
+    ) -> None:
+        """Eligibility, overlap and balance - run on apply and again on approval
+        (`exclude_id` set), because balances and other leave move in between.
+
+        The employee's row is locked first, so two concurrent applies/approvals
+        for the same person run these checks one after the other and cannot both
+        pass against the same balance (the lock is held until the commit)."""
+        at_approval = exclude_id is not None
+        await self._leaves.lock_employee(employee.id)
+        await self._enforce_eligibility(employee, request.leave_type, request.start)
+        await self._enforce_no_overlap(employee, request, exclude_id=exclude_id)
+        await self._enforce_balance(employee, request, at_approval=at_approval)
+
     async def apply(self, caller: CurrentUser, payload: LeaveCreate) -> Leave:
+        employee = await self._employees.get(caller.employee_id)
+        if employee is None:
+            raise NotFoundError()
         await self._enforce_not_past(payload)
-        await self._enforce_eligibility(caller, payload)
         await self._enforce_min_notice(payload)
+        await self._enforce_leave_rules(employee, _Request.from_create(payload))
         # Employees apply for themselves; their manager is the default reviewer.
         leave = await self._leaves.create(
             payload, employee_id=caller.employee_id, reviewer_id=caller.manager_id
@@ -198,22 +443,11 @@ class LeaveService:
             action="leave.apply",
             target=f"leave:{leave.id}:{payload.leave_type.value}",
         )
-        # Tell the person who actually decides it: the requester's reporting
-        # manager. Every admin used to be notified as well, which is now both
-        # wrong and useless - a leave request goes to the person you report to,
-        # and admins can no longer see or decide one.
-        #
-        # HR is the fallback, not a second recipient on every request: without it
-        # a request from someone with no manager on file would reach nobody who
-        # could action it.
         body = (
             f"{_leave_type_label(payload.leave_type, payload.half_day_period)} · "
             f"{payload.start_date:%d %b} - {payload.end_date:%d %b}"
         )
-        if caller.manager_id is not None:
-            reviewers = [caller.manager_id]
-        else:
-            reviewers = [hr.id for hr in await self._employees.list_by_role(Role.HR)]
+        reviewers = await self._reviewers_for(caller)
         for reviewer_id in reviewers:
             await self._notifications.notify(
                 recipient_id=reviewer_id,
@@ -227,6 +461,28 @@ class LeaveService:
             )
         await self._email_request(leave, caller, reviewer_ids=set(reviewers))
         return leave
+
+    async def _reviewers_for(self, caller: CurrentUser) -> list[uuid.UUID]:
+        """Who is told about a new request: the person who actually decides it.
+
+        That is the requester's reporting manager. HR is the fallback, not a
+        second recipient on every request: when there is no manager on file, or
+        the one on file has left (inactive - they can no longer sign in to act),
+        the request would otherwise reach nobody who could action it. Admins are
+        not told; they can neither see nor decide another person's leave.
+        """
+        return await self._deciders_for(caller.employee_id, caller.manager_id)
+
+    async def _deciders_for(
+        self, employee_id: uuid.UUID, manager_id: uuid.UUID | None
+    ) -> list[uuid.UUID]:
+        """Who decides this employee's leave right now: their active reporting
+        manager, else every HR person other than the employee themselves."""
+        if manager_id is not None:
+            manager = await self._employees.get(manager_id)
+            if manager is not None and manager.is_active:
+                return [manager.id]
+        return [hr.id for hr in await self._employees.list_by_role(Role.HR) if hr.id != employee_id]
 
     async def _email_request(
         self, leave: Leave, caller: CurrentUser, *, reviewer_ids: set[uuid.UUID]
@@ -270,41 +526,33 @@ class LeaveService:
             except EmailError:
                 logger.warning("leave_request_email_failed", extra={"leave_id": str(leave.id)})
 
-    async def _may_decide(self, caller: CurrentUser, leave: Leave) -> bool:
-        """Who may approve or reject a leave request.
-
-        The requester's own reporting manager - the person who actually knows
-        whether the team can spare them that week - or HR.
-
-        NOT admin, unless they happen to be that manager. A leave request goes to
-        the person you report to; running the workspace is not a reason to decide
-        it (org decision), and admin can no longer see these requests either, so
-        letting the gate say yes would only produce a 404 one step later.
-
-        HR stays because it administers leave, and because a request from
-        someone with no reporting manager on file has to land somewhere - without
-        it those requests could never be actioned by anyone at all.
-
-        Never your own request, whatever your role: that is the segregation of
-        duties the admin-only rule was really protecting, and it survives here.
-        """
-        if caller.employee_id == leave.employee_id:
-            return False
-        if caller.role is Role.HR:
-            return True
+    async def _requester_manager_id(self, leave: Leave) -> uuid.UUID | None:
         requester = await self._employees.get(leave.employee_id)
-        return requester is not None and requester.manager_id == caller.employee_id
+        return requester.manager_id if requester is not None else None
+
+    async def _may_decide(self, caller: CurrentUser, leave: Leave) -> bool:
+        """The requester's direct manager or HR, never your own (`may_decide`)."""
+        return may_decide(caller, leave, await self._requester_manager_id(leave))
 
     async def decide(
         self, caller: CurrentUser, leave_id: uuid.UUID, payload: LeaveDecision
     ) -> Leave:
-        leave = await self._leaves.get_in_scope(caller, leave_id)
+        # Locked: a concurrent second decision waits here, then sees this one's
+        # status and gets the 409 below - never a second set of notifications.
+        leave = await self._leaves.get_in_scope(caller, leave_id, for_update=True)
         if leave is None:
             raise NotFoundError()
         if not await self._may_decide(caller, leave):
             raise AuthorizationError()
         if leave.status is not LeaveStatus.SUBMITTED:
             raise ConflictError("This request can no longer be decided.")
+        if payload.approve:
+            requester = await self._employees.get(leave.employee_id)
+            if requester is None:
+                raise NotFoundError()
+            await self._enforce_leave_rules(
+                requester, _Request.from_leave(leave), exclude_id=leave.id
+            )
 
         leave.status = LeaveStatus.APPROVED if payload.approve else LeaveStatus.REJECTED
         leave.reviewer_id = caller.employee_id
@@ -357,8 +605,9 @@ class LeaveService:
         except EmailError:
             logger.warning("leave_decision_email_failed", extra={"leave_id": str(leave.id)})
 
-    async def cancel(self, caller: CurrentUser, leave_id: uuid.UUID) -> Leave:
-        leave = await self._leaves.get(leave_id)
+    async def withdraw(self, caller: CurrentUser, leave_id: uuid.UUID) -> Leave:
+        """The requester pulls back their own still-pending request."""
+        leave = await self._leaves.get_for_update(leave_id)
         if leave is None:
             raise NotFoundError()
         if leave.employee_id != caller.employee_id:
@@ -373,6 +622,103 @@ class LeaveService:
             target=f"leave:{leave.id}",
         )
         return leave
+
+    async def cancel_approved(
+        self, caller: CurrentUser, leave_id: uuid.UUID, payload: LeaveCancel
+    ) -> Leave:
+        """Cancel an APPROVED leave (rules in `leave_rules.may_cancel_approved`).
+
+        CANCELLED is not APPROVED, so the leave stops counting toward the balance
+        and payroll immediately: both read approved leave only. That is why a
+        month whose payslips are already released is refused: those slips are
+        frozen, so the cancellation would never reach the pay it changes.
+        """
+        leave = await self._leaves.get_in_scope(caller, leave_id, for_update=True)
+        if leave is None:
+            raise NotFoundError()
+        if leave.status is not LeaveStatus.APPROVED:
+            raise ConflictError("Only an approved leave can be cancelled.")
+        today = await self._org_today()
+        if not may_cancel_approved(caller, leave, await self._requester_manager_id(leave), today):
+            if caller.employee_id == leave.employee_id:
+                raise ConflictError(
+                    "This leave has already started. Ask HR or your manager to cancel it."
+                )
+            raise AuthorizationError()
+        await self._enforce_payroll_open(leave)
+        leave.status = LeaveStatus.CANCELLED
+        await self._leaves.flush()
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="leave.cancel",
+            target=f"leave:{leave.id}",
+        )
+        await self._notify_cancelled(caller, leave, payload.note)
+        return leave
+
+    async def _enforce_payroll_open(self, leave: Leave) -> None:
+        """Refuse to change leave in a month whose payroll is already released
+        (mirrors the reimbursement settlement guard): the payslip is a frozen
+        snapshot, so the pay effect has to be made as a payroll adjustment."""
+        released = await self._leaves.released_payroll_months(
+            _months_between(utc_date(leave.start_date), utc_date(leave.end_date))
+        )
+        if released:
+            raise ConflictError(
+                f"Payroll for {released[0]} is already released; "
+                "correct it through a payroll adjustment."
+            )
+
+    async def _notify_cancelled(self, caller: CurrentUser, leave: Leave, note: str | None) -> None:
+        """Tell the employee when someone else cancelled their leave, and whoever
+        decides their leave NOW (their current active manager, or HR when there
+        is none - `_deciders_for`) when anyone else cancelled it. Not whoever
+        approved it back then: they may have moved teams or left since. Never the
+        person who just did it.
+
+        In-app only: the leave email template reads as an approve/reject
+        decision, and none fits a cancellation."""
+        label = _leave_type_label(leave.leave_type, leave.half_day_period)
+        dates = f"{leave.start_date:%d %b} - {leave.end_date:%d %b}"
+        body = f"{label} · {dates}" + (f" · {note}" if note else "")
+        recipients = {
+            leave.employee_id: "Your leave was cancelled",
+        }
+        requester = await self._employees.get(leave.employee_id)
+        manager_id = requester.manager_id if requester is not None else None
+        for decider_id in await self._deciders_for(leave.employee_id, manager_id):
+            recipients.setdefault(decider_id, "An approved leave was cancelled")
+        for recipient_id, title in recipients.items():
+            if recipient_id == caller.employee_id:
+                continue
+            await self._notifications.notify(
+                recipient_id=recipient_id,
+                kind=NotificationKind.LEAVE_DECISION,
+                title=title,
+                body=body,
+                level=NotificationLevel.WARNING,
+                link=_LEAVES_LINK,
+                entity_type="leave",
+                entity_id=leave.id,
+                actor_id=caller.employee_id,
+            )
+
+    async def permissions(
+        self, caller: CurrentUser, leaves: Sequence[Leave]
+    ) -> dict[uuid.UUID, LeavePermissions]:
+        """What the caller may do with each leave - the same rules `decide` and
+        `cancel_approved` enforce, batched so a page of rows costs one lookup."""
+        requesters = await self._employees.get_many(list({lv.employee_id for lv in leaves}))
+        today = await self._org_today()
+        out: dict[uuid.UUID, LeavePermissions] = {}
+        for leave in leaves:
+            requester = requesters.get(leave.employee_id)
+            manager_id = requester.manager_id if requester is not None else None
+            out[leave.id] = LeavePermissions(
+                can_decide=can_decide_now(caller, leave, manager_id),
+                can_cancel=may_cancel_approved(caller, leave, manager_id, today),
+            )
+        return out
 
     async def balance(
         self, caller: CurrentUser, employee_id: uuid.UUID | None = None
@@ -389,9 +735,33 @@ class LeaveService:
         employee = await self._employees.get(target_id)
         if employee is None or not employee.is_active:
             raise NotFoundError()
+        result = await self._compute_balance(employee)
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="leave.balance.read",
+            target=f"employee:{target_id}",
+        )
+        return result
 
+    async def _compute_balance(
+        self, employee: Employee, *, on: date | None = None
+    ) -> LeaveBalanceRead:
+        """The balance picture for one employee, without authorization or audit.
+
+        Shared by the balance endpoint and by `_enforce_balance`, so what the UI
+        shows as "remaining" and what applying/approving enforces are one number.
+
+        `on` picks the leave year (default: the current one). Entitlement is
+        evaluated as of today, clamped into that year: a FUTURE year is judged
+        as it opens on 1 April - the tenure band the person will be in then, and
+        one month of any monthly accrual (credited up front) - and a past year as
+        it closed. Leave used and pending is what is booked inside that year.
+        """
+        target_id = employee.id
         anchor = employee.hire_date or employee.created_at.date()
-        year_start, year_end = _leave_year_window(datetime.now(UTC).date())
+        org_today = await self._org_today()
+        year_start, year_end = _leave_year_window(on or org_today)
+        as_of = min(max(org_today, year_start), year_end)
         holidays = await self._holidays.dates_in_range(year_start, year_end)
         working_days_per_week = (await self._attendance_policy.spec()).working_days_per_week
         start_dt = datetime(year_start.year, year_start.month, year_start.day, tzinfo=UTC)
@@ -418,7 +788,6 @@ class LeaveService:
         # staff on probation and silently zero their planned leave. Unknown
         # therefore reads as fully tenured: they keep the org policy, exactly as
         # they did before tenure banding existed.
-        org_today = await self._org_today()
         hired_on = employee.hire_date
         # Their own negotiated probation length wins over the org default; the
         # band and the confirmation date must both use the same number or the
@@ -426,7 +795,7 @@ class LeaveService:
         probation_months = employee.probation_months or policy.probation_months
         confirmed_on = probation_end(hired_on or anchor, probation_months)
         tier = (
-            tenure_status(hired_on, org_today, probation_months=probation_months)
+            tenure_status(hired_on, as_of, probation_months=probation_months)
             if hired_on is not None
             else TenureStatus.TENURED
         )
@@ -438,7 +807,7 @@ class LeaveService:
         accruing: list[LeaveType] = []
 
         def quota(leave_type: LeaveType, policy_attr: str, alloc_attr: str) -> float:
-            """The employee's effective entitlement for the current leave year.
+            """The employee's effective entitlement for the leave year.
 
             Resolution order, most specific first: their per-employee override,
             then their tenure band's rule, then the org policy default. A band row
@@ -453,7 +822,7 @@ class LeaveService:
                 if row.monthly_accrual_days is not None:
                     accruing.append(leave_type)
                     earned = accrued_units(
-                        accrual_start, org_today, per_month=float(row.monthly_accrual_days)
+                        accrual_start, as_of, per_month=float(row.monthly_accrual_days)
                     )
                     # Accrual runs toward a ceiling, never past it: the band's own
                     # figure when it sets one, otherwise the org policy. Without
@@ -477,10 +846,10 @@ class LeaveService:
             for s, e, kind, _status in rows:
                 if kind not in types:
                     continue
-                ls = max(year_start, _utc_date(s))
-                le = min(year_end, _utc_date(e))
+                ls = max(year_start, utc_date(s))
+                le = min(year_end, utc_date(e))
                 days = float(working_days_between(ls, le, holidays, working_days_per_week))
-                total += days * (_HALF_DAY_WEIGHT if kind is LeaveType.HALF_DAY else 1.0)
+                total += days * leave_weight(kind)
             return total
 
         balances: list[LeaveTypeBalance] = []
@@ -525,11 +894,6 @@ class LeaveService:
             )
         )
 
-        await self._audit.append(
-            actor=str(caller.employee_id),
-            action="leave.balance.read",
-            target=f"employee:{target_id}",
-        )
         return LeaveBalanceRead(
             leave_year_start=year_start,
             leave_year_end=year_end,
@@ -578,15 +942,6 @@ def _leave_type_label(leave_type: LeaveType, half_day_period: HalfDayPeriod | No
     return label
 
 
-def _utc_date(value: datetime) -> date:
-    """The UTC calendar date of a stored leave bound. Leaves are persisted at UTC
-    midnight; a naive value (e.g. from SQLite) is treated as already-UTC rather
-    than shifted by the machine's local timezone."""
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=UTC)
-    return value.astimezone(UTC).date()
-
-
 def _ineligible_reason(tier: TenureStatus, confirmed_on: date) -> str:
     """Why this leave type is withheld, in words the employee can act on.
 
@@ -618,3 +973,30 @@ def _leave_year_window(today: date) -> tuple[date, date]:
     year = today.year if today.month >= LEAVE_YEAR_START_MONTH else today.year - 1
     start = date(year, LEAVE_YEAR_START_MONTH, 1)
     return start, date(year + 1, LEAVE_YEAR_START_MONTH, 1) - timedelta(days=1)
+
+
+def _leave_year_windows(first: date, last: date) -> list[tuple[date, date]]:
+    """Every leave-year window the inclusive range [first, last] touches, in
+    order - one for a request inside a year, two for one spanning 31 March."""
+    windows: list[tuple[date, date]] = []
+    day = first
+    while day <= last:
+        window = _leave_year_window(day)
+        windows.append(window)
+        day = window[1] + timedelta(days=1)
+    return windows
+
+
+def _leave_year_label(window: tuple[date, date]) -> str:
+    """'2027-28' for the 1 Apr 2027 - 31 Mar 2028 leave year."""
+    return f"{window[0].year}-{window[1].year % 100:02d}"
+
+
+def _months_between(first: date, last: date) -> list[str]:
+    """Every payroll month (`YYYY-MM`) the inclusive range [first, last] touches."""
+    months: list[str] = []
+    year, month = first.year, first.month
+    while (year, month) <= (last.year, last.month):
+        months.append(f"{year:04d}-{month:02d}")
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    return months

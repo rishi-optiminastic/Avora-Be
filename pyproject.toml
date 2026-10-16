@@ -67,6 +67,7 @@ ignore = [
 "tests/**" = ["S105", "S106"]  # hardcoded test secrets are fine in tests
 "migrations/**" = ["E501"]
 "app/services/email_templates.py" = ["E501"]  # inline HTML email markup runs long
+"app/services/form_emails.py" = ["E501"]  # same inline HTML email markup
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]

@@ -1,7 +1,7 @@
 """EodReport — one employee's End-of-Day summary for a local calendar day.
 
 Generated from the day's tasks + activity + screenshot OCR text by the LLM, then
-reviewed/approved by the employee before it emails their manager + admins. One
+reviewed/approved by the employee before it emails their reporting manager. One
 row per (employee, report_date) — the unique constraint is the idempotency guard
 the scheduler relies on (mirrors `payroll_runs.period_month`).
 """
@@ -22,7 +22,7 @@ from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 class EodStatus(StrEnum):
     DRAFT = "draft"  # generated, awaiting the employee's review
     APPROVED = "approved"  # employee approved (transient, before send)
-    SENT = "sent"  # emailed to manager + admins
+    SENT = "sent"  # emailed to the reporting manager
     SKIPPED_ABSENT = "skipped_absent"  # employee was absent — no report
     FAILED = "failed"  # generation errored (recorded, not retried blindly)
 

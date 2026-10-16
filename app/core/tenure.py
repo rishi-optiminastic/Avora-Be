@@ -43,6 +43,17 @@ def add_months(start: date, months: int) -> date:
     return date(year, month, min(start.day, last_day))
 
 
+def months_to_reach(start: date, target: date) -> int:
+    """The fewest whole months after `start` whose anniversary is on or after
+    `target` (0 when `target` is not after `start`)."""
+    months = max(0, (target.year - start.year) * 12 + (target.month - start.month))
+    while add_months(start, months) < target:
+        months += 1
+    while months > 0 and add_months(start, months - 1) >= target:
+        months -= 1
+    return months
+
+
 def months_completed(start: date, today: date) -> int:
     """Whole months elapsed from `start` to `today` (0 before the first one).
 
@@ -63,9 +74,21 @@ def probation_end(hire_date: date, probation_months: int) -> date:
     return add_months(hire_date, probation_months)
 
 
+def anniversaries_reached(start: date, today: date) -> int:
+    """How many monthly anniversaries of `start` (as `add_months` dates them)
+    fall on or before `today`.
+
+    Unlike `months_completed`, a month-end start counts the clamped date: Aug 31
+    reaches its sixth anniversary on Feb 28. That is the date `probation_end`
+    shows, so the band flips on exactly the day the UI says it does.
+    """
+    months = months_to_reach(start, today)
+    return months if add_months(start, months) == today else max(0, months - 1)
+
+
 def tenure_status(hire_date: date, today: date, *, probation_months: int) -> TenureStatus:
     """Which entitlement band `hire_date` falls in as of `today`."""
-    months = months_completed(hire_date, today)
+    months = anniversaries_reached(hire_date, today)
     if months >= MONTHS_IN_YEAR:
         return TenureStatus.TENURED
     if months >= probation_months:

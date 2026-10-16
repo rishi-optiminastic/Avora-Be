@@ -17,7 +17,12 @@ from app.core.config import Settings
 from app.core.payroll import working_days_between
 from app.models.holiday import Holiday, HolidayType
 from app.models.leave import Leave, LeaveStatus, LeaveType
-from app.services.leave_service import _leave_year_window
+from app.services.leave_service import (
+    _leave_year_label,
+    _leave_year_window,
+    _leave_year_windows,
+    _months_between,
+)
 from tests.conftest import _Seed, auth_headers
 
 # ---- pure helpers ---------------------------------------------------------- #
@@ -66,6 +71,26 @@ def test_the_window_is_the_same_for_everyone_regardless_of_joining_date() -> Non
 
 
 # ---- balance over real leaves ---------------------------------------------- #
+
+
+def test_a_range_spanning_31_march_touches_two_leave_years() -> None:
+    assert _leave_year_windows(date(2027, 3, 30), date(2027, 4, 2)) == [
+        (date(2026, 4, 1), date(2027, 3, 31)),
+        (date(2027, 4, 1), date(2028, 3, 31)),
+    ]
+    assert _leave_year_windows(date(2027, 4, 5), date(2027, 4, 9)) == [
+        (date(2027, 4, 1), date(2028, 3, 31)),
+    ]
+    assert _leave_year_label((date(2027, 4, 1), date(2028, 3, 31))) == "2027-28"
+
+
+def test_months_between_lists_every_payroll_month_touched() -> None:
+    assert _months_between(date(2026, 12, 30), date(2027, 2, 1)) == [
+        "2026-12",
+        "2027-01",
+        "2027-02",
+    ]
+    assert _months_between(date(2026, 10, 5), date(2026, 10, 9)) == ["2026-10"]
 
 
 def _dt(d: date) -> datetime:

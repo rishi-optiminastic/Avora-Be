@@ -65,6 +65,12 @@ async def _notifications_for(db: AsyncSession, employee_id: object) -> list[Noti
     return list(rows.scalars().all())
 
 
+async def _inbox_for(db: AsyncSession, employee_id: object) -> list[Notification]:
+    """Every notification of any kind - pop-up or quiet inbox note."""
+    rows = await db.execute(select(Notification).where(Notification.recipient_id == employee_id))
+    return list(rows.scalars().all())
+
+
 async def test_a_task_not_yet_overdue_is_left_alone(db: AsyncSession, seed: _Seed) -> None:
     task = await _task(db, seed, days_overdue=-2)  # due in two days
     await _service(db).run_due(NOW)
@@ -129,8 +135,12 @@ async def test_running_the_sweep_again_changes_nothing(db: AsyncSession, seed: _
     await db.refresh(task, attribute_names=["collaborators"])
     assert task.escalation_level == 3
     assert len(task.collaborators) == 2  # not re-added
-    assert len(await _notifications_for(db, seed.report.id)) == 1
-    assert len(await _notifications_for(db, seed.manager.id)) == 1
+    # Each person heard exactly once. This used to assert one ESCALATION pop-up
+    # each, but a task found past every tier at once now raises a single pop-up
+    # (to the admin, the most senior person pulled in); the assignee and the
+    # manager get the same news as a quiet inbox note instead of a modal.
+    assert len(await _inbox_for(db, seed.report.id)) == 1
+    assert len(await _inbox_for(db, seed.manager.id)) == 1
     assert len(await _notifications_for(db, seed.admin.id)) == 1
 
 
@@ -591,3 +601,174 @@ async def test_the_worker_does_nothing_while_disabled(db: AsyncSession, seed: _S
     # Nothing escalated, and nobody was notified.
     assert await _notifications_for(db, seed.report.id) == []
     assert await _notifications_for(db, seed.manager.id) == []
+
+
+# ---- backlog safety: one pop-up per task, a cap per person ------------------ #
+
+
+async def _popups(db: AsyncSession) -> list[Notification]:
+    rows = await db.execute(
+        select(Notification).where(Notification.kind == NotificationKind.ESCALATION)
+    )
+    return list(rows.scalars().all())
+
+
+def _capped_service(db: AsyncSession, cap: int) -> TaskEscalationService:
+    return TaskEscalationService(
+        TaskRepository(db),
+        EmployeeRepository(db),
+        NotificationService(NotificationRepository(db)),
+        AuditRepository(db),
+        popups_per_person=cap,
+    )
+
+
+async def _admin(db: AsyncSession, tag: str, role: Role = Role.ADMIN) -> Employee:
+    person = Employee(
+        hr_external_id=f"hr-admin-{tag}",
+        work_email=f"admin.{tag}@corp.test",
+        full_name=f"Zed Admin {tag}",  # sorts AFTER the seeded admin by name
+        role=role,
+        status=EmployeeStatus.ACTIVE,
+        is_active=True,
+    )
+    db.add(person)
+    await db.commit()
+    return person
+
+
+async def test_a_task_past_every_tier_raises_one_popup_not_three(
+    db: AsyncSession, seed: _Seed
+) -> None:
+    """Switching this on over a backlog used to fire tiers 1, 2 and 3 for the
+    same task in one sweep - three blocking modals for one late task. The
+    highest tier's effect is applied once and exactly one pop-up goes out."""
+    task = await _task(db, seed, days_overdue=7)
+    outcome = await _service(db).run_due(NOW)
+    await db.refresh(task)
+    await db.refresh(task, attribute_names=["collaborators"])
+
+    assert task.escalation_level == 3
+    assert {c.id for c in task.collaborators} == {seed.manager.id, seed.admin.id}
+    popups = await _popups(db)
+    assert [p.recipient_id for p in popups] == [seed.admin.id]
+    assert outcome.total == 3  # assignee told, manager and admin added - quietly
+
+
+async def test_a_person_gets_a_capped_number_of_popups_then_one_summary(
+    db: AsyncSession, seed: _Seed
+) -> None:
+    for i in range(6):
+        t = await _task(db, seed, days_overdue=2 + i / 10)
+        t.title = f"late {i}"
+    await db.commit()
+
+    outcome = await _capped_service(db, cap=2).run_due(NOW)
+
+    mine = await _notifications_for(db, seed.report.id)
+    assert len(mine) == 3  # two individual pop-ups + one summary, not six
+    assert outcome.summaries_sent == 1
+    assert outcome.assignee_warned == 6  # every task still advanced
+    assert sum("4 more of your tasks are overdue" in n.title for n in mine) == 1
+    # The individual pop-ups are the OLDEST tasks.
+    individual = sorted(n.title for n in mine if n.entity_id is not None)
+    assert individual == ["Overdue: late 4", "Overdue: late 5"]
+
+    again = await _capped_service(db, cap=2).run_due(NOW + timedelta(hours=1))
+    assert again.total == 0 and again.summaries_sent == 0  # still idempotent
+
+
+async def test_an_escalated_backlog_collapses_for_the_manager_too(
+    db: AsyncSession, seed: _Seed
+) -> None:
+    for i in range(5):
+        await _task(db, seed, days_overdue=4 + i / 10)
+
+    await _capped_service(db, cap=2).run_due(NOW)
+
+    manager_popups = await _notifications_for(db, seed.manager.id)
+    assert len(manager_popups) == 3
+    assert sum("3 more overdue tasks escalated to you" in n.title for n in manager_popups) == 1
+    # The assignee was not handed five modals for tasks their manager now holds.
+    assert await _notifications_for(db, seed.report.id) == []
+    assert len(await _inbox_for(db, seed.report.id)) == 5
+
+
+async def test_admin_tier_is_spread_across_admins(db: AsyncSession, seed: _Seed) -> None:
+    """Always picking the first admin by name handed one person the whole
+    backlog. Least-loaded spreads it evenly."""
+    second = await _admin(db, "two")
+    tasks = []
+    for _ in range(4):
+        t = await _task(db, seed, days_overdue=7)
+        t.assignee_id = seed.outsider.id  # no manager: only the admin tier acts
+        tasks.append(t)
+    await db.commit()
+
+    outcome = await _service(db).run_due(NOW)
+    assert outcome.admins_added == 4
+
+    per_admin = {seed.admin.id: 0, second.id: 0}
+    for t in tasks:
+        await db.refresh(t, attribute_names=["collaborators"])
+        (only,) = t.collaborators
+        per_admin[only.id] += 1
+    assert per_admin == {seed.admin.id: 2, second.id: 2}
+
+
+async def test_an_org_whose_only_admin_is_an_it_admin_still_escalates(
+    db: AsyncSession, seed: _Seed
+) -> None:
+    """IT_ADMIN is a full admin (`list_admins`). An org with no ADMIN-role row
+    must still reach its final tier."""
+    from sqlalchemy import delete
+
+    await db.execute(delete(Employee).where(Employee.role == Role.ADMIN))
+    it_admin = await _admin(db, "it", role=Role.IT_ADMIN)
+    task = await _task(db, seed, days_overdue=7)
+
+    outcome = await _service(db).run_due(NOW)
+    await db.refresh(task)
+    await db.refresh(task, attribute_names=["collaborators"])
+
+    assert outcome.admins_added == 1
+    assert it_admin.id in {c.id for c in task.collaborators}
+    assert task.escalated_to == "admin"
+
+
+async def test_badge_says_manager_when_the_admin_tier_found_nobody(
+    db: AsyncSession, seed: _Seed
+) -> None:
+    """The level reaches 3 even when no admin exists, so a badge read off the
+    level claimed "Escalated - admin" with no admin on the task."""
+    from sqlalchemy import delete
+
+    from app.schemas.task import TaskRead
+
+    await db.execute(delete(Employee).where(Employee.role == Role.ADMIN))
+    task = await _task(db, seed, days_overdue=7)
+
+    await _service(db).run_due(NOW)
+    await db.refresh(task)
+    await db.refresh(task, attribute_names=["collaborators"])
+
+    assert task.escalation_level == 3
+    assert task.escalated is True
+    read = TaskRead.model_validate(task)
+    assert read.escalated_to == "manager"
+
+
+async def test_badge_says_admin_only_when_an_admin_was_added(db: AsyncSession, seed: _Seed) -> None:
+    from app.schemas.task import TaskRead
+
+    task = await _task(db, seed, days_overdue=7)
+    await _service(db).run_due(NOW)
+    await db.refresh(task)
+    await db.refresh(task, attribute_names=["collaborators"])
+    assert TaskRead.model_validate(task).escalated_to == "admin"
+
+    warned_only = await _task(db, seed, days_overdue=1.5)
+    await _service(db).run_due(NOW)
+    await db.refresh(warned_only)
+    await db.refresh(warned_only, attribute_names=["collaborators"])
+    assert TaskRead.model_validate(warned_only).escalated_to is None

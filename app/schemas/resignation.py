@@ -35,6 +35,9 @@ class ResignationDecision(BaseModel):
 class ResignationRead(ORMModel):
     id: uuid.UUID
     employee_id: uuid.UUID
+    # `reason` and `decision_note` are None for a reporting manager reading a
+    # report's resignation (`resignation_service.read_for`): only the resigner
+    # and HR/Admin see them.
     reason: str | None
     last_working_day: date
     status: ResignationStatus

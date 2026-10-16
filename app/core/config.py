@@ -187,15 +187,19 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     eod_model: str = ""  # OpenRouter model id, e.g. "anthropic/claude-sonnet-4.5"
+    # Admin "API credit" card: below this many USD remaining, the balance reads
+    # as low (and admins are notified once when it first drops under).
+    llm_credit_low_threshold_usd: float = 5.0
     eod_enabled: bool = False
     # Two local (attendance-policy tz, = IST for this org) clock times:
     #  • DRAFT at 16:30 — generate each present employee's draft and notify them
     #    to review/edit; it auto-sends at the send time.
-    #  • SEND at 18:00 — email the (edited-or-as-is) report to manager + admins.
+    #  • SEND at 18:00 — email the (edited-or-as-is) report to the reporting
+    #    manager, then mail admins each department's rollup (once per day).
     # The 16:30→18:00 gap is the employee's review window.
     eod_report_hour: int = 16  # local hour drafts are generated
     eod_report_minute: int = 30  # local minute drafts are generated (→ 4:30 PM IST)
-    eod_send_hour: int = 18  # local hour drafts auto-send to manager+admins
+    eod_send_hour: int = 18  # local hour drafts auto-send to the reporting manager
     eod_send_minute: int = 0  # local minute (→ 6:00 PM IST)
     eod_ocr_char_budget: int = 12000  # cap concatenated OCR text fed to the LLM
     eod_concurrency: int = 5  # max simultaneous LLM calls when generating drafts
@@ -232,6 +236,11 @@ class Settings(BaseSettings):
     task_escalation_warn_after_days: int = 1  # overdue this long ⇒ warn the assignee
     task_escalation_manager_after_days: int = 3  # ⇒ add the reporting manager
     task_escalation_admin_after_days: int = 6  # ⇒ add an admin
+
+    # Forms scheduler (worker/forms_scheduler.py): sends the onboarding forms on
+    # their day and chases buddy forms still waiting for a buddy. Day-grained,
+    # so hourly is plenty; re-running is harmless.
+    forms_tick_seconds: int = 3600
 
     # Auto-checkout: a worker closes work sessions left open past the office
     # window (someone forgot to check out), stamping the time their PC last showed

@@ -22,6 +22,7 @@ from app.api.v1.routes import (
     employees,
     envsync,
     eod,
+    forms,
     health,
     holidays,
     hr,
@@ -29,6 +30,7 @@ from app.api.v1.routes import (
     invitations,
     leave_allocation,
     leaves,
+    llm_credit,
     meetings,
     notes,
     notifications,
@@ -37,6 +39,7 @@ from app.api.v1.routes import (
     pat,
     payroll,
     payroll_adjustments,
+    payroll_payouts,
     pings,
     probation,
     reimbursements,
@@ -64,6 +67,7 @@ api_router.include_router(celebrations.router)
 api_router.include_router(changelog.router)
 api_router.include_router(notifications.router)
 api_router.include_router(onboarding.router)
+api_router.include_router(forms.router)
 api_router.include_router(org.router)
 api_router.include_router(holidays.router)
 api_router.include_router(announcements.router)
@@ -84,9 +88,11 @@ api_router.include_router(category_rules.router)
 api_router.include_router(compensation.router)
 api_router.include_router(payroll.router)
 api_router.include_router(payroll_adjustments.router)
+api_router.include_router(payroll_payouts.router)
 api_router.include_router(documents.router)
 api_router.include_router(workspace_files.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(eod.router)
 api_router.include_router(envsync.router)
 api_router.include_router(pat.router)
+api_router.include_router(llm_credit.router)

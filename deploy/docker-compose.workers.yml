@@ -13,8 +13,11 @@
 #
 # The three schedulers share the api Dockerfile (they only differ by the command
 # Coolify runs per resource); the OCR worker is a separate slim Tesseract image.
-# Four image names, matching what the registry already holds:
-#   avora-worker-eod   avora-worker-payroll   avora-worker-autocheckout   avora-worker-ocr
+# Image names, matching what the registry holds:
+#   avora-worker-eod   avora-worker-payroll   avora-worker-autocheckout
+#   avora-worker-task-escalation   avora-worker-ocr
+# Prefer `build-workers.sh`, which also bakes each scheduler's start command into
+# its image; this file only builds and pushes the tags.
 #
 # USAGE (on the VPS, from this deploy/ folder, after pulling the new code):
 #   export REGISTRY=127.0.0.1:5000
@@ -43,6 +46,12 @@ services:
   avora-worker-autocheckout:
     <<: *app-build
     image: ${REGISTRY:?set REGISTRY, e.g. 127.0.0.1:5000}/avora-worker-autocheckout:latest
+
+  # Overdue-task escalation (worker.task_escalation_scheduler). ONE instance only.
+  # Runs but does nothing until TASK_ESCALATION_ENABLED=true in its env.
+  avora-worker-task-escalation:
+    <<: *app-build
+    image: ${REGISTRY:?set REGISTRY, e.g. 127.0.0.1:5000}/avora-worker-task-escalation:latest
 
   avora-worker-ocr:
     build:

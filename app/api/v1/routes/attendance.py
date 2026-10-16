@@ -8,7 +8,9 @@ from datetime import UTC, date, datetime, time
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Query, Request, Response, status
+from pydantic import AfterValidator
 
+from app.core.attendance import report_month_bounds
 from app.core.deps import (
     AttendancePolicyServiceDep,
     AttendanceServiceDep,
@@ -38,7 +40,17 @@ from app.schemas.work_session import BiometricTodayRead, WorkSessionRead
 router = APIRouter(prefix="/attendance", tags=["attendance"])
 
 _XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-_MONTH = r"^\d{4}-\d{2}$"
+_MONTH = r"^\d{4}-(0[1-9]|1[0-2])$"
+
+
+def _real_month(month: str) -> str:
+    """Reject 2026-13, 2026-00 and the like with a readable 422 (the message
+    reaches the client through the validation handler) instead of a 500 later."""
+    report_month_bounds(month)
+    return month
+
+
+ReportMonth = Annotated[str, Query(), AfterValidator(_real_month)]
 
 
 # --------------------------------------------------------------------------- #
@@ -89,7 +101,7 @@ async def employee_attendance(
 async def monthly_report(
     caller: CurrentUserDep,
     service: AttendanceServiceDep,
-    month: Annotated[str, Query(pattern=_MONTH)],
+    month: ReportMonth,
 ) -> list[AttendanceMonthSummary]:
     """Per-employee monthly attendance summary (YYYY-MM)."""
     return await service.monthly_report(caller, month)
@@ -99,7 +111,7 @@ async def monthly_report(
 async def export_monthly_report(
     caller: CurrentUserDep,
     service: AttendanceServiceDep,
-    month: Annotated[str, Query(pattern=_MONTH)],
+    month: ReportMonth,
 ) -> Response:
     """The month's attendance as an .xlsx: a per-employee summary sheet and a
     daily sheet carrying every check-in and check-out time.
@@ -255,7 +267,11 @@ async def list_regularizations(
 ) -> list[RegularizationRead]:
     """Regularizations in the caller's scope (own; managers see their reports')."""
     rows = await service.list_for_caller(caller, month=month, status=reg_status)
-    return [RegularizationRead.model_validate(r) for r in rows]
+    decidable = await service.decidable_ids(caller, rows)
+    return [
+        RegularizationRead.model_validate(r).model_copy(update={"can_decide": r.id in decidable})
+        for r in rows
+    ]
 
 
 @router.post("/regularizations/{reg_id}/review", response_model=RegularizationRead)
@@ -265,5 +281,5 @@ async def review_regularization(
     caller: CurrentUserDep,
     service: RegularizationServiceDep,
 ) -> RegularizationRead:
-    """Approve/reject a regularization (manager/HR, scoped, not your own)."""
+    """Approve/reject a regularization (direct manager or HR, scoped, not your own)."""
     return RegularizationRead.model_validate(await service.review(caller, reg_id, payload))

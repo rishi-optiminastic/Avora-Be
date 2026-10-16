@@ -368,10 +368,14 @@ class PayrollService:
         cal = await self._month_calendar(period, spec.timezone, spec.working_days_per_week)
         cfg = self._calc_config(s)
 
-        employees = await self._employees.all_in_scope(caller)
+        # Org-wide on purpose: `_can_manage` above is the gate. The caller's
+        # own viewing scope is the wrong limit here - a finance person holding
+        # the payroll grant has the EMPLOYEE role, whose scope is just themselves.
+        employees = await self._employees.list_all_active()
         ids = [e.id for e in employees]
         summaries = {
-            r.employee_id: r for r in await self._attendance.monthly_report(caller, period)
+            r.employee_id: r
+            for r in await self._attendance.monthly_report(caller, period, org_wide=True)
         }
         paid_leaves = await self._leave_days_by_employee(ids, cal)
         comps = await self._compensation.get_for_employees(ids)  # one query, not N
@@ -611,7 +615,7 @@ class PayrollService:
 
         year, m = _parse_month(est.month)
         comps = await self._compensation.get_for_employees([r.employee_id for r in payable])
-        employees = {e.id: e for e in await self._employees.all_in_scope(caller)}
+        employees = {e.id: e for e in await self._employees.list_all_active()}
         rows = [
             self._reimbursement_row(
                 line,
@@ -664,7 +668,7 @@ class PayrollService:
         cfg = self._calc_config(s)
         ids = [line.employee_id for line in lines]
         comps = await self._compensation.get_for_employees(ids)
-        employees = {e.id: e for e in await self._employees.all_in_scope(caller)}
+        employees = {e.id: e for e in await self._employees.list_all_active()}
         reimbursed = (
             await self._reimbursements.approved_for_month(ids, est.month)
             if include_reimbursements
@@ -804,9 +808,16 @@ class PayrollService:
             raise NotFoundError()
         cal = await self._month_calendar(period, spec.timezone, spec.working_days_per_week)
         cfg = self._calc_config(s)
-        # Self-scoped reads: monthly_report/leave lookups for just this employee.
+        # Attendance for the slip. Access to `target_id` was settled above, so a
+        # payroll manager reads org-wide here: their own viewing scope (a finance
+        # person with the EMPLOYEE role sees only themselves) would leave the
+        # target out and price the whole month as loss of pay. Everyone else's
+        # scope already contains the person they are allowed to see.
         summaries = {
-            r.employee_id: r for r in await self._attendance.monthly_report(caller, period)
+            r.employee_id: r
+            for r in await self._attendance.monthly_report(
+                caller, period, org_wide=_can_manage(caller)
+            )
         }
         paid_leaves = await self._leave_days_by_employee([target_id], cal)
         adjustments = await self._adjustments.for_month([target_id], period)

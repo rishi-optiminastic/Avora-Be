@@ -14,7 +14,6 @@ always renders (just without the ₹ symbol) on a bare container.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass, field
 from io import BytesIO
 
@@ -22,8 +21,6 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (
     HRFlowable,
     Image,
@@ -34,6 +31,8 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+from app.core.pdf_fonts import PDF_FONTS
+
 _INK = colors.HexColor("#1a1530")
 _MUTED = colors.HexColor("#8a8598")
 _LINE = colors.HexColor("#e6e2f0")
@@ -42,39 +41,9 @@ _GREEN = colors.HexColor("#1f9d55")
 _GREEN_SOFT = colors.HexColor("#eaf7ef")
 
 
-def _register_unicode_font() -> tuple[str, str, str]:
-    """Register a ₹-capable TTF if one is available. Returns (regular, bold, ₹).
-
-    Falls back to Helvetica + "Rs " when no Unicode font is found so the PDF still
-    renders on a minimal container (add `fonts-dejavu-core` to the image for ₹)."""
-    bundled = os.path.join(os.path.dirname(__file__), "fonts")
-    # The bundled DejaVu is tried first — it definitely has ₹ (U+20B9); many system
-    # "Unicode" fonts (e.g. Arial Unicode MS) predate the sign and render tofu.
-    regular_paths = [
-        os.path.join(bundled, "DejaVuSans.ttf"),
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-    ]
-    bold_paths = [
-        os.path.join(bundled, "DejaVuSans-Bold.ttf"),
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
-    ]
-    regular = next((p for p in regular_paths if os.path.exists(p)), None)
-    if regular is None:
-        return "Helvetica", "Helvetica-Bold", "Rs "
-    bold = next((p for p in bold_paths if os.path.exists(p)), regular)
-    try:
-        pdfmetrics.registerFont(TTFont("PayslipSans", regular))
-        pdfmetrics.registerFont(TTFont("PayslipSans-Bold", bold))
-    except Exception:
-        return "Helvetica", "Helvetica-Bold", "Rs "
-    return "PayslipSans", "PayslipSans-Bold", "₹"
-
-
-_FONT, _FONT_BOLD, _RUPEE = _register_unicode_font()
+_FONT, _FONT_BOLD = PDF_FONTS.regular, PDF_FONTS.bold
+# Helvetica has no rupee glyph, so the fallback spells it out.
+_RUPEE = "₹" if PDF_FONTS.unicode else "Rs "
 _SYMBOLS = {"INR": _RUPEE, "USD": "$", "EUR": "€", "GBP": "£"}
 
 

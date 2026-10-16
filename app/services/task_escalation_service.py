@@ -16,17 +16,28 @@ therefore idempotent: running it ten times a day, or re-running it after a crash
 mid-way, never re-notifies or re-adds anyone. A task that is completed stops
 escalating immediately, because every query filters out DONE.
 
+A backlog never floods anyone. When a task is found past several tiers at once
+(the first sweep after switching this on, or after the worker was down), only
+the highest due tier's effect is applied - the manager and/or admin are added in
+one step - and the task raises at most ONE pop-up per sweep; everyone else it
+touches gets a quiet inbox note. On top of that each person gets at most
+`popups_per_person` pop-ups per sweep, and the rest collapse into a single
+"N more overdue tasks" summary.
+
 Run by `worker/task_escalation_scheduler.py`. Thresholds are configurable so the
 org can tune them without a deploy-time code change.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import uuid
+from collections import Counter
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from app.core.logging import get_logger
-from app.models.employee import Employee, Role
+from app.models.employee import Employee
 from app.models.notification import NotificationKind, NotificationLevel
 from app.models.task import Task
 from app.repositories.audit import AuditRepository
@@ -39,6 +50,12 @@ logger = get_logger("app.task_escalation")
 TIER_ASSIGNEE = 1
 TIER_MANAGER = 2
 TIER_ADMIN = 3
+
+# How many escalation pop-ups (each a blocking modal on the dashboard) one person
+# may receive from a single sweep. The rest collapse into one summary pop-up.
+DEFAULT_POPUPS_PER_PERSON = 3
+
+_BOARD_LINK = "/dashboard/goals/tasks"
 
 
 # `Notification.title` is String(160) while `Task.title` is String(256), so a long
@@ -86,10 +103,96 @@ class EscalationOutcome:
     assignee_warned: int = 0
     managers_added: int = 0
     admins_added: int = 0
+    # Collapsed "N more overdue tasks" pop-ups sent to people over their cap.
+    summaries_sent: int = 0
 
     @property
     def total(self) -> int:
         return self.assignee_warned + self.managers_added + self.admins_added
+
+
+@dataclass(frozen=True)
+class _Notice:
+    """One message the sweep wants a person to see about one task."""
+
+    recipient_id: uuid.UUID
+    task: Task
+    title: str
+    body: str
+    level: NotificationLevel
+    # The single person this task raises a pop-up for this sweep. Everyone else
+    # gets the same message as a quiet inbox note (`quiet_kind`).
+    popup: bool
+    quiet_kind: NotificationKind
+    # True when the task was escalated TO this person (vs. their own task) -
+    # only changes the wording of a collapsed summary.
+    escalated_to_them: bool
+
+
+class _PopupLedger:
+    """Caps the pop-ups each person receives in one sweep."""
+
+    def __init__(self, cap: int) -> None:
+        self._cap = max(1, cap)
+        self._sent: Counter[uuid.UUID] = Counter()
+        self._own_overflow: Counter[uuid.UUID] = Counter()
+        self._escalated_overflow: Counter[uuid.UUID] = Counter()
+
+    def claim(self, recipient_id: uuid.UUID, *, escalated_to_them: bool) -> bool:
+        """True when this person still has pop-up budget; otherwise the notice is
+        counted toward their summary instead."""
+        if self._sent[recipient_id] < self._cap:
+            self._sent[recipient_id] += 1
+            return True
+        overflow = self._escalated_overflow if escalated_to_them else self._own_overflow
+        overflow[recipient_id] += 1
+        return False
+
+    def overflow(self) -> list[tuple[uuid.UUID, int, int]]:
+        """(recipient, own tasks collapsed, escalated tasks collapsed)."""
+        people = set(self._own_overflow) | set(self._escalated_overflow)
+        return [
+            (pid, self._own_overflow[pid], self._escalated_overflow[pid])
+            for pid in sorted(people, key=str)
+        ]
+
+
+class _AdminPool:
+    """Spreads the admin tier across every admin, least-loaded first.
+
+    "Load" is how many open tasks the admin already collaborates on, charged as
+    the sweep hands out tasks - so a backlog is dealt out evenly instead of the
+    first admin by name inheriting all of it.
+    """
+
+    def __init__(self, admins: Sequence[Employee], loads: dict[uuid.UUID, int]) -> None:
+        self._admins = [a for a in admins if a.is_active]
+        self._load = {a.id: loads.get(a.id, 0) for a in self._admins}
+
+    def pick(self, exclude: set[uuid.UUID]) -> Employee | None:
+        candidates = [a for a in self._admins if a.id not in exclude]
+        if not candidates:
+            return None
+        chosen = min(candidates, key=lambda a: (self._load[a.id], a.full_name, str(a.id)))
+        self._load[chosen.id] += 1
+        return chosen
+
+
+@dataclass
+class _Sweep:
+    """Everything one sweep looked up in batch, plus its running tallies."""
+
+    now: datetime
+    assignees: dict[uuid.UUID, Employee]
+    managers: dict[uuid.UUID, Employee]
+    admins: _AdminPool
+    ledger: _PopupLedger
+    tally: Counter[str] = field(default_factory=Counter)
+
+    def manager_of(self, assignee: Employee | None) -> Employee | None:
+        if assignee is None or assignee.manager_id is None:
+            return None
+        return self.managers.get(assignee.manager_id)
 
 
 class TaskEscalationService:
@@ -104,187 +207,242 @@ class TaskEscalationService:
         manager_after_days: int = 3,
         admin_after_days: int = 6,
         batch_limit: int = 200,
+        popups_per_person: int = DEFAULT_POPUPS_PER_PERSON,
     ) -> None:
         self._tasks = tasks
         self._employees = employees
         self._notifications = notifications
         self._audit = audit
-        self._warn_after_days = warn_after_days
-        self._manager_after_days = manager_after_days
-        self._admin_after_days = admin_after_days
+        self._tiers = (
+            (TIER_ADMIN, admin_after_days),
+            (TIER_MANAGER, manager_after_days),
+            (TIER_ASSIGNEE, warn_after_days),
+        )
         self._batch_limit = batch_limit
+        self._popups_per_person = popups_per_person
 
     async def run_due(self, now: datetime) -> EscalationOutcome:
         """Escalate every task that has crossed a threshold since the last sweep.
 
-        Tiers are applied in order, highest first within a task, so a task that
-        has been overdue for a week lands on its final tier in one pass rather
-        than taking three days of sweeps to catch up.
+        Each task is taken straight to its highest due tier in one pass, so a
+        task overdue for a week lands on its final tier without three days of
+        sweeps - but it raises one pop-up, not one per tier it skipped.
 
-        Each tier is capped at `batch_limit` tasks per sweep. The first sweep
-        after this is switched on walks the entire historical backlog, and an
-        ESCALATION notification is rendered by the dashboard as a blocking
-        full-screen modal - uncapped, one admin would have been handed a modal per
-        stale task and nobody could use the app until they had clicked through
-        every one. The remainder is simply picked up by the next tick.
+        Each tier's query is capped at `batch_limit` tasks per sweep, oldest
+        first; the remainder is picked up by the next tick.
         """
-        warned = await self._warn_assignees(now)
-        managers = await self._add_managers(now)
-        admins = await self._add_admins(now)
+        targets = await self._due_targets(now)
+        if not targets:
+            return EscalationOutcome()
+        sweep = await self._prepare(targets, now)
+        for task, tier in targets:
+            await self._escalate(task, tier, sweep)
+        summaries = await self._send_summaries(sweep.ledger)
         return EscalationOutcome(
-            assignee_warned=warned, managers_added=managers, admins_added=admins
+            assignee_warned=sweep.tally["warned"],
+            managers_added=sweep.tally["manager"],
+            admins_added=sweep.tally["admin"],
+            summaries_sent=summaries,
         )
 
-    # ---- tier 1: the assignee ---------------------------------------------- #
-    async def _warn_assignees(self, now: datetime) -> int:
-        cutoff = now - timedelta(days=self._warn_after_days)
-        count = 0
-        overdue = await self._tasks.list_overdue_for_escalation(
-            cutoff, below_level=TIER_ASSIGNEE, limit=self._batch_limit
-        )
-        for task in overdue:
-            days = _overdue_days(task, now)
-            await self._notifications.notify(
-                recipient_id=task.assignee_id,
-                kind=NotificationKind.ESCALATION,
-                title=_notification_title("Overdue: ", task.title),
-                body=f"{days} day{'s' if days != 1 else ''} past due. Update it or flag a blocker.",
-                level=NotificationLevel.WARNING,
-                link=_task_link(task),
-                entity_type="task",
-                entity_id=task.id,
+    async def _due_targets(self, now: datetime) -> list[tuple[Task, int]]:
+        """Every task with a tier due, paired with its HIGHEST due tier.
+
+        One query per tier (each with its own cutoff), highest first, so a task
+        that qualifies for several keeps only the top one. Returned oldest due
+        date first: those are the ones that get individual pop-ups when a
+        person's cap is reached.
+        """
+        by_id: dict[uuid.UUID, tuple[Task, int]] = {}
+        for tier, after_days in self._tiers:
+            overdue = await self._tasks.list_overdue_for_escalation(
+                now - timedelta(days=after_days), below_level=tier, limit=self._batch_limit
             )
-            await self._mark(task, TIER_ASSIGNEE, "overdue_warned")
-            count += 1
-        return count
+            for task in overdue:
+                by_id.setdefault(task.id, (task, tier))
+        return sorted(by_id.values(), key=lambda pair: _due_sort_key(pair[0]))
 
-    # ---- tier 2: the reporting manager ------------------------------------- #
-    async def _add_managers(self, now: datetime) -> int:
-        cutoff = now - timedelta(days=self._manager_after_days)
-        overdue = await self._tasks.list_overdue_for_escalation(
-            cutoff, below_level=TIER_MANAGER, limit=self._batch_limit
-        )
-        if not overdue:
-            return 0
-        # Two batched lookups instead of two queries PER TASK. The first sweep
-        # after enabling this walks the whole historical backlog at once, which
-        # is exactly when an N+1 would be felt.
-        assignees = await self._employees.get_many([t.assignee_id for t in overdue])
+    async def _prepare(self, targets: list[tuple[Task, int]], now: datetime) -> _Sweep:
+        """Batched lookups for the whole sweep - never a query per task. The first
+        sweep after enabling walks the whole backlog, exactly when an N+1 bites."""
+        assignees = await self._employees.get_many([t.assignee_id for t, _ in targets])
         manager_ids = {e.manager_id for e in assignees.values() if e.manager_id is not None}
         managers = await self._employees.get_many(list(manager_ids))
-
-        count = 0
-        for task in overdue:
-            assignee = assignees.get(task.assignee_id)
-            manager = (
-                managers.get(assignee.manager_id)
-                if assignee is not None and assignee.manager_id is not None
-                else None
-            )
-            # No manager on file, or the assignee IS the manager: there is nobody
-            # to pull in at this tier. Still advance the level, or the task would
-            # be re-examined on every sweep forever and never reach tier 3.
-            if await self._pull_in(task, manager, assignee, tier=TIER_MANAGER, now=now):
-                count += 1
-            else:
-                await self._mark(task, TIER_MANAGER, "overdue_manager_unavailable")
-        return count
-
-    # ---- tier 3: an admin --------------------------------------------------- #
-    async def _add_admins(self, now: datetime) -> int:
-        cutoff = now - timedelta(days=self._admin_after_days)
-        overdue = await self._tasks.list_overdue_for_escalation(
-            cutoff, below_level=TIER_ADMIN, limit=self._batch_limit
+        admins: Sequence[Employee] = []
+        loads: dict[uuid.UUID, int] = {}
+        if any(tier >= TIER_ADMIN for _, tier in targets):
+            admins = await self._employees.list_admins()
+            loads = await self._tasks.open_collaboration_counts([a.id for a in admins])
+        return _Sweep(
+            now=now,
+            assignees=assignees,
+            managers=managers,
+            admins=_AdminPool(admins, loads),
+            ledger=_PopupLedger(self._popups_per_person),
         )
-        if not overdue:
-            return 0
-        admin = await self._pick_admin()
-        assignees = await self._employees.get_many([t.assignee_id for t in overdue])
-        count = 0
-        for task in overdue:
-            if await self._pull_in(
-                task, admin, assignees.get(task.assignee_id), tier=TIER_ADMIN, now=now
-            ):
-                count += 1
-            else:
-                await self._mark(task, TIER_ADMIN, "overdue_admin_unavailable")
-        return count
 
-    async def _pick_admin(self) -> Employee | None:
-        """One admin to carry the final escalation.
+    # ---- one task ----------------------------------------------------------- #
+    async def _escalate(self, task: Task, tier: int, sweep: _Sweep) -> None:
+        """Apply `tier` to `task` once: pull people in, then notify them."""
+        previous = task.escalation_level
+        added, actions = await self._pull_in_people(task, tier, sweep)
+        warn_assignee = previous < TIER_ASSIGNEE
+        if warn_assignee:
+            actions.append("overdue_warned")
+            sweep.tally["warned"] += 1
 
-        Deliberately a single person rather than every admin: the point is to give
-        the task an owner senior enough to unblock it, and adding the whole admin
-        group as collaborators on every stale task would make the escalation
-        meaningless noise. Ordered by name, so the same admin is chosen every
-        sweep instead of rotating unpredictably.
-
-        IT_ADMIN counts: the org treats it as a full admin everywhere
-        (`CurrentUser._normalize_role`), and an org whose only admins hold that
-        stored role would otherwise have its last escalation tier quietly do
-        nothing at all.
-        """
-        admins = [
-            *await self._employees.list_by_role(Role.ADMIN),
-            *await self._employees.list_by_role(Role.IT_ADMIN),
+        # One pop-up per task: the most senior person just brought in, or the
+        # assignee when nobody was. Everyone else hears quietly via the inbox.
+        notices = [
+            self._escalated_notice(task, person, sweep, tier=added_by, popup=i == len(added) - 1)
+            for i, (person, added_by) in enumerate(added)
         ]
-        active = sorted((a for a in admins if a.is_active), key=lambda a: a.full_name)
-        return active[0] if active else None
+        if warn_assignee:
+            notices.append(self._assignee_notice(task, sweep.now, popup=not added))
+        for notice in notices:
+            await self._deliver(notice, sweep.ledger)
+        await self._mark(task, tier, actions, pulled_in=bool(added))
 
-    # ---- shared ------------------------------------------------------------- #
-    async def _pull_in(
-        self,
-        task: Task,
-        person: Employee | None,
-        assignee: Employee | None,
-        *,
-        tier: int,
-        now: datetime,
-    ) -> bool:
-        """Add `person` as a collaborator and tell them why. False when there is
-        nobody to add, so the caller can still advance the tier."""
+    async def _pull_in_people(
+        self, task: Task, tier: int, sweep: _Sweep
+    ) -> tuple[list[tuple[Employee, int]], list[str]]:
+        """Add the manager and/or an admin as collaborators, as `tier` requires.
+
+        Returns who was added with the tier that added them (in tier order) and
+        the audit actions. An empty tier is still recorded, so the task is not
+        re-examined forever.
+        """
+        added: list[tuple[Employee, int]] = []
+        actions: list[str] = []
+        if tier >= TIER_MANAGER and task.escalation_level < TIER_MANAGER:
+            manager = sweep.manager_of(sweep.assignees.get(task.assignee_id))
+            if await self._add(task, manager) and manager is not None:
+                added.append((manager, TIER_MANAGER))
+                sweep.tally["manager"] += 1
+                actions.append("overdue_manager_added")
+            else:
+                actions.append("overdue_manager_unavailable")
+        if tier >= TIER_ADMIN:
+            exclude = {task.assignee_id, *task.collaborator_ids, *(p.id for p, _ in added)}
+            admin = sweep.admins.pick(exclude)
+            if await self._add(task, admin) and admin is not None:
+                added.append((admin, TIER_ADMIN))
+                sweep.tally["admin"] += 1
+                actions.append("overdue_admin_added")
+            else:
+                actions.append("overdue_admin_unavailable")
+        return added, actions
+
+    async def _add(self, task: Task, person: Employee | None) -> bool:
+        """Add `person` as a collaborator. False when there is nobody to add."""
         if person is None or not person.is_active or person.id == task.assignee_id:
             return False
         await self._tasks.add_collaborator(task.id, person.id)  # idempotent
-        days = _overdue_days(task, now)
+        return True
+
+    # ---- notifications ------------------------------------------------------ #
+    def _escalated_notice(
+        self, task: Task, person: Employee, sweep: _Sweep, *, tier: int, popup: bool
+    ) -> _Notice:
+        assignee = sweep.assignees.get(task.assignee_id)
         who = assignee.full_name if assignee is not None else "someone on your team"
-        await self._notifications.notify(
+        days = _overdue_days(task, sweep.now)
+        return _Notice(
             recipient_id=person.id,
-            kind=NotificationKind.ESCALATION,
+            task=task,
             title=_notification_title("Escalated to you: ", task.title),
             body=f"{who}'s task is {days} days overdue. You have been added as a collaborator.",
             level=NotificationLevel.CRITICAL if tier == TIER_ADMIN else NotificationLevel.WARNING,
-            link=_task_link(task),
-            entity_type="task",
-            entity_id=task.id,
+            popup=popup,
+            quiet_kind=NotificationKind.TASK_ASSIGNED,
+            escalated_to_them=True,
         )
-        await self._mark(
-            task,
-            tier,
-            "overdue_manager_added" if tier == TIER_MANAGER else "overdue_admin_added",
-            pulled_in=True,
-        )
-        return True
 
-    async def _mark(self, task: Task, level: int, action: str, *, pulled_in: bool = False) -> None:
-        """Record that this tier has fired.
+    def _assignee_notice(self, task: Task, now: datetime, *, popup: bool) -> _Notice:
+        days = _overdue_days(task, now)
+        return _Notice(
+            recipient_id=task.assignee_id,
+            task=task,
+            title=_notification_title("Overdue: ", task.title),
+            body=f"{days} day{'s' if days != 1 else ''} past due. Update it or flag a blocker.",
+            level=NotificationLevel.WARNING,
+            popup=popup,
+            quiet_kind=NotificationKind.SYSTEM,
+            escalated_to_them=False,
+        )
+
+    async def _deliver(self, notice: _Notice, ledger: _PopupLedger) -> None:
+        """Send a notice as a pop-up (ESCALATION) if it is this task's one pop-up
+        and the person has budget left, as a quiet inbox note if it never was a
+        pop-up, or not at all when it is collapsed into the person's summary."""
+        if notice.popup:
+            if not ledger.claim(notice.recipient_id, escalated_to_them=notice.escalated_to_them):
+                return
+            kind = NotificationKind.ESCALATION
+        else:
+            kind = notice.quiet_kind
+        await self._notifications.notify(
+            recipient_id=notice.recipient_id,
+            kind=kind,
+            title=notice.title,
+            body=notice.body,
+            level=notice.level,
+            link=_task_link(notice.task),
+            entity_type="task",
+            entity_id=notice.task.id,
+        )
+
+    async def _send_summaries(self, ledger: _PopupLedger) -> int:
+        """One pop-up per person over their cap, standing in for the rest."""
+        sent = 0
+        for recipient_id, own, escalated in ledger.overflow():
+            await self._notifications.notify(
+                recipient_id=recipient_id,
+                kind=NotificationKind.ESCALATION,
+                title=_summary_title(own, escalated),
+                body="Open your task board to work through them, oldest first.",
+                level=NotificationLevel.WARNING,
+                link=_BOARD_LINK,
+            )
+            sent += 1
+        return sent
+
+    async def _mark(self, task: Task, level: int, actions: list[str], *, pulled_in: bool) -> None:
+        """Record that `level` has been reached.
 
         `escalation_level` always advances - that is what stops a tier being
         re-examined on every sweep forever, and it must advance even when the
         tier found nobody to pull in.
 
-        `escalated` - the flag the board badges "Escalated - manager/admin" - is
-        a different claim: that somebody was actually brought onto the task. It
-        is set only when that happened, and never for tier 1, which is a nudge to
-        the person already holding the task. Setting it on an empty tier labelled
-        tasks as escalated to a manager who was never added.
+        `escalated` - the flag the board badges "Escalated" - is a different
+        claim: that somebody was actually brought onto the task. It is set only
+        when that happened, and never for tier 1, which is a nudge to the person
+        already holding the task. Which badge ("manager" or "admin") is derived
+        from who is actually on the task (`Task.escalated_to`), never from the
+        level, so an admin tier that found no admin cannot claim one.
         """
         task.escalation_level = level
-        if pulled_in and level >= TIER_MANAGER:
+        if pulled_in:
             task.escalated = True
         await self._tasks.flush()
-        await self._audit.append(
-            actor="system",
-            action=f"task.{action}",
-            target=f"task:{task.id}:level={level}",
-        )
+        for action in actions:
+            await self._audit.append(
+                actor="system",
+                action=f"task.{action}",
+                target=f"task:{task.id}:level={level}",
+            )
+
+
+def _due_sort_key(task: Task) -> datetime:
+    """Oldest due date first; the query guarantees a due date, this only types it."""
+    return _as_utc(task.due_date) if task.due_date is not None else datetime.max.replace(tzinfo=UTC)
+
+
+def _summary_title(own: int, escalated: int) -> str:
+    total = own + escalated
+    noun = "task" if total == 1 else "tasks"
+    if own and escalated:
+        return f"{total} more overdue {noun} need your attention"
+    if escalated:
+        return f"{total} more overdue {noun} escalated to you"
+    return f"{total} more of your {noun} {'is' if total == 1 else 'are'} overdue"

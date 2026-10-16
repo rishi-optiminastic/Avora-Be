@@ -1,6 +1,6 @@
 # Deploying the Avora backend to a Hetzner VPS (Docker)
 
-This stack runs the API, a self-hosted Postgres, and the four background workers
+This stack runs the API, a self-hosted Postgres, and the background workers
 on a single VPS. TLS is terminated by the Coolify proxy running in front of the
 stack (it owns 80/443 and forwards to `api`); this compose no longer ships its
 own reverse proxy.
@@ -12,7 +12,9 @@ Coolify proxy (:80/:443, TLS) ──> api (uvicorn :8000)
                                   ├── scheduler-eod
                                   ├── scheduler-payroll
                                   ├── scheduler-autocheckout
+                                  ├── scheduler-task-escalation   (overdue tasks; idle until TASK_ESCALATION_ENABLED=true)
                                   ├── scheduler-circle-documents  (copies Circle docs; idle until CIRCLE_API_* set)
+                                  ├── scheduler-forms             (sends onboarding feedback forms; idle until one is published)
                                   └── worker-ocr   (separate Tesseract image)
 ```
 
@@ -114,6 +116,22 @@ cd /opt/avora && git pull
 cd be/deploy
 dc build && dc up -d   # migrate re-runs (no-op if already at head), then rolls services
 ```
+
+**Switching on overdue-task escalation.** `scheduler-task-escalation` ships idle
+(`TASK_ESCALATION_ENABLED=false`): until it is on, nobody is warned about an
+overdue task by the backend and nobody is pulled in as a collaborator. The
+dashboard still shows each person a once-a-day reminder of their own overdue
+tasks, but the manager/admin tiers only exist while the worker runs. To enable:
+
+1. Check the thresholds in `.env.prod` (`TASK_ESCALATION_*_AFTER_DAYS`).
+2. Set `TASK_ESCALATION_ENABLED=true` in `.env.prod` (Coolify: on the
+   `avora-scheduler-task-escalation` resource).
+3. `dc up -d scheduler-task-escalation` (Coolify: redeploy that resource after
+   `bash deploy/build-workers.sh`). Run exactly ONE instance.
+4. Watch `dc logs -f scheduler-task-escalation` for the first sweep. Over a
+   backlog it applies each task's highest due tier once, raises one pop-up per
+   task, and caps every person at a few pop-ups plus one "N more" summary per
+   sweep, so the first run does not bury anyone in modals.
 
 ## Notes & gotchas
 

@@ -26,6 +26,14 @@ from app.schemas.task import TaskCreate
 
 
 @dataclass(frozen=True)
+class TaskLoad:
+    """What is still on someone's plate: open tasks, and how many are late."""
+
+    open_tasks: int = 0
+    overdue: int = 0
+
+
+@dataclass(frozen=True)
 class ProjectManpowerRow:
     project_id: uuid.UUID
     people: int
@@ -234,6 +242,26 @@ class TaskRepository:
         rows = await self._session.execute(stmt.order_by(Task.due_date.asc()))
         return rows.scalars().all()
 
+    async def list_overdue_assigned_to(
+        self, caller: CurrentUser, now: datetime, *, limit: int
+    ) -> Sequence[Task]:
+        """The caller's OWN open tasks past their due date, oldest due first, at
+        most `limit`. Assignee is the caller, still AND-ed with the caller's scope
+        clause so this can never read further than `list_for_scope` would."""
+        stmt = select(Task).where(
+            Task.assignee_id == caller.employee_id,
+            Task.due_date.is_not(None),
+            Task.due_date < now,
+            Task.status != TaskStatus.DONE,
+        )
+        clause = self._scope_clause(caller)
+        if clause is not None:
+            stmt = stmt.where(clause)
+        rows = await self._session.execute(
+            stmt.order_by(Task.due_date.asc(), Task.id.asc()).limit(limit)
+        )
+        return rows.scalars().all()
+
     async def list_overdue_for_escalation(
         self, cutoff: datetime, *, below_level: int, limit: int = 200
     ) -> Sequence[Task]:
@@ -261,6 +289,29 @@ class TaskRepository:
             .limit(limit)
         )
         return rows.scalars().all()
+
+    async def open_collaboration_counts(
+        self, employee_ids: Sequence[uuid.UUID]
+    ) -> dict[uuid.UUID, int]:
+        """How many open (not DONE) tasks each employee collaborates on, in ONE
+        grouped query.
+
+        Feeds the escalation sweep's least-loaded admin pick. NOT scope-clamped
+        for the same reason as `list_overdue_for_escalation`: no caller, counts
+        only. Employees with no open collaborations are absent - default to 0.
+        """
+        if not employee_ids:
+            return {}
+        rows = await self._session.execute(
+            select(TaskCollaborator.employee_id, func.count())
+            .join(Task, Task.id == TaskCollaborator.task_id)
+            .where(
+                TaskCollaborator.employee_id.in_(employee_ids),
+                Task.status != TaskStatus.DONE,
+            )
+            .group_by(TaskCollaborator.employee_id)
+        )
+        return {employee_id: int(n or 0) for employee_id, n in rows.all()}
 
     async def count_done_total(self, caller: CurrentUser) -> tuple[int, int]:
         """(#done, #total) tasks in the caller's scope — the Overview KPI."""
@@ -293,6 +344,37 @@ class TaskRepository:
             for pid, people, open_tasks, total in rows.all()
             if pid is not None
         ]
+
+    async def load_for_employees(
+        self, employee_ids: Sequence[uuid.UUID], now: datetime
+    ) -> dict[uuid.UUID, TaskLoad]:
+        """Open and overdue task counts per assignee, in ONE grouped query.
+
+        Deliberately unscoped by caller: this feeds the per-department rollup,
+        whose own authorization decides which employees may be asked about, and
+        it returns counts only - never a title, an id, or anything that would let
+        a caller read a task they cannot otherwise see.
+
+        "Open" is anything not DONE; a task with no due date can never be
+        overdue. Employees with nothing open are simply absent from the result,
+        so callers should default to an empty `TaskLoad`.
+        """
+        if not employee_ids:
+            return {}
+        rows = await self._session.execute(
+            select(
+                Task.assignee_id,
+                func.count(),
+                func.count().filter(Task.due_date.is_not(None), Task.due_date < now),
+            )
+            .where(Task.assignee_id.in_(employee_ids), Task.status != TaskStatus.DONE)
+            .group_by(Task.assignee_id)
+        )
+        return {
+            assignee: TaskLoad(open_tasks=int(open_n or 0), overdue=int(late or 0))
+            for assignee, open_n, late in rows.all()
+            if assignee is not None
+        }
 
     async def flush(self) -> None:
         """Persist in-place mutations the service made on a fetched Task."""

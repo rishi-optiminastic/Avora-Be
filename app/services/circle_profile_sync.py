@@ -1,10 +1,15 @@
-"""Fill in personal details Avora is missing from Circle: date of birth,
-gender and profile photo.
+"""Fill in personal details Avora is missing from Circle (date of birth,
+gender and profile photo) and keep the onboarding buddy in step with Circle.
 
-Fill-only: a value Avora already has - entered by HR or by the person - is
-never replaced. Run per employee by `worker/circle_documents_scheduler.py`;
-the caller commits. Personal data travels only over the private Circle link
-(never id-sync) and is audited.
+Personal details are fill-only: a value Avora already has - entered by HR or by
+the person - is never replaced. The buddy is different: HR assigns and
+reassigns it in Circle, so Avora follows Circle. But it never clears one: if
+Circle names nobody, or someone Avora can't match, the current buddy stays and
+the mismatch is logged, the same care the reporting line gets in HR sync.
+
+Run per employee by `worker/circle_documents_scheduler.py`; the caller commits.
+Personal data travels only over the private Circle link (never id-sync) and is
+audited.
 """
 
 from __future__ import annotations
@@ -16,7 +21,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from app.core import storage
 from app.core.config import Settings
-from app.core.exceptions import NotFoundError, StorageError
+from app.core.exceptions import ConflictError, NotFoundError, StorageError
 from app.core.logging import get_logger
 from app.core.uploads import detect_media_type
 from app.models.employee import Employee, Gender
@@ -78,14 +83,14 @@ class CircleProfileSync:
         self._client = client
 
     async def fill(self, employee: Employee) -> list[str]:
-        """Fill what is missing; returns the names of the fields filled."""
-        if employee.date_of_birth and employee.gender and employee.has_avatar:
-            return []  # nothing to ask Circle for
+        """Fill what is missing; returns the names of the fields changed."""
         try:
             profile = await self._client.profile(employee.work_email)
         except NotFoundError:
             return []
         filled = await self._fill_details(employee, profile)
+        if await self._sync_buddy(employee, profile):
+            filled.append("buddy")
         if not employee.has_avatar and await self._fill_avatar(employee, profile):
             filled.append("avatar")
         if filled:
@@ -107,6 +112,22 @@ class CircleProfileSync:
         if fields:
             await self._employees.admin_update_profile(employee, fields)
         return sorted(fields)
+
+    async def _sync_buddy(self, employee: Employee, profile: dict[str, Any]) -> bool:
+        email = str(profile.get("buddy_email") or "").strip().lower()
+        if not email:
+            return False  # Circle names nobody: keep whatever Avora has
+        try:
+            buddy = await self._employees.find_by_work_email_insensitive(email)
+        except ConflictError:
+            buddy = None  # two people share it: don't guess
+        if buddy is None or not buddy.is_active or buddy.id == employee.id:
+            logger.warning("circle_buddy_unmatched", extra={"employee": str(employee.id)})
+            return False
+        if employee.buddy_id == buddy.id:
+            return False
+        await self._employees.set_buddy(employee, buddy.id)
+        return True
 
     async def _fill_avatar(self, employee: Employee, profile: dict[str, Any]) -> bool:
         doc_id = str(profile.get("avatar_document_id") or "")

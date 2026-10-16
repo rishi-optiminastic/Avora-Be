@@ -78,13 +78,15 @@ class EodCumulativeMember(BaseModel):
     job_title: str | None = None
     # submitted | pending | absent | failed | missing
     coverage: str
+    submitted_days: int = 0  # distinct expected days reported in the window
     latest_report_id: uuid.UUID | None = None
     latest_report_date: str | None = None
 
 
-class EodCumulativeRead(BaseModel):
-    """A rolled-up team digest over [from_date, to_date]: coverage counts, summed
-    effort, the per-person roster, and every report that carries content."""
+class EodRollup(BaseModel):
+    """Coverage + summed effort over [from_date, to_date] — the shape every EOD
+    rollup shares, whether it covers a team or a department. Fields stay required
+    so a caller that forgets one fails loudly instead of reporting a quiet zero."""
 
     from_date: str
     to_date: str
@@ -94,7 +96,70 @@ class EodCumulativeRead(BaseModel):
     absent: int
     failed: int
     missing: int
-    submission_rate: float  # submitted / member_count, 0..1
+    # Per day, not per person: submitted_days / (member_count * working_days),
+    # 0..1. The five counts above are one representative band per person, so on
+    # a multi-day window they say who reported at all, not how often.
+    submission_rate: float
+    working_days: int  # days in the window a report was due (work week - holidays)
+    submitted_days: int  # distinct (person, expected day) pairs reported
     totals: EodCumulativeTotals
+
+
+class EodCumulativeRead(EodRollup):
+    """A rolled-up team digest: the shared coverage/effort rollup plus the
+    per-person roster and every report that carries content. This one DOES carry
+    the narratives, so it is only ever served through the personal scope — a
+    manager reading their own reports."""
+
     reports: list[EodReportRead]
     members: list[EodCumulativeMember]
+
+
+class EodDepartmentMember(BaseModel):
+    """One person's line in a department rollup.
+
+    Carries the day's numbers and the work shipped, but deliberately NO
+    `summary`. That line matters: a completed task is an organisational fact
+    that already sits on the board for anyone in scope to see, whereas the
+    end-of-day narrative is the person's own account of their day and goes to
+    their reporting manager alone. Adding a `summary` field here would quietly
+    undo that - don't.
+    """
+
+    employee_id: uuid.UUID
+    name: str
+    job_title: str | None = None
+    # submitted | pending | absent | failed | missing
+    coverage: str
+    submitted_days: int = 0  # distinct expected days reported in the window
+    worked_minutes: int = 0
+    active_minutes: int = 0
+    active_pct: int = 0  # active/worked, rounded; 0 when nothing was worked
+    tasks_done: int = 0
+    blockers: int = 0
+    # Titles of what they actually shipped, in report order. `tasks_done` can
+    # exceed len(tasks) - the count comes from the day's metrics, while these are
+    # the titles the report happened to name.
+    tasks: list[str] = Field(default_factory=list)
+    # What is still on their plate RIGHT NOW, from the task board rather than the
+    # report: `tasks_done` is what the day closed, these are what it left open.
+    # Counts only - never titles, so this cannot leak a task out of scope.
+    tasks_open: int = 0
+    tasks_overdue: int = 0
+
+
+class EodDepartmentDigest(EodRollup):
+    """One department's rolled-up day: coverage, summed effort, the roster, and
+    the blockers the department raised.
+
+    `blockers` is intentionally unattributed — "what is holding this department
+    up" is operational, where "what X is stuck on" is personal.
+    """
+
+    department: str  # the department name, or the unassigned-bucket label
+    members: list[EodDepartmentMember]
+    blockers: list[str]
+    # The department's standing workload, summed off the members: what is open
+    # across the team and how much of it has slipped its due date.
+    open_tasks: int = 0
+    overdue_tasks: int = 0

@@ -9,6 +9,7 @@ service (Golden rule #3).
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from typing import Annotated
 
 from fastapi import APIRouter, File, Form, Query, Response, UploadFile, status
@@ -22,7 +23,8 @@ from app.core.deps import (
     UploadRateLimitDep,
 )
 from app.core.exceptions import NotFoundError
-from app.models.reimbursement import ReimbursementStatus
+from app.models.reimbursement import Reimbursement, ReimbursementStatus
+from app.schemas.auth import CurrentUser
 from app.schemas.common import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE, Page
 from app.schemas.reimbursement import (
     ApprovalRevoke,
@@ -31,8 +33,27 @@ from app.schemas.reimbursement import (
     ReimbursementRead,
     SettlementMonthUpdate,
 )
+from app.services.reimbursement_service import ReimbursementService
 
 router = APIRouter(prefix="/reimbursements", tags=["reimbursements"])
+
+
+async def _reads(
+    service: ReimbursementService, caller: CurrentUser, rows: Sequence[Reimbursement]
+) -> list[ReimbursementRead]:
+    """Response models carrying the caller's `can_decide`, as the service
+    computes it (the same rules the decision endpoints enforce)."""
+    decidable = await service.decidable_ids(caller, rows)
+    return [
+        ReimbursementRead.model_validate(r).model_copy(update={"can_decide": r.id in decidable})
+        for r in rows
+    ]
+
+
+async def _read(
+    service: ReimbursementService, caller: CurrentUser, row: Reimbursement
+) -> ReimbursementRead:
+    return (await _reads(service, caller, [row]))[0]
 
 
 def _safe_filename(name: str) -> str:
@@ -53,7 +74,7 @@ async def list_reimbursements(
         caller, offset=(page - 1) * size, limit=size, status=status_filter
     )
     return Page(
-        items=[ReimbursementRead.model_validate(r) for r in rows],
+        items=await _reads(service, caller, rows),
         page=page,
         size=size,
         total=total,
@@ -66,7 +87,7 @@ async def submit_reimbursement(
     caller: CurrentUserDep,
     service: ReimbursementServiceDep,
 ) -> ReimbursementRead:
-    return ReimbursementRead.model_validate(await service.submit(caller, payload))
+    return await _read(service, caller, await service.submit(caller, payload))
 
 
 @router.get("/{reimbursement_id}", response_model=ReimbursementRead)
@@ -75,7 +96,8 @@ async def get_reimbursement(
     caller: CurrentUserDep,
     service: ReimbursementServiceDep,
 ) -> ReimbursementRead:
-    return ReimbursementRead.model_validate(await service.get_for_caller(caller, reimbursement_id))
+    row = await service.get_for_caller(caller, reimbursement_id)
+    return await _read(service, caller, row)
 
 
 @router.post("/{reimbursement_id}/manager-decision", response_model=ReimbursementRead)
@@ -86,9 +108,8 @@ async def manager_decide_reimbursement(
     service: ReimbursementServiceDep,
 ) -> ReimbursementRead:
     """Step 1 — the applicant's reporting manager (or HR/Admin) approves/rejects."""
-    return ReimbursementRead.model_validate(
-        await service.manager_decide(caller, reimbursement_id, payload)
-    )
+    row = await service.manager_decide(caller, reimbursement_id, payload)
+    return await _read(service, caller, row)
 
 
 @router.post("/{reimbursement_id}/hr-decision", response_model=ReimbursementRead)
@@ -99,9 +120,8 @@ async def hr_decide_reimbursement(
     service: ReimbursementServiceDep,
 ) -> ReimbursementRead:
     """Step 2 — HR/Admin final approval of a manager-approved claim."""
-    return ReimbursementRead.model_validate(
-        await service.hr_decide(caller, reimbursement_id, payload)
-    )
+    row = await service.hr_decide(caller, reimbursement_id, payload)
+    return await _read(service, caller, row)
 
 
 @router.post("/{reimbursement_id}/withdraw", response_model=ReimbursementRead)
@@ -110,7 +130,7 @@ async def withdraw_reimbursement(
     caller: CurrentUserDep,
     service: ReimbursementServiceDep,
 ) -> ReimbursementRead:
-    return ReimbursementRead.model_validate(await service.withdraw(caller, reimbursement_id))
+    return await _read(service, caller, await service.withdraw(caller, reimbursement_id))
 
 
 @router.patch("/{reimbursement_id}/settlement-month", response_model=ReimbursementRead)
@@ -126,7 +146,7 @@ async def move_settlement_month(
     been released — one would un-pay someone, the other would never pay them.
     """
     row = await service.move_settlement_month(caller, reimbursement_id, payload.settlement_month)
-    return ReimbursementRead.model_validate(row)
+    return await _read(service, caller, row)
 
 
 # Path kept as `revoke-approval` so an already-deployed dashboard keeps working;
@@ -141,7 +161,7 @@ async def unschedule(
     """HR/finance: take an approved claim out of its payroll month, back to the
     final-approval queue."""
     row = await service.unschedule(caller, reimbursement_id, payload.note)
-    return ReimbursementRead.model_validate(row)
+    return await _read(service, caller, row)
 
 
 @router.post(
@@ -170,7 +190,7 @@ async def add_receipt(
         filename=file.filename,
         content_type=file.content_type or "application/octet-stream",
     )
-    return ReimbursementRead.model_validate(row)
+    return await _read(service, caller, row)
 
 
 @router.delete("/{reimbursement_id}/receipts/{receipt_id}", response_model=ReimbursementRead)
@@ -182,7 +202,7 @@ async def remove_receipt(
 ) -> ReimbursementRead:
     """Remove one proof from your own claim, while it can still be edited."""
     row = await service.remove_receipt(caller, reimbursement_id, receipt_id)
-    return ReimbursementRead.model_validate(row)
+    return await _read(service, caller, row)
 
 
 @router.get("/{reimbursement_id}/receipts/{receipt_id}")

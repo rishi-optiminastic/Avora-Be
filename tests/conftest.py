@@ -34,6 +34,11 @@ from app.main import create_app
 from app.models import Base, Device, Employee, EmployeeStatus, Role
 from app.models.attendance_policy import AttendancePolicy
 from app.models.work_session import WorkSession
+from app.repositories.attendance_policy import AttendancePolicyRepository
+from app.repositories.employee import EmployeeRepository
+from app.repositories.leave_policy import LeavePolicyRepository
+from app.repositories.probation_checklist import ProbationChecklistRepository
+from app.services.probation_forms import ProbationFormLink
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
 
@@ -79,6 +84,9 @@ class _FakeEmailService:
     """
 
     outbox: ClassVar[list[tuple[str, str]]] = []
+    # The `letter` attachment of each probation email, in send order (None when
+    # the mail went out without one).
+    letters: ClassVar[list[object]] = []
 
     def _record(self, kwargs: dict[str, object], method: str) -> None:
         to = kwargs.get("to")
@@ -116,9 +124,11 @@ class _FakeEmailService:
 
     async def send_probation_confirmed(self, **kwargs: object) -> None:
         self._record(kwargs, "probation_confirmed")
+        type(self).letters.append(kwargs.get("letter"))
 
     async def send_probation_extended(self, **kwargs: object) -> None:
         self._record(kwargs, "probation_extended")
+        type(self).letters.append(kwargs.get("letter"))
 
     async def send_agent_reinstall(self, **kwargs: object) -> None:
         return None
@@ -167,6 +177,13 @@ def settings() -> Settings:
         aws_bucket_name="",
         aws_access_key_id="",
         aws_secret_access_key="",
+        # Same reasoning for the LLM: blank the key so NO test can reach
+        # OpenRouter (Testing §9 - no real external calls). `Settings()` reads
+        # the developer's .env for anything not passed here, so without this a
+        # machine with a real key had the suite billing live requests - the task
+        # paste tests hit the API and came back 402. Tests that need a model stub
+        # it and `model_copy` the key back in (see tests/test_eod.py).
+        openrouter_api_key="",
     )
 
 
@@ -215,6 +232,7 @@ async def client(
     app.dependency_overrides[get_jwks_client] = lambda: _FakeJwksClient()
     app.dependency_overrides[get_email_service] = lambda: _FakeEmailService()
     _FakeEmailService.outbox.clear()
+    _FakeEmailService.letters.clear()
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
@@ -353,3 +371,14 @@ def agent_headers(raw_token: str, body: dict[str, object]) -> tuple[bytes, dict[
         "X-Signature": sig,
         "Content-Type": "application/json",
     }
+
+
+def probation_link(db: AsyncSession) -> ProbationFormLink:
+    """The forms services' view of probation (clock, end dates, checklist),
+    wired to the test session."""
+    return ProbationFormLink(
+        ProbationChecklistRepository(db),
+        LeavePolicyRepository(db),
+        AttendancePolicyRepository(db),
+        EmployeeRepository(db),
+    )

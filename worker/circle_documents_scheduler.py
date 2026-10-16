@@ -95,7 +95,8 @@ async def copy_for_employee(employee_id: uuid.UUID, work_email: str) -> int:
 
 
 async def fill_profile_for(employee_id: uuid.UUID) -> list[str]:
-    """Date of birth, gender and photo Avora is missing - in its own transaction."""
+    """Date of birth, gender and photo Avora is missing, plus the onboarding
+    buddy - in its own transaction."""
     async with SessionFactory() as session:
         employee = await EmployeeRepository(session).get(employee_id)
         if employee is None:

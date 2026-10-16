@@ -13,8 +13,6 @@ off unless `eod_vision_active`, and the vision prompt forbids transcribing secre
 from __future__ import annotations
 
 import json
-import uuid
-from collections.abc import Sequence
 from typing import Any
 
 import httpx
@@ -22,7 +20,6 @@ import httpx
 from app.core.config import Settings
 from app.core.logging import get_logger
 from app.schemas.eod import EodDraftContent
-from app.schemas.task import ParsedTask
 
 logger = get_logger("app.llm")
 
@@ -92,45 +89,41 @@ _VISION_PROMPT = (
 )
 
 
+# Extraction only: the model reports the header text it saw and never an id.
+# It used to be handed the roster and asked to copy the matching UUID back, which
+# is the one thing language models are reliably bad at - a near-miss id was
+# dropped to "needs an assignee" and a plausible-but-wrong one silently gave the
+# task to someone else. Names are now resolved in `task_paste`, against the
+# caller's own roster, so the roster never leaves the system at all.
 _TASK_PARSE_PROMPT = (
     "You convert a pasted, free-form to-do list into structured tasks. The paste "
-    "groups tasks under assignee headers like 'Tushar -' or 'Arkit-'; a header "
-    "such as 'General Tasks -', 'General -', or text with no name means UNASSIGNED. "
-    "Each non-empty line under a header is ONE task — its title. Rules: "
+    "usually groups tasks under assignee headers like 'Tushar -' or 'Arkit-'; a "
+    "header such as 'General Tasks -', 'General -', or text with no name means "
+    "unassigned. Each non-empty line under a header is ONE task — its title. Rules: "
     "(1) Strip leading bullets, numbering, and tree characters (├──, └──, │, -, *, •). "
     "(2) Ignore decorative/separator lines and obvious section prose that is not a task. "
     "(3) Keep the title concise (max 256 chars); do not invent tasks. "
-    "(4) Match each assignee header to exactly one person from the provided ROSTER "
-    "(match on first name / partial, case-insensitive). Put that person's id in "
-    "assignee_id. If the header matches no one or is general/unassigned, set "
-    "assignee_id to null. NEVER output an id that is not in the ROSTER. "
-    "(5) Also echo the header text you used in assignee_name (or null if unassigned). "
+    "(4) For each task, copy the assignee header it sat under, VERBATIM and with "
+    "nothing added, into assignee_name. Use null when it sat under no header or "
+    "under a general/unassigned one. Never put an id, email, or guess in that "
+    "field — only text that actually appears in the paste. "
     'Respond with ONLY a JSON object of this exact shape: {"tasks": [{"title": string, '
-    '"assignee_id": string-uuid-or-null, "assignee_name": string-or-null}]}. '
+    '"assignee_name": string-or-null}]}. '
     "No markdown, no code fences, no prose around the JSON."
 )
 
 
-def _to_parsed_task(item: Any, by_id: dict[str, str]) -> ParsedTask | None:
-    """Validate one model-emitted task. Drops anything without a usable title and
-    nulls an assignee id the model invented (not in the caller's roster)."""
+def _to_named_task(item: Any) -> tuple[str, str | None] | None:
+    """One model-emitted task as (title, assignee_name). Drops anything without a
+    usable title; the name is resolved to a person by the caller, not here."""
     if not isinstance(item, dict):
         return None
     title = item.get("title")
     if not isinstance(title, str) or not title.strip():
         return None
-    raw_id = item.get("assignee_id")
-    assignee_id: uuid.UUID | None = None
-    assignee_name: str | None = None
-    if isinstance(raw_id, str) and raw_id in by_id:
-        assignee_id = uuid.UUID(raw_id)
-        assignee_name = by_id[raw_id]
-    else:
-        raw_name = item.get("assignee_name")
-        assignee_name = raw_name if isinstance(raw_name, str) and raw_name.strip() else None
-    return ParsedTask(
-        title=title.strip()[:256], assignee_id=assignee_id, assignee_name=assignee_name
-    )
+    raw_name = item.get("assignee_name")
+    name = raw_name.strip() if isinstance(raw_name, str) and raw_name.strip() else None
+    return title.strip()[:256], name
 
 
 class LlmError(Exception):
@@ -186,18 +179,15 @@ class LlmService:
             "detail": detail if isinstance(detail, str) else "",
         }
 
-    async def parse_tasks(
-        self, text: str, roster: Sequence[tuple[uuid.UUID, str]]
-    ) -> list[ParsedTask]:
-        """Turn a pasted blob into structured tasks. The roster (id, name) is the
-        caller's *visible* people; the model resolves each name header to an id
-        from it, and we keep only ids that are actually in the roster — a
-        fabricated/out-of-scope id is dropped to null (never trust the model)."""
-        by_id = {str(rid): name for rid, name in roster}
-        roster_lines = "\n".join(f"- {rid}: {name}" for rid, name in roster) or "- (no one)"
-        prompt = f"ROSTER (id: name):\n{roster_lines}\n\nPASTED TASKS:\n{text}"
+    async def parse_tasks(self, text: str) -> list[tuple[str, str | None]]:
+        """Extract (title, assignee_name) pairs from a pasted blob.
+
+        Only the fallback for text the deterministic parser could not read. The
+        model sees the paste and nothing else - no roster, no ids - and the names
+        it reports are matched to people by `task_paste.resolve_named_tasks`.
+        """
         content = await self._complete(
-            prompt,
+            f"PASTED TASKS:\n{text}",
             system_prompt=_TASK_PARSE_PROMPT,
             model=self._settings.effective_task_parse_model,
         )
@@ -205,7 +195,7 @@ class LlmService:
         raw_tasks = parsed.get("tasks") if isinstance(parsed, dict) else None
         if not isinstance(raw_tasks, list):
             raise LlmError("llm response malformed")
-        return [task for item in raw_tasks if (task := _to_parsed_task(item, by_id)) is not None]
+        return [task for item in raw_tasks if (task := _to_named_task(item)) is not None]
 
     async def _complete(self, user_content: str, *, system_prompt: str, model: str) -> str:
         return await self._post_chat(

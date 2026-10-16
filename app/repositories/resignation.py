@@ -1,7 +1,8 @@
 """Resignation data access — the only place resignation queries are built.
 
-Row scope: an employee sees their own; HR/Admin see everyone's. Scope is derived
-from the caller's server-side role, never a client field (Golden rule #3).
+Row scope: an employee sees their own, plus (read-only) their direct reports'
+via the `manager_id` reporting line; HR/Admin see everyone's. Scope is derived
+from the caller's server-side record, never a client field (Golden rule #3).
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from collections.abc import Sequence
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.employee import Role
+from app.models.employee import Employee, Role
 from app.models.resignation import Resignation, ResignationStatus
 from app.schemas.auth import CurrentUser
 from app.schemas.resignation import ResignationCreate
@@ -23,10 +24,24 @@ class ResignationRepository:
         self._session = session
 
     def _scope_clause(self, caller: CurrentUser) -> ColumnElement[bool] | None:
-        """None ⇒ unrestricted (HR/Admin). Everyone else sees only their own."""
+        """None => unrestricted (HR/Admin). Everyone else sees their own, and a
+        reporting manager also sees their direct reports' - whatever role they
+        hold, because the reporting line grants scope, not the title (5.3).
+
+        Seeing is not deciding: only HR/Admin decide (`ResignationService`).
+        VIEWER never picks people up from the org chart (explicit scope only).
+        """
         if caller.role in (Role.ADMIN, Role.HR):
             return None
-        return Resignation.employee_id == caller.employee_id
+        own = Resignation.employee_id == caller.employee_id
+        if caller.role is Role.VIEWER:
+            return own
+        resigner_manager = (
+            select(Employee.manager_id)
+            .where(Employee.id == Resignation.employee_id)
+            .scalar_subquery()
+        )
+        return own | (resigner_manager == caller.employee_id)
 
     async def create(self, payload: ResignationCreate, *, employee_id: uuid.UUID) -> Resignation:
         row = Resignation(

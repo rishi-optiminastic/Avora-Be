@@ -8,9 +8,25 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
+from app.core.exceptions import ValidationError
+from app.models.employee import Role
+from app.models.task import Task, TaskCadence, TaskStatus
+from app.repositories.assignment_grant import AssignmentGrantRepository
+from app.repositories.audit import AuditRepository
+from app.repositories.employee import EmployeeRepository
+from app.repositories.notification import NotificationRepository
+from app.repositories.task import TaskRepository
+from app.repositories.task_comment import TaskCommentRepository
+from app.repositories.work_entity import WorkEntityRepository
+from app.schemas.auth import CurrentUser
+from app.services.llm_service import LlmError
+from app.services.notification_service import NotificationService
+from app.services.task_service import MY_OVERDUE_LIMIT, TaskService
 from tests.conftest import _Seed, auth_headers
 
 
@@ -107,6 +123,66 @@ async def test_outsider_cannot_read_task_gets_404(
         f"/api/v1/tasks/{task['id']}", headers=auth_headers(settings, seed.outsider)
     )
     assert resp.status_code == 404
+
+
+async def test_my_overdue_returns_only_the_callers_own_open_overdue_tasks(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """The reminder feed is the caller's OWN overdue work - never the whole
+    scope, not even for an admin, whose delayed-tasks view is the entire org."""
+    now = datetime.now(UTC)
+    late, later = now - timedelta(days=3), now - timedelta(days=1)
+
+    def _task(assignee: object, title: str, due: datetime | None, **kw: object) -> Task:
+        return Task(
+            title=title, assignee_id=assignee, cadence=TaskCadence.ONE_TIME, due_date=due, **kw
+        )
+
+    db.add_all(
+        [
+            _task(seed.admin.id, "admin newer", later),
+            _task(seed.admin.id, "admin older", late, status=TaskStatus.IN_PROGRESS),
+            _task(seed.admin.id, "admin done", late, status=TaskStatus.DONE),
+            _task(seed.admin.id, "admin future", now + timedelta(days=2)),
+            _task(seed.admin.id, "admin undated", None),
+            _task(seed.report.id, "report late", late),
+        ]
+    )
+    await db.commit()
+
+    admin = await client.get(
+        "/api/v1/tasks/mine/overdue", headers=auth_headers(settings, seed.admin)
+    )
+    assert admin.status_code == 200
+    assert [t["title"] for t in admin.json()] == ["admin older", "admin newer"]
+
+    report = await client.get(
+        "/api/v1/tasks/mine/overdue", headers=auth_headers(settings, seed.report)
+    )
+    assert [t["title"] for t in report.json()] == ["report late"]
+
+    outsider = await client.get(
+        "/api/v1/tasks/mine/overdue", headers=auth_headers(settings, seed.outsider)
+    )
+    assert outsider.status_code == 200 and outsider.json() == []
+
+    assert (await client.get("/api/v1/tasks/mine/overdue")).status_code == 401
+
+
+async def test_my_overdue_is_capped(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    due = datetime.now(UTC) - timedelta(days=2)
+    db.add_all(
+        Task(title=f"t{i}", assignee_id=seed.report.id, cadence=TaskCadence.ONE_TIME, due_date=due)
+        for i in range(MY_OVERDUE_LIMIT + 3)
+    )
+    await db.commit()
+    res = await client.get(
+        "/api/v1/tasks/mine/overdue", headers=auth_headers(settings, seed.report)
+    )
+    assert res.status_code == 200
+    assert len(res.json()) == MY_OVERDUE_LIMIT
 
 
 async def test_status_update_sets_completed_at(
@@ -391,8 +467,57 @@ async def test_parse_requires_manager(client: AsyncClient, settings: Settings, s
     assert resp.status_code == 403
 
 
-# (Parsing past the manager gate calls OpenRouter — covered by the manager-gate
-# test above; we don't exercise the live model in the unit suite.)
+async def test_parse_works_with_no_llm_configured(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """The structured format needs no model at all.
+
+    Paste-import used to fail outright whenever OPENROUTER_API_KEY / the model
+    were unset - it raised "Task parsing isn't configured." before reading a
+    single line. The test settings have no key, which is exactly that case.
+    """
+    assert not settings.task_parse_configured  # the regression's precondition
+
+    resp = await client.post(
+        "/api/v1/tasks/parse",
+        json={"text": "Remy -\n- Ship the thing\n- Fix the other thing\n"},
+        headers=auth_headers(settings, seed.manager),
+    )
+    assert resp.status_code == 200
+    tasks = resp.json()["tasks"]
+    assert [t["title"] for t in tasks] == ["Ship the thing", "Fix the other thing"]
+    # "Remy -" resolved to Remy Report, who is in the manager's scope.
+    assert {t["assignee_id"] for t in tasks} == {str(seed.report.id)}
+
+
+async def test_parse_resolves_a_name_only_inside_the_callers_scope(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """The roster handed to the matcher is the caller's visible people, so a
+    header naming someone out of scope resolves to nobody - it must not become a
+    task assigned across a team boundary (§5.3)."""
+    resp = await client.post(
+        "/api/v1/tasks/parse",
+        json={"text": "Olive -\n- Out of scope work\n"},
+        headers=auth_headers(settings, seed.manager),
+    )
+    assert resp.status_code == 200
+    (task,) = resp.json()["tasks"]
+    assert task["assignee_id"] is None
+    # The label still comes back, so the UI can show what needs fixing.
+    assert task["assignee_name"] == "Olive"
+
+
+async def test_parse_reports_a_clear_error_when_it_can_read_nothing(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    resp = await client.post(
+        "/api/v1/tasks/parse",
+        json={"text": "-----\n\n=====\n"},
+        headers=auth_headers(settings, seed.manager),
+    )
+    assert resp.status_code == 422
+    assert "own line" in resp.text  # tells the user the format, not just "failed"
 
 
 # -- Collaborators ---------------------------------------------------------- #
@@ -614,3 +739,104 @@ async def test_grant_applies_to_bulk_create_too(
         headers=auth_headers(settings, seed.manager),
     )
     assert resp.status_code == 201, resp.text
+
+
+# -- Paste-import fallback to the model ------------------------------------- #
+
+
+class _StubParseLlm:
+    """Stands in for OpenRouter. Returns (title, assignee_name) pairs - the model
+    is never given ids, so this is the whole surface it can influence."""
+
+    def __init__(self, items: list[tuple[str, str | None]] | None = None) -> None:
+        self.items = items or []
+        self.calls = 0
+        self.texts: list[str] = []
+
+    @property
+    def task_parse_ready(self) -> bool:
+        return True
+
+    async def parse_tasks(self, text: str) -> list[tuple[str, str | None]]:
+        self.calls += 1
+        self.texts.append(text)
+        return self.items
+
+
+def _task_service(db: AsyncSession, llm: object) -> TaskService:
+    return TaskService(
+        TaskRepository(db),
+        EmployeeRepository(db),
+        AssignmentGrantRepository(db),
+        WorkEntityRepository(db),
+        TaskCommentRepository(db),
+        AuditRepository(db),
+        NotificationService(NotificationRepository(db)),
+        _NoEmail(),  # type: ignore[arg-type]
+        llm,  # type: ignore[arg-type]
+    )
+
+
+class _NoEmail:
+    async def send_task_assigned(self, **kw: object) -> None:
+        return None
+
+
+def _manager(seed: _Seed) -> CurrentUser:
+    return CurrentUser(employee_id=seed.manager.id, role=Role.MANAGER, manager_id=None)
+
+
+async def test_structured_paste_never_reaches_the_model(db: AsyncSession, seed: _Seed) -> None:
+    """The deterministic parser handles the format people actually paste, so a
+    structured paste must not spend an LLM call even when one is configured."""
+    llm = _StubParseLlm([("should not be used", None)])
+    tasks = await _task_service(db, llm).parse_tasks(
+        _manager(seed), "Remy -\n- Ship the thing\n- Fix the other thing\n"
+    )
+    assert llm.calls == 0
+    assert [t.title for t in tasks] == ["Ship the thing", "Fix the other thing"]
+
+
+async def test_unstructured_paste_falls_back_and_resolves_names_in_code(
+    db: AsyncSession, seed: _Seed
+) -> None:
+    """Prose carries no header and no bullets, so the model is asked - and the
+    name IT reports is matched to a person here, against the caller's roster."""
+    llm = _StubParseLlm(
+        [
+            ("Own the migration", "Remy"),  # resolves to the manager's report
+            ("Chase the vendor", "Olive"),  # out of the caller's scope
+            ("Tidy the backlog", "General"),  # means nobody
+        ]
+    )
+    tasks = await _task_service(db, llm).parse_tasks(
+        _manager(seed),
+        "In the meeting we agreed someone has to own the migration before Friday, "
+        "chase the vendor, and tidy the backlog at some point.",
+    )
+    assert llm.calls == 1
+    # The paste reached the model; the roster did not.
+    assert str(seed.report.id) not in llm.texts[0]
+    assert "Remy Report" not in llm.texts[0]
+
+    resolved = {t.title: (t.assignee_id, t.assignee_name) for t in tasks}
+    assert resolved["Own the migration"] == (seed.report.id, "Remy")
+    # Out of scope resolves to nobody, but keeps the label for the user to fix.
+    assert resolved["Chase the vendor"] == (None, "Olive")
+    assert resolved["Tidy the backlog"] == (None, None)
+
+
+async def test_a_failing_model_still_returns_whatever_could_be_read(
+    db: AsyncSession, seed: _Seed
+) -> None:
+    """A bulleted paste is structured, so it never asks the model at all - but if
+    the model is reached and fails, the line split is still better than an error
+    the user cannot act on."""
+
+    class _Failing(_StubParseLlm):
+        async def parse_tasks(self, text: str) -> list[tuple[str, str | None]]:
+            raise LlmError("provider down")
+
+    with pytest.raises(ValidationError):
+        # Nothing readable AND the model is down -> a real error, not silence.
+        await _task_service(db, _Failing()).parse_tasks(_manager(seed), "-----\n=====\n")

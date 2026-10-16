@@ -1,8 +1,10 @@
 """Resignation business rules.
 
 An employee submits their own resignation; only HR/Admin may decide it (never
-their own — segregation of duties). Reads are scoped in the repository (own +
-HR/Admin all). Accepting does NOT deactivate the account — offboarding stays a
+their own - segregation of duties). Reads are scoped in the repository (own,
+direct reports' read-only for their reporting manager, HR/Admin all); a caller
+who cannot see a resignation gets 404 on every action, never a 403 that would
+confirm it exists. Accepting does NOT deactivate the account - offboarding stays a
 separate deliberate HR action. No FastAPI objects here (Layering §4).
 """
 
@@ -25,7 +27,7 @@ from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.resignation import ResignationRepository
 from app.schemas.auth import CurrentUser
-from app.schemas.resignation import ResignationCreate, ResignationDecision
+from app.schemas.resignation import ResignationCreate, ResignationDecision, ResignationRead
 from app.services.email_service import EmailError, EmailService
 from app.services.notification_service import NotificationService
 
@@ -39,6 +41,20 @@ _LINK = "/dashboard/me/resignation"
 
 def _can_review(caller: CurrentUser) -> bool:
     return caller.role in (Role.ADMIN, Role.HR)
+
+
+def read_for(caller: CurrentUser, row: Resignation) -> ResignationRead:
+    """The resignation as this caller may see it.
+
+    The resigner and HR/Admin (who decide it) see everything. Anyone else in
+    scope - the reporting manager - only needs to plan around it: they get THAT
+    the person resigned, their last working day and the status, but never the
+    reason they gave or HR's decision note.
+    """
+    read = ResignationRead.model_validate(row)
+    if _can_review(caller) or caller.employee_id == row.employee_id:
+        return read
+    return read.model_copy(update={"reason": None, "decision_note": None})
 
 
 class ResignationService:
@@ -79,14 +95,14 @@ class ResignationService:
         resigner = await self._employees.get(caller.employee_id)
         resigner_name = resigner.full_name if resigner is not None else "An employee"
         body = f"{resigner_name} · last day {payload.last_working_day:%d %b %Y}"
-        # Notify + email every HR and Admin — they decide it.
+        # Notify + email every HR and Admin - they decide it.
         reviewers = [
-            *await self._employees.list_by_role(Role.ADMIN),
+            *await self._employees.list_admins(),
             *await self._employees.list_by_role(Role.HR),
         ]
-        seen: set[uuid.UUID] = set()
+        seen: set[uuid.UUID] = {caller.employee_id}
         for reviewer in reviewers:
-            if reviewer.id in seen or reviewer.id == caller.employee_id:
+            if reviewer.id in seen:
                 continue
             seen.add(reviewer.id)
             await self._notifications.notify(
@@ -101,7 +117,32 @@ class ResignationService:
                 actor_id=caller.employee_id,
             )
             await self._email_submitted(reviewer, resigner_name, row)
+        await self._notify_manager(caller, row, body, already=seen)
         return row
+
+    async def _notify_manager(
+        self, caller: CurrentUser, row: Resignation, body: str, *, already: set[uuid.UUID]
+    ) -> None:
+        """Tell the resigner's reporting manager, who has to plan around it but
+        does not decide it (they can see it read-only). In-app only: the email
+        template asks the reader to review, which is HR/Admin's job. Skipped when
+        the manager is inactive or was already told as HR/Admin."""
+        if caller.manager_id is None or caller.manager_id in already:
+            return
+        manager = await self._employees.get(caller.manager_id)
+        if manager is None or not manager.is_active:
+            return
+        await self._notifications.notify(
+            recipient_id=manager.id,
+            kind=NotificationKind.RESIGNATION_SUBMITTED,
+            title="Resignation from your team",
+            body=body,
+            level=NotificationLevel.WARNING,
+            link=_LINK,
+            entity_type="resignation",
+            entity_id=row.id,
+            actor_id=caller.employee_id,
+        )
 
     async def _email_submitted(
         self, reviewer: Employee, resigner_name: str, row: Resignation
@@ -121,10 +162,11 @@ class ResignationService:
     async def decide(
         self, caller: CurrentUser, resignation_id: uuid.UUID, payload: ResignationDecision
     ) -> Resignation:
-        row = await self._resignations.get(resignation_id)
+        row = await self._resignations.get_in_scope(caller, resignation_id)
         if row is None:
             raise NotFoundError()
-        # HR/Admin only, and never your own resignation.
+        # HR/Admin only, and never your own resignation. A reporting manager can
+        # see their report's resignation but gets a 403 here.
         if not _can_review(caller) or caller.employee_id == row.employee_id:
             raise AuthorizationError()
         if row.status is not ResignationStatus.SUBMITTED:
@@ -177,7 +219,7 @@ class ResignationService:
             logger.warning("resignation_decision_email_failed", extra={"id": str(row.id)})
 
     async def withdraw(self, caller: CurrentUser, resignation_id: uuid.UUID) -> Resignation:
-        row = await self._resignations.get(resignation_id)
+        row = await self._resignations.get_in_scope(caller, resignation_id)
         if row is None:
             raise NotFoundError()
         if row.employee_id != caller.employee_id:
