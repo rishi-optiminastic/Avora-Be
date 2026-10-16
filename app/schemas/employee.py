@@ -26,6 +26,8 @@ class EmployeeRead(ORMModel):
     job_title: str | None
     timezone: str | None
     manager_id: uuid.UUID | None
+    # The onboarding buddy, synced from Circle.
+    buddy_id: uuid.UUID | None = None
     role: Role
     payroll_manager: bool = False
     location_check_exempt: bool = False

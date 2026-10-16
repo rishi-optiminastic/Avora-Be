@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.exceptions import ValidationError
-from app.models.employee import Role
+from app.models.employee import Employee, EmployeeStatus, Role
 from app.models.task import Task, TaskCadence, TaskStatus
 from app.repositories.assignment_grant import AssignmentGrantRepository
 from app.repositories.audit import AuditRepository
@@ -840,3 +840,59 @@ async def test_a_failing_model_still_returns_whatever_could_be_read(
     with pytest.raises(ValidationError):
         # Nothing readable AND the model is down -> a real error, not silence.
         await _task_service(db, _Failing()).parse_tasks(_manager(seed), "-----\n=====\n")
+
+
+async def test_a_manager_sees_their_whole_reporting_tree(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """Max manages Remy, who leads a team of their own (Gia). Max must see
+    Gia's tasks and profile too, not only Remy's; the outsider still sees none."""
+    grandchild = Employee(
+        hr_external_id="hr-grandchild",
+        work_email="gia@corp.test",
+        full_name="Gia Grandchild",
+        role=Role.EMPLOYEE,
+        manager_id=seed.report.id,
+        status=EmployeeStatus.ACTIVE,
+        is_active=True,
+    )
+    db.add(grandchild)
+    await db.commit()
+    task = await _create_as(client, settings, seed.report, str(grandchild.id))
+
+    def assignees(resp: object) -> set[str]:
+        return {t["assignee_id"] for t in resp.json()["items"]}  # type: ignore[attr-defined]
+
+    top = await client.get("/api/v1/tasks", headers=auth_headers(settings, seed.manager))
+    opened = await client.get(
+        f"/api/v1/tasks/{task['id']}", headers=auth_headers(settings, seed.manager)
+    )
+    profile = await client.get(
+        f"/api/v1/employees/{grandchild.id}", headers=auth_headers(settings, seed.manager)
+    )
+    outsider = await client.get(
+        f"/api/v1/tasks/{task['id']}", headers=auth_headers(settings, seed.outsider)
+    )
+    peer_view = await client.get(
+        f"/api/v1/employees/{seed.manager.id}", headers=auth_headers(settings, grandchild)
+    )
+
+    assert top.status_code == 200
+    assert str(grandchild.id) in assignees(top)
+    assert opened.status_code == 200
+    assert profile.status_code == 200
+    assert outsider.status_code == 404
+    # Scope runs down the tree only: Gia cannot read up to her skip-level.
+    assert peer_view.status_code in (403, 404)
+
+
+async def test_a_reporting_cycle_does_not_hang_the_scope_query(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """Bad HR data (A reports to B reports to A) must still answer."""
+    seed.manager.manager_id = seed.report.id
+    await db.commit()
+
+    resp = await client.get("/api/v1/tasks", headers=auth_headers(settings, seed.manager))
+
+    assert resp.status_code == 200

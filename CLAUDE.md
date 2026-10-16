@@ -97,7 +97,7 @@ tests/
   - `admin` → everything
   - `it_admin` → normalized to `admin` (org decision; see `CurrentUser._normalize_role`)
   - `viewer` → read-only within an explicitly granted scope
-  - everyone else (`employee`, `executive`, `manager`) → own + **direct reports**
+  - everyone else (`employee`, `executive`, `manager`) → own + their **whole reporting tree** (direct reports, their reports, and so on down; `reporting_tree_ids`). Leave and EOD (`_personal_scope_clause`) stay with the direct manager.
 - **The reporting line grants scope, not the role title.** Anyone with people
   pointing at them via `manager_id` sees those people, whatever role they hold.
   Gating direct reports on `role is MANAGER` left real team leads carrying the

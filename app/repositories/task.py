@@ -21,6 +21,7 @@ from app.models.employee import Employee, Role
 from app.models.task import Task, TaskCadence, TaskStatus
 from app.models.task_collaborator import TaskCollaborator
 from app.models.work_entity import WorkEntity
+from app.repositories.employee import reporting_tree_ids
 from app.schemas.auth import CurrentUser
 from app.schemas.task import TaskCreate
 
@@ -78,18 +79,19 @@ class TaskRepository:
         if caller.role is Role.VIEWER:
             return (Task.assignee_id == caller.employee_id) | assigned_by_me | i_collaborate
 
-        # Everyone else: their own tasks plus their direct reports'. This was
+        # Everyone else: their own tasks plus their team's. This was
         # gated on `role is MANAGER`, so a lead carrying the `employee`/
         # `executive` role saw none of their team's work - the team overview
         # listed every one of their reports with zero tasks, and they could not
         # open a task to act on it. The reporting edge is what grants this, not
         # the title beside their name.
-        assignee_manager = (
-            select(Employee.manager_id).where(Employee.id == Task.assignee_id).scalar_subquery()
-        )
+        #
+        # The whole reporting tree, not just direct reports: a manager whose lead
+        # runs a team of their own sees that team's work too, matching
+        # `EmployeeRepository._scope_clause`.
         return (
             (Task.assignee_id == caller.employee_id)
-            | (assignee_manager == caller.employee_id)
+            | Task.assignee_id.in_(reporting_tree_ids(caller.employee_id))
             | assigned_by_me
             | i_collaborate
         )

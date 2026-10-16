@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 
-from sqlalchemy import ColumnElement, exists, func, or_, select
+from sqlalchemy import ColumnElement, Select, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError
@@ -50,6 +50,19 @@ class LeaverEvidence:
     last_working_day: date | None
     last_session_at: datetime | None
     last_leave_end_at: datetime | None
+
+
+def reporting_tree_ids(manager_id: uuid.UUID) -> Select[tuple[uuid.UUID]]:
+    """Everyone below `manager_id` in the reporting tree: their direct reports,
+    those people's reports, and so on down.
+
+    A recursive CTE over `manager_id`. `UNION` (not `UNION ALL`) drops rows it
+    has already produced, so a cycle in bad HR data ends instead of looping.
+    Unnamed, so two uses in one statement never collide.
+    """
+    tree = select(Employee.id).where(Employee.manager_id == manager_id).cte(recursive=True)
+    tree = tree.union(select(Employee.id).where(Employee.manager_id == tree.c.id))
+    return select(tree.c.id)
 
 
 class EmployeeRepository:
@@ -272,7 +285,8 @@ class EmployeeRepository:
         - admin / hr: whole org.
         - senior_manager: their whole department.
         - viewer: themselves only, whatever the org chart says.
-        - everyone else: themselves, plus anyone who reports to them.
+        - everyone else: themselves, plus their whole reporting tree - direct
+          reports and everyone under them (a manager sees their leads' teams).
 
         Scope is derived from the caller's server-side record, never from a
         client-supplied field. `senior_manager` resolves the caller's department
@@ -306,7 +320,10 @@ class EmployeeRepository:
                 .scalar_subquery()
             )
             return [Employee.department == caller_department]
-        return [(Employee.manager_id == caller.employee_id) | (Employee.id == caller.employee_id)]
+        return [
+            Employee.id.in_(reporting_tree_ids(caller.employee_id))
+            | (Employee.id == caller.employee_id)
+        ]
 
     def _personal_scope_clause(self, caller: CurrentUser) -> list[ColumnElement[bool]]:
         """Row-level scope for PERSONAL matters: leave and EOD.
