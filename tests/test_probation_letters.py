@@ -400,3 +400,81 @@ async def test_a_termination_has_no_letter(
         select(ProbationDecision).where(ProbationDecision.employee_id == seed.report.id)
     )
     assert row is not None and row.outcome is ProbationOutcome.TERMINATED
+
+
+# --- the checklist steps an outcome settles --------------------------------- #
+def _step_notes(body: dict[str, object]) -> dict[int, str | None]:
+    steps = body["steps"]
+    assert isinstance(steps, list)
+    return {s["no"]: s["note"] for s in steps if s["status"] != "pending"}
+
+
+async def test_a_confirmation_ticks_the_decision_letter_and_hrms_steps(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    await _probationer(db, seed)
+
+    res = await _decide(
+        client,
+        settings,
+        seed.admin,
+        seed.report,
+        {"outcome": "confirmed", "effective_date": "2026-10-27"},
+    )
+
+    assert res.status_code == 200, res.text
+    notes = _step_notes(res.json())
+    assert notes[7] == "Done in Avora: outcome recorded (confirmed)."
+    assert notes[13] == "Done in Avora: letter prepared and emailed to the employee."
+    assert (notes[15] or "").startswith("Done in Avora: probation end date")
+    assert 16 not in notes  # GoDigit is outside Avora: HR ticks it
+
+
+async def test_a_termination_only_ticks_the_decision(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    await _probationer(db, seed)
+
+    res = await _decide(
+        client,
+        settings,
+        seed.admin,
+        seed.report,
+        {"outcome": "terminated", "effective_date": "2026-11-30"},
+    )
+
+    assert res.status_code == 200, res.text
+    assert set(_step_notes(res.json())) == {7}
+
+
+async def test_a_changed_outcome_refreshes_avoras_note_but_not_a_persons(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    await _probationer(db, seed)
+    await _decide(
+        client,
+        settings,
+        seed.admin,
+        seed.report,
+        {"outcome": "terminated", "effective_date": "2026-11-30"},
+    )
+    ticked = await client.put(
+        f"/api/v1/probation/{seed.report.id}/steps/15",
+        headers=auth_headers(settings, seed.admin),
+        json={"status": "done", "note": "Updated by hand"},
+    )
+    assert ticked.status_code == 200, ticked.text
+
+    res = await _decide(
+        client,
+        settings,
+        seed.admin,
+        seed.report,
+        {"outcome": "confirmed", "effective_date": "2026-10-27", "send_letter": "false"},
+    )
+
+    assert res.status_code == 200, res.text
+    notes = _step_notes(res.json())
+    assert notes[7] == "Done in Avora: outcome recorded (confirmed)."
+    assert notes[13] == "Done in Avora: letter prepared (not emailed from Avora)."
+    assert notes[15] == "Updated by hand"

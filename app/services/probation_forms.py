@@ -42,14 +42,11 @@ from zoneinfo import ZoneInfo
 from app.core.tenure import probation_end
 from app.models.employee import Employee
 from app.models.form import AssignmentStatus, Form, FormAssignment, FormTrigger
-from app.models.probation_checklist import ProbationChecklistItem, ProbationStepStatus
 from app.repositories.attendance_policy import AttendancePolicyRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.leave_policy import LeavePolicyRepository
 from app.repositories.probation_checklist import ProbationChecklistRepository
 from app.schemas.form import PROBATION_TRIGGERS, SubjectDetails
-
-SYSTEM_NOTE = "Done in Avora: "
 
 # Checklist steps (stable `no` keys from app.core.probation) and the note each
 # automatic tick leaves.
@@ -199,19 +196,7 @@ class ProbationFormLink:
         await self._tick(assignment.subject_id, _ON_SUBMIT[assignment.trigger])
 
     async def _tick(self, employee_id: uuid.UUID, steps: dict[int, str]) -> None:
-        now = datetime.now(UTC)
-        for step_no, note in steps.items():
-            row = await self._checklist.get(employee_id, step_no)
-            if row is not None and row.status is not ProbationStepStatus.PENDING:
-                continue  # a person already settled it: theirs stands
-            if row is None:
-                row = ProbationChecklistItem(employee_id=employee_id, step_no=step_no)
-                self._checklist.add(row)
-            row.status = ProbationStepStatus.DONE
-            row.note = SYSTEM_NOTE + note
-            row.actor_id = None
-            row.acted_at = now
-        await self._checklist.flush()
+        await self._checklist.mark_done_by_system(employee_id, steps, datetime.now(UTC))
 
 
 # Matches LeavePolicy.probation_months' own default, for an org with no policy row.

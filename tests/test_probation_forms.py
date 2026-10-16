@@ -35,11 +35,12 @@ from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.form import FormAssignmentRepository, FormRepository, FormResponseRepository
 from app.repositories.notification import NotificationRepository
+from app.repositories.probation_checklist import SYSTEM_NOTE
 from app.schemas.form import AnswerRead, FormFieldWrite, FormWrite
 from app.services.form_assignment_service import FormAssignmentService
 from app.services.form_scoring import score_answers, weighted_score
 from app.services.notification_service import NotificationService
-from app.services.probation_forms import SYSTEM_NOTE, is_review_due
+from app.services.probation_forms import is_review_due
 from tests.conftest import _Seed, auth_headers, probation_link
 
 LEAD_DAYS = 21

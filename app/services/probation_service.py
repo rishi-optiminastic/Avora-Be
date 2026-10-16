@@ -354,10 +354,13 @@ class ProbationService:
         decision.letter_sent_at = None
         await self._decisions.flush()
 
+        attachment = letter or await self._standard_letter(employee, decision)
         if payload.send_letter:
             # HR's own signed letter wins; otherwise the standard one from HR's template.
-            attachment = letter or await self._standard_letter(employee, decision)
             await self._send_letter(employee, decision, attachment)
+        await self._items.mark_done_by_system(
+            employee.id, _decision_ticks(decision, has_letter=attachment is not None), _now()
+        )
 
         await self._audit.append(
             actor=str(caller.employee_id),
@@ -534,6 +537,36 @@ class ProbationService:
             return
         decision.letter_sent_at = datetime.now(UTC)
         await self._decisions.flush()
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
+
+
+# Checklist steps (stable `no` keys from app.core.probation) recording an outcome settles.
+_STEP_DECISION = 7
+_STEP_LETTER = 13
+_STEP_HRMS = 15
+
+
+def _decision_ticks(decision: ProbationDecision, *, has_letter: bool) -> dict[int, str]:
+    """The steps recording `decision` settles, with the note each one leaves.
+
+    A termination only settles the decision itself: its letter is written by
+    hand and offboarding, not this record, updates the HRMS.
+    """
+    label = decision.outcome.value
+    ticks = {_STEP_DECISION: f"outcome recorded ({label})."}
+    if decision.outcome is ProbationOutcome.TERMINATED:
+        return ticks
+    ticks[_STEP_HRMS] = "probation end date and status updated from the recorded outcome."
+    if has_letter:
+        ticks[_STEP_LETTER] = (
+            "letter prepared and emailed to the employee."
+            if decision.letter_sent_at is not None
+            else "letter prepared (not emailed from Avora)."
+        )
+    return ticks
 
 
 def _letter_available(decision: ProbationDecision) -> bool:

@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.probation_checklist import ProbationChecklistItem, ProbationStepStatus
+
+# Prefix of the note on a step Avora settled itself (no person as the actor).
+SYSTEM_NOTE = "Done in Avora: "
 
 
 class ProbationChecklistRepository:
@@ -62,3 +66,28 @@ class ProbationChecklistRepository:
 
     async def flush(self) -> None:
         await self._session.flush()
+
+    async def mark_done_by_system(
+        self, employee_id: uuid.UUID, notes: Mapping[int, str], at: datetime
+    ) -> None:
+        """Settle steps as Avora (no actor), leaving a person's own ticks alone.
+
+        A step Avora settled earlier is refreshed, so a changed outcome does not
+        leave the previous outcome's note behind.
+        """
+        for step_no, note in notes.items():
+            row = await self.get(employee_id, step_no)
+            if row is None:
+                row = ProbationChecklistItem(employee_id=employee_id, step_no=step_no)
+                self.add(row)
+            elif row.status is not ProbationStepStatus.PENDING and not _settled_by_system(row):
+                continue  # a person already settled it: theirs stands
+            row.status = ProbationStepStatus.DONE
+            row.note = SYSTEM_NOTE + note
+            row.actor_id = None
+            row.acted_at = at
+        await self.flush()
+
+
+def _settled_by_system(row: ProbationChecklistItem) -> bool:
+    return row.actor_id is None and (row.note or "").startswith(SYSTEM_NOTE)
