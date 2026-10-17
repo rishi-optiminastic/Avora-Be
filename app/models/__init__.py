@@ -82,6 +82,7 @@ from app.models.task_collaborator import TaskCollaborator
 from app.models.task_comment import TaskComment
 from app.models.work_entity import WorkEntity
 from app.models.work_session import WorkSession
+from app.models.workbook import Workbook, WorkbookSharing
 from app.models.workspace_file import (
     WorkspaceFile,
     WorkspaceFileCategory,
@@ -192,6 +193,8 @@ __all__ = [
     "TrackingMode",
     "WorkEntity",
     "WorkSession",
+    "Workbook",
+    "WorkbookSharing",
     "WorkspaceFile",
     "WorkspaceFileCategory",
     "WorkspaceVisibility",

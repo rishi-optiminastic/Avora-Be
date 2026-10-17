@@ -83,6 +83,7 @@ from app.repositories.task import TaskRepository
 from app.repositories.task_comment import TaskCommentRepository
 from app.repositories.work_entity import WorkEntityRepository
 from app.repositories.work_session import WorkSessionRepository
+from app.repositories.workbook import WorkbookRepository
 from app.repositories.workspace_file import WorkspaceFileRepository
 from app.schemas.auth import AuthIdentity, CurrentDevice, CurrentUser, EnvPrincipal
 from app.services.activity_service import ActivityService
@@ -146,6 +147,7 @@ from app.services.target_service import TargetService
 from app.services.task_service import TaskService
 from app.services.work_entity_service import WorkEntityService
 from app.services.work_session_service import WorkSessionService
+from app.services.workbook_service import WorkbookService
 from app.services.workspace_file_service import WorkspaceFileService
 
 # --------------------------------------------------------------------------- #
@@ -269,6 +271,10 @@ def get_leave_tier_quota_repo(db: DbDep) -> LeaveTierQuotaRepository:
 
 def get_note_repo(db: DbDep) -> NoteRepository:
     return NoteRepository(db)
+
+
+def get_workbook_repo(db: DbDep) -> WorkbookRepository:
+    return WorkbookRepository(db)
 
 
 def get_notification_repo(db: DbDep) -> NotificationRepository:
@@ -714,6 +720,13 @@ def get_note_service(
     return NoteService(notes)
 
 
+def get_workbook_service(
+    workbooks: Annotated[WorkbookRepository, Depends(get_workbook_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> WorkbookService:
+    return WorkbookService(workbooks, audit)
+
+
 def get_agent_nudge_service(
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     devices: Annotated[DeviceRepository, Depends(get_device_repo)],
@@ -1044,6 +1057,7 @@ LeavePolicyServiceDep = Annotated[LeavePolicyService, Depends(get_leave_policy_s
 LeaveAllocationServiceDep = Annotated[LeaveAllocationService, Depends(get_leave_allocation_service)]
 MeetingServiceDep = Annotated[MeetingService, Depends(get_meeting_service)]
 NoteServiceDep = Annotated[NoteService, Depends(get_note_service)]
+WorkbookServiceDep = Annotated[WorkbookService, Depends(get_workbook_service)]
 NotificationServiceDep = Annotated[NotificationService, Depends(get_notification_service)]
 HolidayServiceDep = Annotated[HolidayService, Depends(get_holiday_service)]
 AnnouncementServiceDep = Annotated[AnnouncementService, Depends(get_announcement_service)]

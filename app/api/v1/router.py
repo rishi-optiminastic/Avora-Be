@@ -45,6 +45,7 @@ from app.api.v1.routes import (
     reimbursements,
     resignations,
     screenshots,
+    sheets,
     targets,
     tasks,
     work_entities,
@@ -76,6 +77,7 @@ api_router.include_router(attendance.router)
 api_router.include_router(biometric.router)
 api_router.include_router(meetings.router)
 api_router.include_router(notes.router)
+api_router.include_router(sheets.router)
 api_router.include_router(browsing.router)
 api_router.include_router(screenshots.router)
 api_router.include_router(pings.router)
