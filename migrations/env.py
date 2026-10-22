@@ -85,12 +85,6 @@ def run_migrations_offline() -> None:
 
 
 def _do_run_migrations(connection: Connection) -> None:
-    if _TARGET_SCHEMA:
-        # Point the connection at this workspace before anything runs, so every
-        # unqualified CREATE / ALTER in ~100 existing migrations lands in it
-        # without one of them being edited. `public` stays on the path for the
-        # shared tables and for types the migrations reference.
-        connection.exec_driver_sql(f'SET search_path TO "{_TARGET_SCHEMA}", public')
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
@@ -101,16 +95,55 @@ def _do_run_migrations(connection: Connection) -> None:
         # public.alembic_version and the second workspace would be told it was
         # already up to date with no tables at all.
         version_table_schema=_TARGET_SCHEMA or None,
+        # One transaction PER migration, not one for the whole run.
+        #
+        # Postgres refuses to use an enum value that was added in the same
+        # transaction, and this chain does exactly that across migrations:
+        # `d4e5f6a7b8c1` adds leavetype 'BIRTHDAY' and `e2a4c6b8d0f3` writes
+        # it. Applied incrementally - one deploy at a time, as production
+        # always has - each commits in between and it works. Run end to end
+        # against an empty schema, which is what BUILDING A NEW WORKSPACE
+        # does, they share one transaction and it fails.
+        #
+        # The trade: a failure part-way leaves earlier migrations applied
+        # rather than rolling the lot back. That is Alembic's normal Postgres
+        # behaviour, and `scripts/tenancy.py` reports a workspace whose chain
+        # failed as unprovisioned so nobody is let into a half-built one.
+        transaction_per_migration=True,
     )
     with context.begin_transaction():
         context.run_migrations()
 
 
 async def run_migrations_online() -> None:
+    # The workspace's schema is set as a CONNECTION setting, not with a `SET`
+    # statement inside the run.
+    #
+    # A plain `SET search_path` is undone by a ROLLBACK, and with
+    # `transaction_per_migration` Alembic opens and closes a transaction per
+    # migration - so the path silently reverted and every unqualified
+    # CREATE TABLE landed in `public`. The new workspace ended up an empty
+    # schema while the migrations quietly rebuilt the first one. A connect-time
+    # option is applied before any transaction exists and nothing can reset it.
+    options: dict[str, object] = {}
+    if _TARGET_SCHEMA:
+        # ONLY the target schema - `public` is deliberately off the path.
+        #
+        # Two migrations ask `inspect(bind).has_table(...)` without naming a
+        # schema, which answers from the search_path. With `public` on it they
+        # saw workspace ONE's tables, skipped creating their own, and a later
+        # ALTER then hit the first workspace's table instead - the new
+        # workspace came out missing tables while the old one was quietly
+        # altered. Nothing in the chain needs `public`: each workspace's enum
+        # types are created inside its own schema by these same migrations,
+        # and the two shared tables are excluded from the chain entirely.
+        options["server_settings"] = {"search_path": _TARGET_SCHEMA}
+
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         future=True,
+        connect_args=options,
     )
     async with connectable.connect() as connection:
         await connection.run_sync(_do_run_migrations)

@@ -20,8 +20,30 @@ from app.core.config import get_settings
 
 _settings = get_settings()
 
+# asyncpg prepares and CACHES a plan per SQL string, and a plan is bound to the
+# tables the search_path resolved to when it was made. Avora moves a pooled
+# connection between workspace schemas, so a connection that served one
+# workspace carries plans pointing at ITS tables into the next and Postgres
+# rejects them (InvalidCachedStatementError).
+#
+# Turning the cache off is what makes the same query text mean different tables
+# on the same connection. The cost is re-planning each statement, which on this
+# size of workload is nothing next to a dashboard that errors the moment
+# somebody switches workspace.
+#
+# No test could have caught this: SQLite has neither schemas nor a plan cache.
+#
+# Guarded by driver: these are asyncpg's own connect arguments and any other
+# driver rejects them outright, so a local SQLite URL would fail to connect
+# rather than simply not needing the setting.
+_URL = str(_settings.database_url)
+_NO_STATEMENT_CACHE = (
+    {"statement_cache_size": 0, "prepared_statement_cache_size": 0} if "asyncpg" in _URL else {}
+)
+
 engine: AsyncEngine = create_async_engine(
-    str(_settings.database_url),
+    _URL,
+    connect_args=_NO_STATEMENT_CACHE,
     echo=_settings.db_echo,
     pool_size=_settings.db_pool_size,
     max_overflow=_settings.db_max_overflow,
