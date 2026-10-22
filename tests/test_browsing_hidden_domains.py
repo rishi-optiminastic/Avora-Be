@@ -20,7 +20,7 @@ async def _make_owner(db: AsyncSession, settings: Settings) -> tuple[Employee, s
         hr_external_id="hr-owner",
         work_email=settings.private_browsing_owner_email,
         full_name="Owner Operator",
-        role=Role.EMPLOYEE,
+        role=Role.EXECUTIVE,
         status=EmployeeStatus.ACTIVE,
         is_active=True,
     )

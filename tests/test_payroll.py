@@ -1048,7 +1048,7 @@ async def test_exporting_the_whole_org_does_not_overflow_the_audit_log(
             hr_external_id=f"bulk-{i}",
             work_email=f"bulk{i}@acme.com",
             full_name=f"Bulk Person {i}",
-            role=Role.EMPLOYEE,
+            role=Role.EXECUTIVE,
             status=EmployeeStatus.ACTIVE,
             is_active=True,
         )

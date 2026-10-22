@@ -94,8 +94,8 @@ async def create_tasks_bulk(
     idem: IdempotencyServiceDep,
     idempotency_key: IdempotencyKeyHeader = None,
 ) -> Any:
-    """Create many tasks at once (paste-import). Manager/admin only; every
-    assignee is authorized server-side. Idempotent on `Idempotency-Key` so a
+    """Create many tasks at once (paste-import). Anyone; every assignee is
+    authorized server-side like a single create. Idempotent on `Idempotency-Key` so a
     re-submitted paste can't create the whole batch twice."""
 
     async def _op() -> list[TaskRead]:
@@ -121,7 +121,7 @@ async def parse_tasks(
     idempotency_key: IdempotencyKeyHeader = None,
 ) -> Any:
     """Parse a pasted blob into structured tasks (assignees matched to the
-    caller's visible roster). Manager/admin only — nothing is created here.
+    caller's visible roster). Anyone may parse; nothing is created here.
     Idempotent on `Idempotency-Key` so a replay returns the first parse instead
     of paying for the LLM call again."""
 

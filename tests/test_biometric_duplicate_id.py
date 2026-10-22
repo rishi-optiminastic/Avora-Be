@@ -24,7 +24,7 @@ async def _person(
         hr_external_id=external,
         work_email=f"{external}@acme.com",
         full_name=name,
-        role=Role.EMPLOYEE,
+        role=Role.EXECUTIVE,
         status=EmployeeStatus.ACTIVE if active else EmployeeStatus.INACTIVE,
         is_active=active,
         biometric_id=biometric_id,

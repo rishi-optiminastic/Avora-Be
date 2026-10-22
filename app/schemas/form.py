@@ -13,8 +13,15 @@ from typing import Annotated, Self
 
 from pydantic import AfterValidator, BaseModel, Field, model_validator
 
-from app.models.form import AssignmentStatus, FormFieldType, FormStatus, FormTrigger
+from app.models.form import (
+    AssignmentStatus,
+    FormFieldType,
+    FormStage,
+    FormStatus,
+    FormTrigger,
+)
 from app.models.workspace_file import WorkspaceVisibility
+from app.schemas.audience import AudienceSpec
 from app.schemas.workspace_file import AccessSpec
 
 RATING_MIN = 1
@@ -26,7 +33,6 @@ _MAX_INTRO = 10_000
 _MAX_ANSWER = 10_000
 _MAX_TRIGGER_DAYS = 365
 _MAX_DUE_DAYS = 90
-_MAX_ASSIGNEES = 200
 _MIN_CHOICES = 2
 _MAX_OPTION = 200
 _MAX_RATING_LABEL = 80
@@ -69,6 +75,10 @@ class FormFieldWrite(BaseModel):
     with_comment: bool = False
     # Rating questions only: percent share of the form's 100-point score.
     weight: int | None = Field(default=None, ge=WEIGHT_MIN, le=WEIGHT_TOTAL)
+    # Who fills this in, on a form completed by two people (an appraisal: the
+    # person writes their half, their manager writes the rest). Null means
+    # "whoever holds the form", which is every field on an ordinary form.
+    stage: FormStage | None = None
 
     @model_validator(mode="after")
     def _shape(self) -> Self:
@@ -142,6 +152,9 @@ class FormFieldRead(BaseModel):
     options: list[str]
     with_comment: bool
     weight: int | None = None
+    # Which half of a two-stage form this question belongs to; null on an
+    # ordinary form.
+    stage: FormStage | None = None
 
 
 class FormSummary(BaseModel):
@@ -172,10 +185,18 @@ class FormRead(FormSummary):
 
 
 class AssignmentCreate(BaseModel):
-    """HR sends a published form to people by hand."""
+    """HR sends a published form out by hand.
 
-    assignee_ids: list[uuid.UUID] = Field(min_length=1, max_length=_MAX_ASSIGNEES)
-    # Who the form is about, when it is about someone else.
+    `audience` is the whole answer to "who gets this": everyone, some
+    departments, or named people. It is a claim - the server resolves it
+    against the live roster, so "everyone" means everyone at the moment of
+    sending and a client cannot name somebody it should not reach.
+    """
+
+    audience: AudienceSpec
+    # Who the form is about, when it is about someone else (a buddy writing
+    # about the joiner they looked after). Only meaningful when the audience is
+    # the handful of people being asked about that one person.
     subject_id: uuid.UUID | None = None
     due_on: date | None = None
 
@@ -240,6 +261,18 @@ class AssignmentDetail(AssignmentRead):
     # Out of 100, when the form has weighted questions and has been answered.
     weighted_total: float | None = None
     subject_details: SubjectDetails | None = None
+    # Two-stage forms only. `my_field_ids` is the half THIS caller is being
+    # asked for, so the page can show the other half read-only rather than
+    # offering someone fields they are not allowed to submit.
+    stage: FormStage | None = None
+    my_field_ids: list[uuid.UUID] = Field(default_factory=list)
+    # The stage after this one, so the page can say what happens on submit
+    # ("goes to your manager") instead of implying it is finished.
+    next_stage: FormStage | None = None
+    # True when the caller wrote an earlier half and has handed it on: they are
+    # reading their OWN answers, not the whole response. Distinguishes them
+    # from HR, who is reading everyone's and must not be told "your half".
+    own_half_only: bool = False
 
 
 class FieldResult(BaseModel):

@@ -79,6 +79,27 @@ class FormFieldType(StrEnum):
     CHOICE = "choice"
 
 
+class FormStage(StrEnum):
+    """Who fills in which part of a form that is completed by two people.
+
+    The case this exists for: an appraisal where the person writes their own
+    half and their reporting manager then writes the rest, on the SAME form, so
+    the two halves sit side by side in one set of answers.
+
+    A field with no stage belongs to whoever holds the form - which is every
+    field on an ordinary single-person form, and why `stage` is nullable rather
+    than defaulted. A form is two-stage if, and only if, some field says so;
+    there is no separate flag to fall out of sync with the questions.
+    """
+
+    EMPLOYEE = "employee"  # filled first, by the assignee
+    MANAGER = "manager"  # filled second, by their reporting manager
+
+
+# The order the stages are filled in. Index matters: `next_stage` walks it.
+STAGE_ORDER: tuple[FormStage, ...] = (FormStage.EMPLOYEE, FormStage.MANAGER)
+
+
 class AssignmentStatus(StrEnum):
     PENDING = "pending"
     SUBMITTED = "submitted"
@@ -160,6 +181,9 @@ class FormField(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     required: Mapped[bool] = mapped_column(Boolean, default=True)
     options: Mapped[list[str]] = mapped_column(JSON, default=list)
     with_comment: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Who fills this question in, on a form completed by two people. Null means
+    # "whoever holds the form", which is every field on an ordinary form.
+    stage: Mapped[FormStage | None] = mapped_column(default=None)
     # Rating questions only: this question's share of a 100-point weighted
     # score, in percent. A form's weights add up to 100 once it is published.
     weight: Mapped[int | None] = mapped_column(Integer, default=None)
@@ -194,6 +218,13 @@ class FormAssignment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     trigger: Mapped[FormTrigger] = mapped_column(default=FormTrigger.MANUAL)
     status: Mapped[AssignmentStatus] = mapped_column(default=AssignmentStatus.PENDING)
+    # Whose turn it is on a two-stage form. Null on an ordinary one. The
+    # assignment stays PENDING across the handover - it is one form being
+    # filled in by two people, not two forms - and `assignee_id` moves to
+    # whoever owes the next part.
+    stage: Mapped[FormStage | None] = mapped_column(default=None)
+    # When the first half was handed on, for the "waiting on your manager" line.
+    handed_over_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     # Hidden from the assignee before this day.
     available_on: Mapped[date] = mapped_column(Date)
     due_on: Mapped[date | None] = mapped_column(Date, default=None)
@@ -240,3 +271,8 @@ class FormAnswer(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     rating: Mapped[int | None] = mapped_column(Integer, default=None)
     text: Mapped[str | None] = mapped_column(Text, default=None)
     choice: Mapped[str | None] = mapped_column(String(200), default=None)
+    # Who gave THIS answer. On a two-stage form the response has two authors,
+    # and without this the manager's half would read as the employee's words.
+    answered_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("employees.id", ondelete="SET NULL"), default=None
+    )

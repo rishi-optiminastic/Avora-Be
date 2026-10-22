@@ -40,6 +40,7 @@ from app.models.form import (
     Form,
     FormAssignment,
     FormFieldType,
+    FormStage,
     FormStatus,
     FormTrigger,
 )
@@ -55,6 +56,7 @@ from app.schemas.form import (
     AssignmentRead,
     SubmissionWrite,
 )
+from app.services.audience import AudienceResolver
 from app.services.email_service import EmailService
 from app.services.form_answers import check_answers
 from app.services.form_emails import (
@@ -65,6 +67,7 @@ from app.services.form_emails import (
 )
 from app.services.form_scoring import field_weights, score_answers
 from app.services.form_settlement import Settle, Situation, is_unsent, settle, usable_buddy
+from app.services.form_stages import fields_for_stage, first_stage, next_stage
 from app.services.form_views import can_manage_forms, to_answer, to_assignment, to_read, to_summary
 from app.services.notification_service import NotificationService
 from app.services.probation_forms import (
@@ -131,6 +134,8 @@ class FormAssignmentService:
         self._audit = audit
         self._settings = settings
         self._probation = probation
+        # One definition of "who does this reach", shared with events.
+        self._audience = AudienceResolver(employees)
 
     # --- the person filling it in ---------------------------------------- #
     async def mine(self, caller: CurrentUser) -> list[AssignmentRead]:
@@ -144,9 +149,16 @@ class FormAssignmentService:
 
     async def detail(self, caller: CurrentUser, assignment_id: uuid.UUID) -> AssignmentDetail:
         row = await self._assignments.get_named(assignment_id)
-        if row is None or not self._may_open(caller, row[0], await self._today()):
+        if row is None:
             raise NotFoundError()
         assignment = row[0]
+        # Someone who wrote an earlier half is no longer the assignee, but the
+        # form is still partly theirs: they see what they wrote, and nothing
+        # the next person has written since.
+        wrote_some = caller.employee_id in await self._responses.contributor_ids(assignment.id)
+        if not self._may_open(caller, assignment, await self._today()) and not wrote_some:
+            raise NotFoundError()
+        own_half_only = wrote_some and not self._may_open(caller, assignment, await self._today())
         form = await self._forms.get(assignment.form_id)
         if form is None:  # pragma: no cover - cascades with the form
             raise NotFoundError()
@@ -157,6 +169,11 @@ class FormAssignmentService:
             if response
             else []
         )
+        if own_half_only:
+            # An appraisal's second half is the manager's assessment of them;
+            # it is not the employee's to read just because they started the
+            # form. They keep their own words and nothing else.
+            answers = [a for a in answers if a.answered_by_id == caller.employee_id]
         if assignment.assignee_id != caller.employee_id and not is_pool(assignment):
             # HR/admin reading someone else's answers is a sensitive read (5.7).
             await self._audit.append(
@@ -172,12 +189,24 @@ class FormAssignmentService:
         if is_probation_form(assignment.trigger) and assignment.subject_id is not None:
             found = await self._probation.subject_details([assignment.subject_id])
             details = found.get(assignment.subject_id)
+        # The half THIS caller is being asked for. The page shows the rest
+        # read-only rather than offering fields the submit would reject.
+        mine = (
+            [f.id for f in fields_for_stage(fields, assignment.stage)]
+            if (assignment.assignee_id == caller.employee_id or is_pool(assignment))
+            and not own_half_only
+            else []
+        )
         return AssignmentDetail(
             **to_assignment(row).model_dump(),
             form=to_read(form, fields, summary),
             answers=scored,
             weighted_total=total if response else None,
             subject_details=details,
+            stage=assignment.stage,
+            my_field_ids=mine,
+            next_stage=next_stage(fields, assignment.stage),
+            own_half_only=own_half_only,
         )
 
     async def submit(
@@ -197,22 +226,74 @@ class FormAssignmentService:
             raise NotFoundError()
         if assignment.status is not AssignmentStatus.PENDING:
             raise ConflictError("This form has already been submitted.")
-        rows = check_answers(await self._forms.fields_of(assignment.form_id), payload.answers)
+        fields = await self._forms.fields_of(assignment.form_id)
+        # Only this stage's questions are validated and stored. On an ordinary
+        # form that is all of them; on a two-stage one it is the half this
+        # person owns, which is also why the manager cannot overwrite what the
+        # employee wrote - those fields are not theirs to submit.
+        mine = fields_for_stage(fields, assignment.stage)
+        rows = check_answers(mine, payload.answers)
         now = datetime.now(UTC)
         assignment.assignee_id = caller.employee_id  # claims the HR pool form
-        await self._responses.add(
+        await self._responses.append(
             assignment=assignment, respondent_id=caller.employee_id, submitted_at=now, answers=rows
         )
-        assignment.status = AssignmentStatus.SUBMITTED
-        assignment.submitted_at = now
+
+        following = next_stage(fields, assignment.stage)
+        if following is None:
+            assignment.status = AssignmentStatus.SUBMITTED
+            assignment.submitted_at = now
+        else:
+            await self._hand_over(assignment, following, now)
         await self._assignments.flush()
-        await self._probation.on_submitted(assignment)
+        if assignment.status is AssignmentStatus.SUBMITTED:
+            # The checklist and the probation panel care about a FINISHED form.
+            # Ticking a step at the handover would claim the manager's half was
+            # done before anyone had written it.
+            await self._probation.on_submitted(assignment)
         await self._audit.append(
             actor=str(caller.employee_id),
-            action="form.submit",
+            action="form.submit" if following is None else "form.stage_submit",
             target=f"assignment:{assignment.id}",
         )
         return await self.detail(caller, assignment.id)
+
+    async def _hand_over(
+        self, assignment: FormAssignment, following: FormStage, now: datetime
+    ) -> None:
+        """Pass a part-filled form to whoever owes the next half.
+
+        Only the MANAGER stage exists after the employee's, so the next holder
+        is the submitter's reporting manager. With nobody on file the form waits
+        as NEEDS_MANAGER - the same state the probation manager form uses - and
+        goes out when HR sets one, rather than being lost or landing on an
+        arbitrary person.
+        """
+        assignment.stage = following
+        assignment.handed_over_at = now
+        submitter = (
+            await self._employees.get(assignment.assignee_id)
+            if assignment.assignee_id is not None
+            else None
+        )
+        # An appraisal IS about the person who wrote the first half, and
+        # recording that is what lets the nightly sweep find their current
+        # manager (and cancel the form properly if they leave).
+        if assignment.subject_id is None and submitter is not None:
+            assignment.subject_id = submitter.id
+        manager = (
+            await self._employees.get(submitter.manager_id)
+            if submitter is not None and submitter.manager_id is not None
+            else None
+        )
+        if manager is not None and manager.is_active:
+            assignment.assignee_id = manager.id
+            assignment.status = AssignmentStatus.PENDING
+            # Cleared so the forms scheduler tells the NEW holder it is theirs.
+            assignment.notified_at = None
+        else:
+            assignment.assignee_id = None
+            assignment.status = AssignmentStatus.NEEDS_MANAGER
 
     # --- HR --------------------------------------------------------------- #
     async def assign(
@@ -223,11 +304,9 @@ class FormAssignmentService:
             raise NotFoundError()
         if form.status is not FormStatus.PUBLISHED:
             raise ConflictError("Publish the form before sending it.")
-        people = await self._employees.get_many(payload.assignee_ids)
-        if len(people) != len(set(payload.assignee_ids)) or not all(
-            p.is_active for p in people.values()
-        ):
-            raise ValidationError("Every recipient must be a current employee.")
+        # Resolved here, never taken from the client: "everyone" has to mean
+        # everyone active right now, and a named list has to be checked.
+        recipients = await self._audience.resolve(payload.audience)
         if payload.subject_id is not None:
             about = await self._employees.get(payload.subject_id)
             if about is None or not about.is_active:
@@ -238,24 +317,34 @@ class FormAssignmentService:
         if payload.due_on is not None and payload.due_on > today + timedelta(days=_MAX_DUE_AHEAD):
             raise ValidationError("Pick a due date within the next year.")
         due_on = payload.due_on or today + timedelta(days=form.due_days)
+        # Anyone who already holds this form is skipped rather than given a
+        # second copy. Sending to "everyone" twice is a normal thing to do -
+        # a late joiner, a nudge - and it must top up, not duplicate.
+        already = await self._assignments.assignee_ids_for_form(form.id)
+        # A two-stage form starts with whoever owes the first half; the second
+        # holder is worked out at handover, from the first one's manager.
+        opening = first_stage(await self._forms.fields_of(form.id))
         created: list[FormAssignment] = []
-        for person_id in dict.fromkeys(payload.assignee_ids):
+        for person in recipients:
+            if person.id in already:
+                continue
             created.append(
                 await self._assignments.add(
                     form_id=form.id,
-                    assignee_id=person_id,
+                    assignee_id=person.id,
                     subject_id=payload.subject_id,
                     trigger=FormTrigger.MANUAL,
                     status=AssignmentStatus.PENDING,
                     available_on=today,
                     due_on=due_on,
                     assigned_by=caller.employee_id,
+                    stage=opening,
                 )
             )
         await self._audit.append(
             actor=str(caller.employee_id),
             action="form.assign",
-            target=f"form:{form.id}:{len(created)}",
+            target=f"form:{form.id}:{payload.audience.kind.value}:{len(created)}",
         )
         # Nobody is mailed from inside this request: if it rolled back after
         # sending, people would get links to forms that don't exist, and a
@@ -281,6 +370,73 @@ class FormAssignmentService:
             raise NotFoundError()
         rows = await self._assignments.with_status(AssignmentStatus.NEEDS_MANAGER)
         return [to_assignment(r) for r in rows]
+
+    async def send_probation_form(
+        self, caller: CurrentUser, employee_id: uuid.UUID, trigger: FormTrigger
+    ) -> AssignmentRead:
+        """Send one probation review form for one person, now.
+
+        The scheduler already does this when the review window opens
+        (`_create_probation_due`). This is the same act, on demand, for the
+        cases the clock does not cover: a probation that was extended, a form
+        published after someone's window opened, a manager who was only put on
+        file today.
+
+        Deliberately the SAME assignment values (`probation_values`) and the
+        same `on_opened` checklist tick as the automatic path. A hand-rolled
+        "manual" send would carry FormTrigger.MANUAL, which would leave the
+        checklist step untouched and the answers outside the probation panel -
+        a form that looks sent but moves nothing.
+        """
+        if not can_manage_forms(caller):
+            raise NotFoundError()
+        if trigger not in PROBATION_TRIGGERS:
+            raise ValidationError("That is not a probation review form.")
+
+        subject = await self._employees.get(employee_id)
+        if subject is None or not subject.is_active:
+            raise NotFoundError()
+
+        live = await self._forms.published_for_trigger(trigger)
+        if not live:
+            raise ConflictError(
+                "No published form for this step yet. Build and publish one in Forms first."
+            )
+        form = live[0]
+
+        # One assignment per (trigger, subject), ever - the same rule the
+        # database enforces. Re-sending would hand somebody a second copy of a
+        # form they may already have answered.
+        if employee_id in await self._assignments.subjects_with(trigger):
+            raise ConflictError("That form has already gone out for this person.")
+
+        today = await self._today()
+        ends = await self._probation.end_dates([subject])
+        ends_on = ends.get(subject.id)
+        if ends_on is None:
+            raise ConflictError(
+                "This person has no probation end date, so there is no review to send."
+            )
+        manager = (
+            await self._employees.get(subject.manager_id)
+            if subject.manager_id is not None
+            else None
+        )
+        values = probation_values(form, subject, manager, ends_on, today)
+        assignment = await self._assignments.add(**values)
+        # Ticks the checklist step this form owns, as Avora rather than as the
+        # person who pressed the button - it was the form going out that
+        # settled the step, not a human judgement.
+        await self._probation.on_opened(assignment)
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="form.probation_send",
+            target=f"employee:{employee_id}:{trigger.value}",
+        )
+        # Nobody is mailed from inside this request: a rollback after sending
+        # would leave links to an assignment that does not exist. The forms
+        # scheduler tells them on its next run; it is already in their list.
+        return await self._read(assignment.id)
 
     # --- the daily job ---------------------------------------------------- #
     async def run_due(self, today: date) -> RunResult:
@@ -396,10 +552,11 @@ class FormAssignmentService:
             [e.manager_id for e in due if e.manager_id is not None]
         )
         created: list[FormAssignment] = []
+        opening = first_stage(await self._forms.fields_of(form.id))
         for person in due:
             manager = managers.get(person.manager_id) if person.manager_id else None
             values = probation_values(form, person, manager, ends[person.id], today)
-            created.append(await self._assignments.add(**values))
+            created.append(await self._assignments.add(**values, stage=opening))
         for assignment in created:
             await self._probation.on_opened(assignment)
         if created:

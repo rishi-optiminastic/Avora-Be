@@ -426,14 +426,41 @@ async def test_manager_can_bulk_create(
     assert {t["title"] for t in created} == {"Bulk one", "Bulk two"}
 
 
-async def test_employee_cannot_bulk_create(
+async def test_employee_can_bulk_create_their_own_tasks(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:
-    body = {"tasks": [_new_task(str(seed.report.id))]}
+    body = {"tasks": [_new_task(str(seed.report.id), "Mine one"), _new_task(str(seed.report.id))]}
+    resp = await client.post(
+        "/api/v1/tasks/bulk", json=body, headers=auth_headers(settings, seed.report)
+    )
+    assert resp.status_code == 201, resp.text
+
+
+async def test_employee_cannot_bulk_create_for_someone_else(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    body = {"tasks": [_new_task(str(seed.report.id)), _new_task(str(seed.manager.id))]}
     resp = await client.post(
         "/api/v1/tasks/bulk", json=body, headers=auth_headers(settings, seed.report)
     )
     assert resp.status_code == 403
+    listing = await client.get("/api/v1/tasks", headers=auth_headers(settings, seed.report))
+    assert listing.json()["total"] == 0
+
+
+async def test_a_lead_with_the_employee_role_can_bulk_create_for_their_report(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """The board offers Paste tasks to anyone who leads a team; the server used
+    to refuse them unless their ROLE was manager, so the paste always failed."""
+    lead = await db.get(Employee, seed.manager.id)
+    assert lead is not None
+    lead.role = Role.EXECUTIVE
+    await db.commit()
+
+    body = {"tasks": [_new_task(str(seed.report.id), "From a lead")]}
+    resp = await client.post("/api/v1/tasks/bulk", json=body, headers=auth_headers(settings, lead))
+    assert resp.status_code == 201, resp.text
 
 
 async def test_bulk_create_is_atomic_on_out_of_scope_assignee(
@@ -458,13 +485,18 @@ async def test_bulk_create_is_atomic_on_out_of_scope_assignee(
 # -- Free-text parse -------------------------------------------------------- #
 
 
-async def test_parse_requires_manager(client: AsyncClient, settings: Settings, seed: _Seed) -> None:
+async def test_anyone_can_parse_but_only_matches_their_own_scope(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
     resp = await client.post(
         "/api/v1/tasks/parse",
-        json={"text": "Remy -\n  do a thing"},
+        json={"text": "Remy -\n- do a thing\n\nMax -\n- not mine to assign\n"},
         headers=auth_headers(settings, seed.report),
     )
-    assert resp.status_code == 403
+    assert resp.status_code == 200, resp.text
+    mine, theirs = resp.json()["tasks"]
+    assert mine["assignee_id"] == str(seed.report.id)
+    assert theirs["assignee_id"] is None  # the manager is outside an employee's scope
 
 
 async def test_parse_works_with_no_llm_configured(
@@ -851,7 +883,7 @@ async def test_a_manager_sees_their_whole_reporting_tree(
         hr_external_id="hr-grandchild",
         work_email="gia@corp.test",
         full_name="Gia Grandchild",
-        role=Role.EMPLOYEE,
+        role=Role.EXECUTIVE,
         manager_id=seed.report.id,
         status=EmployeeStatus.ACTIVE,
         is_active=True,

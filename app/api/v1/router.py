@@ -15,6 +15,7 @@ from app.api.v1.routes import (
     category_rules,
     celebrations,
     changelog,
+    circle_records,
     compensation,
     dashboard,
     devices,
@@ -22,6 +23,7 @@ from app.api.v1.routes import (
     employees,
     envsync,
     eod,
+    events,
     forms,
     health,
     holidays,
@@ -50,6 +52,7 @@ from app.api.v1.routes import (
     tasks,
     work_entities,
     workspace_files,
+    workspaces,
 )
 
 api_router = APIRouter()
@@ -68,6 +71,7 @@ api_router.include_router(celebrations.router)
 api_router.include_router(changelog.router)
 api_router.include_router(notifications.router)
 api_router.include_router(onboarding.router)
+api_router.include_router(events.router)
 api_router.include_router(forms.router)
 api_router.include_router(org.router)
 api_router.include_router(holidays.router)
@@ -87,12 +91,14 @@ api_router.include_router(work_entities.router)
 api_router.include_router(attribution.router)
 api_router.include_router(attendance_overrides.router)
 api_router.include_router(category_rules.router)
+api_router.include_router(circle_records.router)
 api_router.include_router(compensation.router)
 api_router.include_router(payroll.router)
 api_router.include_router(payroll_adjustments.router)
 api_router.include_router(payroll_payouts.router)
 api_router.include_router(documents.router)
 api_router.include_router(workspace_files.router)
+api_router.include_router(workspaces.router)
 api_router.include_router(dashboard.router)
 api_router.include_router(eod.router)
 api_router.include_router(envsync.router)

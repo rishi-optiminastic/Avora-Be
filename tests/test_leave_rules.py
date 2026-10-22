@@ -366,46 +366,37 @@ async def _approved_via_api(client: AsyncClient, settings: Settings, seed: _Seed
     return str(leave_id)
 
 
-async def _notifications(db: AsyncSession, recipient: Employee) -> list[Notification]:
+async def _notifications(
+    db: AsyncSession,
+    recipient: Employee,
+    kind: NotificationKind = NotificationKind.LEAVE_DECISION,
+) -> list[Notification]:
     rows = await db.execute(
         select(Notification).where(
             Notification.recipient_id == recipient.id,
-            Notification.kind == NotificationKind.LEAVE_DECISION,
+            Notification.kind == kind,
         )
     )
     return list(rows.scalars().all())
 
 
-async def test_employee_cancels_their_future_approved_leave(
+async def test_the_employee_cannot_cancel_their_own_approved_leave(
     client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
 ) -> None:
+    """Even a future leave. Granted time off comes back through a withdrawal
+    request the manager decides, so the direct cancel is closed to the owner and
+    `can_cancel` says so rather than offering a button that 409s."""
     leave_id = await _approved_via_api(client, settings, seed)
     mine = auth_headers(settings, seed.report)
     listed = await client.get("/api/v1/leaves", headers=mine)
-    assert _row(listed.json(), leave_id)["can_cancel"] is True
+    row = _row(listed.json(), leave_id)
+    assert row["can_cancel"] is False
+    assert row["can_request_withdrawal"] is True
 
     resp = await client.post(f"/api/v1/leaves/{leave_id}/cancel", headers=mine)
 
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["status"] == "cancelled"
-    balance = (await client.get("/api/v1/leaves/balance", headers=mine)).json()
-    planned = next(b for b in balance["balances"] if b["leave_type"] == "planned")
-    assert planned["used"] == 0
-    # The approver hears about it; the employee is not told about their own act.
-    assert any("cancelled" in n.title for n in await _notifications(db, seed.manager))
-
-
-async def test_employee_cannot_cancel_leave_that_has_started(
-    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
-) -> None:
-    today = datetime.now(UTC).date()
-    leave = await _approved_leave(db, seed.report, today - timedelta(days=1), today)
-
-    resp = await client.post(
-        f"/api/v1/leaves/{leave.id}/cancel", headers=auth_headers(settings, seed.report)
-    )
-
     assert resp.status_code == 409, resp.text
+    assert "withdrawal" in resp.json()["error"]["message"]
 
 
 async def test_hr_and_the_manager_cancel_started_leave_and_the_employee_is_told(
@@ -464,7 +455,7 @@ async def test_cancelled_leave_stops_counting_for_payroll(
     assert (await repo.approved_paid_in_range([report_id], start, end)).get(report_id)
 
     await client.post(
-        f"/api/v1/leaves/{leave_id}/cancel", headers=auth_headers(settings, seed.report)
+        f"/api/v1/leaves/{leave_id}/cancel", headers=auth_headers(settings, seed.manager)
     )
 
     db.expire_all()
@@ -691,18 +682,27 @@ async def test_cancelling_tells_the_current_manager_not_the_old_approver(
     assert any(n.title == "Your leave was cancelled" for n in await _notifications(db, seed.report))
 
 
-async def test_cancelling_falls_back_to_hr_without_an_active_manager(
+async def test_a_withdrawal_request_falls_back_to_hr_without_an_active_manager(
     client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
 ) -> None:
+    """`_deciders_for` routes to HR when the manager on file has left, so a
+    withdrawal request never lands in a dead person's queue. Previously proved
+    through the employee's own cancel, which is now a request instead."""
     hr = await _hr(db)
     leave_id = await _approved_via_api(client, settings, seed)
     seed.manager.is_active = False
     await db.commit()
 
     resp = await client.post(
-        f"/api/v1/leaves/{leave_id}/cancel", headers=auth_headers(settings, seed.report)
+        f"/api/v1/leaves/{leave_id}/withdrawal",
+        json={"reason": "Trip is off"},
+        headers=auth_headers(settings, seed.report),
     )
 
     assert resp.status_code == 200, resp.text
-    assert any("cancelled" in n.title for n in await _notifications(db, hr))
-    assert not any("cancelled" in n.title for n in await _notifications(db, seed.manager))
+    asked = await _notifications(db, hr, NotificationKind.LEAVE_REQUEST)
+    assert any("withdraw" in n.title for n in asked)
+    # The manager still holds the ORIGINAL application notification, so this
+    # looks only for the withdrawal one.
+    stale = await _notifications(db, seed.manager, NotificationKind.LEAVE_REQUEST)
+    assert not any("withdraw" in n.title for n in stale)

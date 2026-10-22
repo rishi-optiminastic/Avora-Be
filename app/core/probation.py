@@ -113,6 +113,11 @@ STEPS: tuple[ProbationStep, ...] = (
 
 STEPS_BY_NO: dict[int, ProbationStep] = {step.no: step for step in STEPS}
 
+# The one step the probationer themselves owns: signing off the confirmation or
+# extension letter. Named because it is the single thing they may act on, and
+# the only reason their own review is reachable by them at all.
+ACKNOWLEDGE_STEP = 14
+
 # How many days before the probation end date the process is meant to start.
 REVIEW_LEAD_DAYS = 21
 

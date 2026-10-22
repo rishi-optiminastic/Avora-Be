@@ -45,7 +45,7 @@ async def test_admin_adds_a_member_and_gets_an_ordinary_employee_back(
     resp = await client.post(
         _URL,
         json=_body(
-            role="employee",
+            role="executive",
             department="Design",
             job_title="Illustrator",
             location="Ahmedabad",

@@ -69,7 +69,7 @@ async def _send(
 ) -> str:
     res = await client.post(
         f"/api/v1/forms/{form_id}/assignments",
-        json={"assignee_ids": [str(to.id)]},
+        json={"audience": {"kind": "people", "employee_ids": [str(to.id)]}},
         headers=auth_headers(settings, admin),
     )
     assert res.status_code == 201, res.text
@@ -205,7 +205,7 @@ async def test_draft_cannot_be_sent(client: AsyncClient, settings: Settings, see
     form = await _create(client, settings, seed.admin)
     res = await client.post(
         f"/api/v1/forms/{form['id']}/assignments",
-        json={"assignee_ids": [str(seed.report.id)]},
+        json={"audience": {"kind": "people", "employee_ids": [str(seed.report.id)]}},
         headers=auth_headers(settings, seed.admin),
     )
     assert res.status_code == 409
@@ -218,7 +218,7 @@ async def test_employee_cannot_send_forms(
     await _publish(client, settings, seed.admin, form["id"])
     res = await client.post(
         f"/api/v1/forms/{form['id']}/assignments",
-        json={"assignee_ids": [str(seed.outsider.id)]},
+        json={"audience": {"kind": "people", "employee_ids": [str(seed.outsider.id)]}},
         headers=auth_headers(settings, seed.report),
     )
     assert res.status_code == 404
@@ -465,11 +465,17 @@ async def test_manual_send_checks_due_date_and_subject(
     path = f"/api/v1/forms/{form['id']}/assignments"
     admin = auth_headers(settings, seed.admin)
     for due in (date.today() - timedelta(days=1), date.today() + timedelta(days=400)):
-        body = {"assignee_ids": [str(seed.report.id)], "due_on": due.isoformat()}
+        body = {
+            "audience": {"kind": "people", "employee_ids": [str(seed.report.id)]},
+            "due_on": due.isoformat(),
+        }
         assert (await client.post(path, json=body, headers=admin)).status_code == 422
     seed.outsider.is_active = False
     await db.commit()
-    body = {"assignee_ids": [str(seed.report.id)], "subject_id": str(seed.outsider.id)}
+    body = {
+        "audience": {"kind": "people", "employee_ids": [str(seed.report.id)]},
+        "subject_id": str(seed.outsider.id),
+    }
     assert (await client.post(path, json=body, headers=admin)).status_code == 422
 
 

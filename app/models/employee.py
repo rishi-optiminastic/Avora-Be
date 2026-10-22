@@ -8,17 +8,28 @@ webhook is forbidden from touching it (Security rule 5.5).
 from __future__ import annotations
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 from enum import StrEnum
 
-from sqlalchemy import Boolean, Date, ForeignKey, LargeBinary, String, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, LargeBinary, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 
 class Role(StrEnum):
-    EMPLOYEE = "employee"
+    """Privilege level. The DB stores the MEMBER NAME (uppercase), so changing a
+    member here is a schema change - see migration `b4d6f8a0c2e4`.
+
+    `INTERN` replaced the old `EMPLOYEE` member: everyone who held it became
+    `EXECUTIVE`, which is now the ordinary default, and `INTERN` is reserved for
+    people actually on an internship. Both carry the same "self only" scope, so
+    the swap moved nobody's data visibility - `_scope_clause` never branched on
+    `EMPLOYEE`. The `EMPLOYEE` label still exists in the Postgres enum type
+    (Postgres cannot drop one) but no row uses it.
+    """
+
+    INTERN = "intern"
     EXECUTIVE = "executive"
     MANAGER = "manager"
     SENIOR_MANAGER = "senior_manager"
@@ -92,14 +103,18 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # where the default is six — and the leave band derives from it.
     probation_months: Mapped[int | None] = mapped_column(default=None)
 
-    # EPF Universal Account Number — the 12-digit PF identifier. HR-operational
-    # data, set by HR/admin (never by the agent or self-service). Nullable: not
-    # every employee has one on file, and non-India orgs won't use it at all.
-    uan_number: Mapped[str | None] = mapped_column(String(12), default=None)
-
-    # Payroll-register employee code (e.g. the prior HRMS number). HR-set, free-form
+    # Payroll-register employee code. Circle's employee code once the person is
+    # in Circle (the Circle sync keeps it in step); otherwise HR-set, free-form
     # so it can carry leading zeros / letters; nullable until assigned.
     employee_number: Mapped[str | None] = mapped_column(String(32), default=None)
+
+    # When the Circle sync first found this person in Circle. From then on the
+    # fields Circle owns - pay, bank, work location, employee code, personal
+    # details - are edited only in Circle and are read-only in Avora. NULL =
+    # not in Circle (or the link is off), so HR edits them here as before.
+    # (The EPF UAN that used to live here is now kept masked only, with the
+    # other ID numbers, in `employee_circle_profiles`.)
+    circle_linked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
     # Org tree: self-referential reporting line, set from HR.
     manager_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -118,7 +133,7 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     # Privilege — PMS-owned, NEVER set by HR.
-    role: Mapped[Role] = mapped_column(default=Role.EMPLOYEE)
+    role: Mapped[Role] = mapped_column(default=Role.EXECUTIVE)
     # Capability grant (orthogonal to `role`): lets a non-HR person (e.g. a finance
     # executive) manage payroll, payroll/attendance adjustments, and compensation
     # for salary processing, without granting org-wide HR access. Admin-set only.
@@ -151,3 +166,7 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     @property
     def has_avatar(self) -> bool:
         return bool(self.avatar_object_key or self.avatar_content)
+
+    @property
+    def circle_linked(self) -> bool:
+        return self.circle_linked_at is not None

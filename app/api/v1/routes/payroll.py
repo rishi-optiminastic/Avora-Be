@@ -9,11 +9,16 @@ scoped. Money is returned in minor units; the client formats it.
 from __future__ import annotations
 
 import uuid
+from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, File, Form, Query, Response, UploadFile, status
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError as PydanticValidationError
 
-from app.core.deps import CurrentUserDep, PayrollServiceDep
+from app.core.deps import CurrentUserDep, PayrollReceiptServiceDep, PayrollServiceDep
+from app.core.exceptions import ValidationError
+from app.models.payroll_receipt import PayrollReceiptKind
 from app.schemas.payroll import (
     PayrollEstimateRead,
     PayrollFinalizeResult,
@@ -23,6 +28,11 @@ from app.schemas.payroll import (
     PayslipRead,
     PayslipSummaryRead,
     ReleasedPayslipRead,
+)
+from app.schemas.payroll_receipt import (
+    PayrollProofStatus,
+    PayrollReceiptCreate,
+    PayrollReceiptRead,
 )
 
 router = APIRouter(prefix="/payroll", tags=["payroll"])
@@ -210,3 +220,98 @@ async def list_payroll_runs(
     caller: CurrentUserDep, service: PayrollServiceDep
 ) -> list[PayrollRunRead]:
     return await service.list_runs(caller)
+
+
+# --------------------------------------------------------------------------- #
+# Proof of payment
+#
+# What payroll SAID should go out lives in the run and the register. These are
+# the documents showing it actually did - the bank advice, the UTR
+# confirmation - filed by whoever ran it. Payroll-manager gated like the rest
+# of the cluster: a transfer advice carries the payroll total and the company's
+# own bank references.
+# --------------------------------------------------------------------------- #
+@router.post("/receipts", response_model=PayrollReceiptRead, status_code=status.HTTP_201_CREATED)
+async def add_payroll_receipt(
+    caller: CurrentUserDep,
+    service: PayrollReceiptServiceDep,
+    period_month: Annotated[str, Form()],
+    file: Annotated[UploadFile, File()],
+    kind: Annotated[PayrollReceiptKind, Form()] = PayrollReceiptKind.BANK_ADVICE,
+    reference: Annotated[str | None, Form()] = None,
+    paid_on: Annotated[date | None, Form()] = None,
+    amount_minor: Annotated[int | None, Form()] = None,
+    note: Annotated[str | None, Form()] = None,
+) -> PayrollReceiptRead:
+    """File proof that a month's payroll was paid (PDF or image, max 15 MB).
+
+    Multipart because the document rides along. Several per month is normal:
+    salaries and reimbursements often go out as separate transfers.
+    """
+    try:
+        meta = PayrollReceiptCreate(
+            period_month=period_month,
+            kind=kind,
+            reference=reference,
+            paid_on=paid_on,
+            amount_minor=amount_minor,
+            note=note,
+        )
+    except PydanticValidationError as exc:
+        # Form fields are validated here rather than by FastAPI, so hand the
+        # errors to the same 422 handler a JSON body would reach instead of
+        # letting a raw Pydantic error escape as a 500.
+        raise RequestValidationError(
+            [{**err, "loc": ("body", *err["loc"])} for err in exc.errors(include_url=False)]
+        ) from exc
+    data = await file.read()
+    if not file.content_type:
+        raise ValidationError("The upload is missing its content type.")
+    return await service.add(
+        caller,
+        meta,
+        filename=file.filename or "receipt",
+        content_type=file.content_type,
+        data=data,
+    )
+
+
+@router.get("/receipts", response_model=list[PayrollReceiptRead])
+async def list_payroll_receipts(
+    caller: CurrentUserDep,
+    service: PayrollReceiptServiceDep,
+    month: Annotated[str, Query(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")],
+) -> list[PayrollReceiptRead]:
+    return await service.list_for_month(caller, month)
+
+
+@router.get("/receipts/status", response_model=PayrollProofStatus)
+async def payroll_proof_status(
+    caller: CurrentUserDep,
+    service: PayrollReceiptServiceDep,
+    month: Annotated[str, Query(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")],
+) -> PayrollProofStatus:
+    """Whether this month can be shown to have been paid. Read by the payroll
+    panel so an unevidenced month is visible rather than merely absent."""
+    return await service.proof_status(caller, month)
+
+
+@router.get("/receipts/{receipt_id}/file")
+async def download_payroll_receipt(
+    receipt_id: uuid.UUID, caller: CurrentUserDep, service: PayrollReceiptServiceDep
+) -> Response:
+    data, content_type, filename = await service.file_bytes(caller, receipt_id)
+    return Response(
+        content=data,
+        media_type=content_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.delete("/receipts/{receipt_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_payroll_receipt(
+    receipt_id: uuid.UUID, caller: CurrentUserDep, service: PayrollReceiptServiceDep
+) -> None:
+    """Filed the wrong document, or against the wrong month. The removal is
+    itself audited - the trail is append-only."""
+    await service.remove(caller, receipt_id)

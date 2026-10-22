@@ -216,7 +216,7 @@ async def test_invitation_revoke(
     hr = await _add_hr(db)
     invite = Invitation(
         email="newhire@corp.test",
-        role=Role.EMPLOYEE,
+        role=Role.EXECUTIVE,
         token_hash="t" * 64,
         invited_by=seed.admin.id,
         status=InvitationStatus.PENDING,

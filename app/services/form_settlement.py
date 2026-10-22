@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from app.models.employee import Employee
-from app.models.form import AssignmentStatus, FormAssignment, FormTrigger
+from app.models.form import AssignmentStatus, FormAssignment, FormStage, FormTrigger
 from app.services.probation_forms import is_pool, usable_manager
 
 
@@ -46,6 +46,15 @@ def is_unsent(assignment: FormAssignment) -> bool:
     return assignment.status is AssignmentStatus.PENDING and assignment.notified_at is None
 
 
+def is_handed_over(assignment: FormAssignment) -> bool:
+    """A two-stage form that has moved to its manager half.
+
+    `handed_over_at` is the proof somebody already wrote the first half, which
+    is what makes cancelling it destructive rather than tidy.
+    """
+    return assignment.stage is FormStage.MANAGER and assignment.handed_over_at is not None
+
+
 def usable_buddy(joiner: Employee | None, buddy: Employee | None) -> bool:
     return joiner is not None and buddy is not None and buddy.is_active and buddy.id != joiner.id
 
@@ -59,6 +68,11 @@ def settle(assignment: FormAssignment, now: Situation) -> Settle:
     if assignment.trigger is FormTrigger.BUDDY:
         return _settle_buddy(assignment, now)
     if assignment.trigger is FormTrigger.PROBATION_MANAGER:
+        return _settle_manager(assignment, now)
+    if is_handed_over(assignment):
+        # A two-stage form whose first half is already written. Without this it
+        # falls to the "no assignee left -> CANCEL" rule below and the sweep
+        # destroys the employee's submitted answers overnight.
         return _settle_manager(assignment, now)
     if is_pool(assignment):
         return Settle.KEEP  # the HR pool: nobody in particular fills it in yet

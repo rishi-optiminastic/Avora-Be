@@ -799,7 +799,7 @@ async def test_a_team_lead_without_the_manager_role_sees_their_reports_claims(
         hr_external_id="hr-claim-lead",
         work_email="claim.lead@corp.test",
         full_name="Lena Lead",
-        role=Role.EMPLOYEE,  # runs a team without the title
+        role=Role.EXECUTIVE,  # runs a team without the title
         status=EmployeeStatus.ACTIVE,
         is_active=True,
     )
@@ -809,7 +809,7 @@ async def test_a_team_lead_without_the_manager_role_sees_their_reports_claims(
         hr_external_id="hr-claim-report",
         work_email="claim.report@corp.test",
         full_name="Rory Report",
-        role=Role.EMPLOYEE,
+        role=Role.EXECUTIVE,
         manager_id=lead.id,
         status=EmployeeStatus.ACTIVE,
         is_active=True,
@@ -870,7 +870,7 @@ async def test_a_senior_manager_sees_department_claims_but_can_decide_only_their
         hr_external_id="hr-direct",
         work_email="direct@corp.test",
         full_name="Dee Direct",
-        role=Role.EMPLOYEE,
+        role=Role.EXECUTIVE,
         department="Ops",
         manager_id=senior.id,
         status=EmployeeStatus.ACTIVE,

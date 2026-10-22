@@ -2,7 +2,21 @@
 
 The DB URL and target metadata come from the app, so migrations and the running
 service can never drift. We never call create_all in any non-test environment
-(Database conventions §8) — schema changes flow through these migrations only.
+(Database conventions §8) - schema changes flow through these migrations only.
+
+**Multi-workspace.** Each workspace's tables live in its own Postgres schema
+(`ws_<slug>`), and this chain builds ONE of them per run. Which one comes from
+`-x schema=ws_foo`; without it the default `search_path` applies, which is how
+a single-workspace database and the test suite still work unchanged.
+
+Every workspace schema keeps its OWN `alembic_version`, so workspaces can be at
+different revisions and one failing to migrate does not mark the others done.
+`scripts/tenancy.py migrate` is what walks them all; running plain
+`alembic upgrade head` migrates one schema, never all of them.
+
+The two SHARED tables (`public.workspaces`, `public.workspace_members`) are
+excluded here and created by `scripts/tenancy.py bootstrap`. They are not part
+of any workspace, so they must not be created once per workspace.
 """
 
 from __future__ import annotations
@@ -31,15 +45,29 @@ _PRISMA_TABLES = frozenset(
     {"auth_user", "auth_session", "auth_account", "auth_verification", "auth_jwks"}
 )
 
+# Shared across every workspace, and owned by `scripts/tenancy.py`, not by this
+# chain. Identified by their explicit `public` schema rather than by name, so a
+# future shared table is excluded automatically.
+_SHARED_SCHEMA = "public"
+
+# The workspace schema this run targets: `alembic -x schema=ws_foo upgrade head`.
+_TARGET_SCHEMA = context.get_x_argument(as_dictionary=True).get("schema")
+
+
+def _is_shared(obj: object) -> bool:
+    schema = getattr(obj, "schema", None)
+    return schema == _SHARED_SCHEMA
+
 
 def _include_object(
     obj: object, name: str | None, type_: str, reflected: bool, compare_to: object
 ) -> bool:
     if type_ == "table":
-        return name not in _PRISMA_TABLES
+        return name not in _PRISMA_TABLES and not _is_shared(obj)
     parent_table = getattr(obj, "table", None)
-    if parent_table is not None and parent_table.name in _PRISMA_TABLES:
-        return False
+    if parent_table is not None:
+        if parent_table.name in _PRISMA_TABLES or _is_shared(parent_table):
+            return False
     return True
 
 
@@ -57,12 +85,22 @@ def run_migrations_offline() -> None:
 
 
 def _do_run_migrations(connection: Connection) -> None:
+    if _TARGET_SCHEMA:
+        # Point the connection at this workspace before anything runs, so every
+        # unqualified CREATE / ALTER in ~100 existing migrations lands in it
+        # without one of them being edited. `public` stays on the path for the
+        # shared tables and for types the migrations reference.
+        connection.exec_driver_sql(f'SET search_path TO "{_TARGET_SCHEMA}", public')
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
         compare_type=True,
         compare_server_default=True,
         include_object=_include_object,
+        # Each workspace tracks its own revision. Without this they would share
+        # public.alembic_version and the second workspace would be told it was
+        # already up to date with no tables at all.
+        version_table_schema=_TARGET_SCHEMA or None,
     )
     with context.begin_transaction():
         context.run_migrations()

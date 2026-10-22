@@ -32,6 +32,8 @@ class NotificationKind(StrEnum):
     ESCALATION = "escalation"  # a repeated issue escalated up to you
     APPRECIATION = "appreciation"  # a manager thanked you for completing a task
     DEVICE_HEALTH = "device_health"  # an agent stopped capturing (or recovered)
+    SHEET_SHARED = "sheet_shared"  # someone shared a spreadsheet with you
+    EVENT = "event"  # an event you are invited to was published or called off
     SYSTEM = "system"
 
 

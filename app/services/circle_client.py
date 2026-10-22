@@ -1,6 +1,7 @@
 """Client for Circle's server-to-server endpoints (/api/internal/avora/*).
 
-Reads ONE employee's pay, bank details and documents, looked up by work email.
+Reads ONE employee's pay, bank details, documents, profile, appraisal history
+and assets, looked up by work email.
 Callers must authorize the person first: this client trusts its caller and is
 only ever constructed behind a service that does (CircleImportService).
 """
@@ -86,13 +87,24 @@ class CircleClient:
         return await self._get_object("/compensation", email)
 
     async def documents(self, email: str) -> list[dict[str, Any]]:
-        listing = (await self._get_object("/documents", email)).get("documents")
-        if not isinstance(listing, list):
-            raise UpstreamUnavailableError()
-        return [d for d in listing if isinstance(d, dict)]
+        return await self._get_list("/documents", email, "documents")
 
     async def profile(self, email: str) -> dict[str, Any]:
         return await self._get_object("/profile", email)
+
+    async def appraisals(self, email: str) -> list[dict[str, Any]]:
+        return await self._get_list("/appraisals", email, "appraisals")
+
+    async def assets(self, email: str) -> list[dict[str, Any]]:
+        return await self._get_list("/assets", email, "assets")
+
+    async def _get_list(self, path: str, email: str, key: str) -> list[dict[str, Any]]:
+        """The object entries of the reply's `key` list; a reply without that
+        list is Circle failing, never "this person has none"."""
+        listing = (await self._get_object(path, email)).get(key)
+        if not isinstance(listing, list):
+            raise UpstreamUnavailableError()
+        return [entry for entry in listing if isinstance(entry, dict)]
 
     async def document_content(self, email: str, doc_id: str, *, max_bytes: int) -> CircleFile:
         if not is_valid_doc_id(doc_id):

@@ -1,5 +1,6 @@
 """Fill in personal details Avora is missing from Circle (date of birth,
-gender and profile photo) and keep the onboarding buddy in step with Circle.
+gender and profile photo), keep the onboarding buddy in step with Circle, and
+mirror the details Circle owns (see `CircleDetailsSync`).
 
 Personal details are fill-only: a value Avora already has - entered by HR or by
 the person - is never replaced. The buddy is different: HR assigns and
@@ -29,6 +30,7 @@ from app.repositories.audit import AuditRepository
 from app.repositories.circle_document_import import CircleDocumentImportRepository
 from app.repositories.employee import EmployeeRepository
 from app.services.circle_client import CircleClient
+from app.services.circle_details_sync import CircleDetailsSync
 from app.services.circle_document_sync import SYNC_ACTOR, discard_stored
 from app.services.employee_service import ALLOWED_AVATAR_TYPES, MAX_AVATAR_BYTES
 
@@ -75,15 +77,18 @@ class CircleProfileSync:
         audit: AuditRepository,
         settings: Settings,
         client: CircleClient,
+        details: CircleDetailsSync,
     ) -> None:
         self._employees = employees
         self._imports = imports
         self._audit = audit
         self._settings = settings
         self._client = client
+        self._details = details
 
     async def fill(self, employee: Employee) -> list[str]:
-        """Fill what is missing; returns the names of the fields changed."""
+        """Fill what is missing and mirror what Circle owns; returns the names
+        of the fields changed."""
         try:
             profile = await self._client.profile(employee.work_email)
         except NotFoundError:
@@ -93,13 +98,19 @@ class CircleProfileSync:
             filled.append("buddy")
         if not employee.has_avatar and await self._fill_avatar(employee, profile):
             filled.append("avatar")
-        if filled:
+        await self._audit_changes(employee, "profile.circle_fill", filled)
+        synced = await self._details.apply(employee, profile)
+        await self._audit_changes(employee, "profile.circle_sync", synced)
+        return filled + synced
+
+    async def _audit_changes(self, employee: Employee, action: str, fields: list[str]) -> None:
+        """Field names only - never the values (Security rule 5.6)."""
+        if fields:
             await self._audit.append(
                 actor=SYNC_ACTOR,
-                action="profile.circle_fill",
-                target=f"employee:{employee.id}:{','.join(filled)}",
+                action=action,
+                target=f"employee:{employee.id}:{','.join(fields)}",
             )
-        return filled
 
     async def _fill_details(self, employee: Employee, profile: dict[str, Any]) -> list[str]:
         fields: dict[str, object] = {}

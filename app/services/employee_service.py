@@ -30,6 +30,7 @@ from app.repositories.employee import EmployeeRepository
 from app.repositories.ping import PingRepository
 from app.schemas.auth import CurrentUser
 from app.schemas.employee import AdminProfileUpdate, EmployeeCreate, SelfProfileUpdate
+from app.services.circle_ownership import refuse_circle_owned_changes
 
 logger = get_logger("app.employee")
 
@@ -324,6 +325,13 @@ class EmployeeService:
             if await self._employees.get(manager_id) is None:
                 raise ValidationError("Manager not found.")
         _clean_profile_fields(fields)
+        if "location" in fields:
+            refuse_circle_owned_changes(
+                employee,
+                {"location": employee.location},
+                {"location": fields["location"]},
+                label="Work location",
+            )
         await self._employees.admin_update_profile(employee, fields)
         await self._audit.append(
             actor=str(caller.employee_id),

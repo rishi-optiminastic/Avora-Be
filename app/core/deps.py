@@ -25,6 +25,14 @@ from app.core.security import (
     hash_device_token,
     verify_hmac_sha256,
 )
+from app.core.tenancy import (
+    SHARED_SCHEMA,
+    InvalidWorkspaceSlug,
+    use_schema,
+    use_shared_only,
+    validate_schema_name,
+    validate_slug,
+)
 from app.db.session import get_session
 from app.models.employee import Role
 from app.repositories.activity import ActivityRepository
@@ -38,6 +46,7 @@ from app.repositories.browsing_hidden_domain import BrowsingHiddenDomainReposito
 from app.repositories.category_rule import CategoryRuleRepository
 from app.repositories.celebration_settings import CelebrationSettingsRepository
 from app.repositories.changelog import ChangelogRepository
+from app.repositories.circle_record import CircleRecordRepository
 from app.repositories.compensation import CompensationRepository
 from app.repositories.device import DeviceRepository
 from app.repositories.document import DocumentRepository
@@ -45,6 +54,7 @@ from app.repositories.employee import EmployeeRepository
 from app.repositories.envsync import EnvSyncRepository
 from app.repositories.eod_report import EodReportRepository
 from app.repositories.eod_settings import EodSettingsRepository
+from app.repositories.event import EventRepository
 from app.repositories.festival import FestivalRepository
 from app.repositories.form import (
     FormAssignmentRepository,
@@ -66,6 +76,7 @@ from app.repositories.onboarding_config import OnboardingConfigRepository
 from app.repositories.org_settings import OrgSettingsRepository
 from app.repositories.payout_verification import PayoutVerificationRepository
 from app.repositories.payroll_adjustment import PayrollAdjustmentRepository
+from app.repositories.payroll_receipt import PayrollReceiptRepository
 from app.repositories.payroll_run import PayrollRunRepository
 from app.repositories.payroll_settings import PayrollSettingsRepository
 from app.repositories.payslip import PayslipRepository
@@ -84,6 +95,7 @@ from app.repositories.task_comment import TaskCommentRepository
 from app.repositories.work_entity import WorkEntityRepository
 from app.repositories.work_session import WorkSessionRepository
 from app.repositories.workbook import WorkbookRepository
+from app.repositories.workspace import WorkspaceRepository
 from app.repositories.workspace_file import WorkspaceFileRepository
 from app.schemas.auth import AuthIdentity, CurrentDevice, CurrentUser, EnvPrincipal
 from app.services.activity_service import ActivityService
@@ -101,6 +113,7 @@ from app.services.celebration_service import CelebrationService
 from app.services.changelog_service import ChangelogService
 from app.services.circle_client import CircleClient
 from app.services.circle_import_service import CircleImportService
+from app.services.circle_record_service import CircleRecordService
 from app.services.compensation_service import CompensationService
 from app.services.dashboard_service import DashboardService
 from app.services.device_health_service import DeviceHealthService
@@ -111,6 +124,7 @@ from app.services.employee_service import EmployeeService
 from app.services.envsync_service import EnvSyncService
 from app.services.eod_service import EodService
 from app.services.eod_settings_service import EodSettingsService
+from app.services.event_service import EventService
 from app.services.form_assignment_service import FormAssignmentService
 from app.services.form_service import FormService
 from app.services.holiday_service import HolidayService
@@ -133,6 +147,7 @@ from app.services.org_settings_service import OrgSettingsService
 from app.services.pat_service import PatService
 from app.services.payout_verification_service import PayoutVerificationService
 from app.services.payroll_adjustment_service import PayrollAdjustmentService
+from app.services.payroll_receipt_service import PayrollReceiptService
 from app.services.payroll_service import PayrollService
 from app.services.ping_service import PingService
 from app.services.probation_form_panel import ProbationFormPanelService
@@ -149,6 +164,7 @@ from app.services.work_entity_service import WorkEntityService
 from app.services.work_session_service import WorkSessionService
 from app.services.workbook_service import WorkbookService
 from app.services.workspace_file_service import WorkspaceFileService
+from app.services.workspace_service import WorkspaceService
 
 # --------------------------------------------------------------------------- #
 # Primitives
@@ -156,8 +172,79 @@ from app.services.workspace_file_service import WorkspaceFileService
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 
-async def get_db() -> AsyncIterator[AsyncSession]:
+# The header the dashboard sends to say which workspace it is showing. It is a
+# CLAIM: `_resolve_workspace` checks the caller is actually a member before the
+# session is pointed anywhere, so naming someone else's workspace gets a 403
+# rather than their data.
+WORKSPACE_HEADER = "X-Avora-Workspace"
+
+
+async def _resolve_workspace(
+    session: AsyncSession,
+    settings: Settings,
+    jwks_client: jwt.PyJWKClient,
+    authorization: str | None,
+    requested: str | None,
+) -> str:
+    """The Postgres schema this request reads and writes.
+
+    Order matters. The membership lookup runs against `public` BEFORE the
+    session is pointed at any workspace, because "which workspaces may this
+    email enter" is exactly the question that cannot be answered from inside
+    one.
+
+    A request that names no workspace gets the first workspace, which still
+    lives in `public`. That is what keeps every agent, HR webhook and biometric
+    push working untouched: they were written when Avora had one workspace and
+    they still behave as if it does, down to the schema their queries land in.
+    """
+    if requested is None:
+        return SHARED_SCHEMA
+
+    slug = validate_slug(requested)
+    if slug == validate_slug(settings.primary_workspace_slug):
+        # The original workspace is what every pre-existing credential already
+        # means, so naming it is never an escalation - and gating it on a
+        # membership row would lock out all 28 people the moment one was missed.
+        return SHARED_SCHEMA
+
+    # Any OTHER workspace has to be earned. Machine callers (no Bearer token)
+    # cannot reach one at all: their credentials predate workspaces and say
+    # nothing about which company they belong to.
+    identity = _verify_identity(settings, jwks_client, authorization)
+    await use_shared_only(session)
+    workspaces = WorkspaceRepository(session)
+    workspace = await workspaces.get_by_slug(slug)
+    if workspace is None or workspace.provisioned_at is None:
+        raise AuthorizationError("That workspace is not available.")
+    if not await workspaces.is_member(workspace.id, identity.email):
+        # 403, not 404: the person asked for a named workspace, and pretending
+        # it does not exist would make a revoked grant look like a bug.
+        raise AuthorizationError("You do not have access to that workspace.")
+    return validate_schema_name(workspace.schema_name)
+
+
+async def get_db(
+    settings: SettingsDep,
+    jwks_client: JwksClientDep,
+    authorization: Annotated[str | None, Header()] = None,
+    x_avora_workspace: Annotated[str | None, Header()] = None,
+) -> AsyncIterator[AsyncSession]:
+    """A session already pointed at one workspace's schema.
+
+    Every repository depends on this, so the `search_path` is set before any
+    query in the request can run. That is what makes the workspace boundary
+    something the connection enforces rather than something 57 repositories
+    have to remember.
+    """
     async for session in get_session():
+        try:
+            schema = await _resolve_workspace(
+                session, settings, jwks_client, authorization, x_avora_workspace
+            )
+        except InvalidWorkspaceSlug as exc:
+            raise AuthorizationError("That workspace key is not valid.") from exc
+        await use_schema(session, schema)
         yield session
 
 
@@ -722,9 +809,10 @@ def get_note_service(
 
 def get_workbook_service(
     workbooks: Annotated[WorkbookRepository, Depends(get_workbook_repo)],
+    notifications: Annotated[NotificationService, Depends(get_notification_service)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
 ) -> WorkbookService:
-    return WorkbookService(workbooks, audit)
+    return WorkbookService(workbooks, notifications, audit)
 
 
 def get_agent_nudge_service(
@@ -924,6 +1012,40 @@ def get_compensation_service(
     return CompensationService(compensation, employees, audit, settings)
 
 
+def get_workspace_repo(db: DbDep) -> WorkspaceRepository:
+    return WorkspaceRepository(db)
+
+
+def get_workspace_service(
+    db: DbDep,
+    workspaces: Annotated[WorkspaceRepository, Depends(get_workspace_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> WorkspaceService:
+    return WorkspaceService(db, workspaces, employees, audit)
+
+
+WorkspaceServiceDep = Annotated[WorkspaceService, Depends(get_workspace_service)]
+
+
+def get_event_repo(db: DbDep) -> EventRepository:
+    return EventRepository(db)
+
+
+def get_payroll_receipt_repo(db: DbDep) -> PayrollReceiptRepository:
+    return PayrollReceiptRepository(db)
+
+
+def get_payroll_receipt_service(
+    receipts: Annotated[PayrollReceiptRepository, Depends(get_payroll_receipt_repo)],
+    payroll_settings: Annotated[PayrollSettingsRepository, Depends(get_payroll_settings_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    settings: SettingsDep,
+) -> PayrollReceiptService:
+    return PayrollReceiptService(settings, receipts, payroll_settings, employees, audit)
+
+
 def get_payroll_service(
     settings_repo: Annotated[PayrollSettingsRepository, Depends(get_payroll_settings_repo)],
     runs: Annotated[PayrollRunRepository, Depends(get_payroll_run_repo)],
@@ -999,6 +1121,15 @@ def get_circle_import_service(
     return CircleImportService(employees, audit, settings, client)
 
 
+def get_circle_record_service(
+    db: DbDep,
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    settings: SettingsDep,
+) -> CircleRecordService:
+    return CircleRecordService(CircleRecordRepository(db), employees, audit, settings)
+
+
 def get_document_service(
     documents: Annotated[DocumentRepository, Depends(get_document_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
@@ -1021,6 +1152,7 @@ def get_workspace_file_service(
 EmployeeServiceDep = Annotated[EmployeeService, Depends(get_employee_service)]
 HRServiceDep = Annotated[HRService, Depends(get_hr_service)]
 CircleImportServiceDep = Annotated[CircleImportService, Depends(get_circle_import_service)]
+CircleRecordServiceDep = Annotated[CircleRecordService, Depends(get_circle_record_service)]
 ActivityServiceDep = Annotated[ActivityService, Depends(get_activity_service)]
 DeviceServiceDep = Annotated[DeviceService, Depends(get_device_service)]
 DeviceHealthServiceDep = Annotated[DeviceHealthService, Depends(get_device_health_service)]
@@ -1064,6 +1196,7 @@ AnnouncementServiceDep = Annotated[AnnouncementService, Depends(get_announcement
 ChangelogServiceDep = Annotated[ChangelogService, Depends(get_changelog_service)]
 CompensationServiceDep = Annotated[CompensationService, Depends(get_compensation_service)]
 PayrollServiceDep = Annotated[PayrollService, Depends(get_payroll_service)]
+PayrollReceiptServiceDep = Annotated[PayrollReceiptService, Depends(get_payroll_receipt_service)]
 PayoutVerificationServiceDep = Annotated[
     PayoutVerificationService, Depends(get_payout_verification_service)
 ]
@@ -1440,7 +1573,24 @@ def get_form_assignment_service(
 
 
 FormServiceDep = Annotated[FormService, Depends(get_form_service)]
+
+
+def get_event_service(
+    events: Annotated[EventRepository, Depends(get_event_repo)],
+    forms: Annotated[FormRepository, Depends(get_form_repo)],
+    assignments: Annotated[FormAssignmentRepository, Depends(get_form_assignment_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    notifications: Annotated[NotificationService, Depends(get_notification_service)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    form_assignments: Annotated[FormAssignmentService, Depends(get_form_assignment_service)],
+) -> EventService:
+    return EventService(
+        events, forms, assignments, employees, notifications, audit, form_assignments
+    )
+
+
 FormAssignmentServiceDep = Annotated[FormAssignmentService, Depends(get_form_assignment_service)]
+EventServiceDep = Annotated[EventService, Depends(get_event_service)]
 ProbationFormPanelServiceDep = Annotated[
     ProbationFormPanelService, Depends(get_probation_form_panel_service)
 ]

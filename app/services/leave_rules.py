@@ -13,7 +13,13 @@ from datetime import UTC, date, datetime
 
 from app.core.payroll import working_days_between
 from app.models.employee import Role
-from app.models.leave import HalfDayPeriod, Leave, LeaveStatus, LeaveType
+from app.models.leave import (
+    HalfDayPeriod,
+    Leave,
+    LeaveStatus,
+    LeaveType,
+    LeaveWithdrawalStatus,
+)
 from app.schemas.auth import CurrentUser
 
 # A half-day leave consumes half a working day; full-day types consume one.
@@ -64,23 +70,64 @@ def may_cancel_approved(
     requester_manager_id: uuid.UUID | None,
     today: date,
 ) -> bool:
-    """Who may cancel an APPROVED leave.
+    """Who may cancel an APPROVED leave outright.
 
-    - The employee themselves, but only before it starts: once a day of it has
-      been taken, undoing it would rewrite attendance and pay after the fact.
-    - HR, or the requester's direct manager, at any time (e.g. someone came back
-      early, or the leave was approved by mistake).
+    HR, or the requester's direct manager, at any time - someone came back
+    early, or the leave was approved by mistake.
 
-    The owner rule wins when the caller is also HR: an HR person cancelling their
-    own leave is the employee, not the administrator.
+    The employee themselves no longer can, even before it starts (org decision).
+    Granted time off is something the team has planned around, so taking it back
+    goes through `request_withdrawal` and the manager decides, exactly like the
+    original request did. `may_request_withdrawal` is the owner's path now.
+
+    `today` is kept in the signature: the callers pass the org's today and the
+    rule reads better with the boundary visible, even though only the owner
+    branch used it.
     """
+    del today
     if leave.status is not LeaveStatus.APPROVED:
         return False
     if caller.employee_id == leave.employee_id:
-        return utc_date(leave.start_date) > today
+        return False
     if caller.role is Role.HR:
         return True
     return requester_manager_id is not None and requester_manager_id == caller.employee_id
+
+
+def may_request_withdrawal(caller: CurrentUser, leave: Leave) -> bool:
+    """Whether this caller may ask for an APPROVED leave to be withdrawn.
+
+    Only the person whose leave it is, and only while it is actually approved.
+    A rejected request may be made again - circumstances change, and a single
+    "no" should not permanently bar asking - but one already waiting may not be
+    stacked on top of itself.
+
+    Deliberately allowed after the leave has started: coming back early is the
+    common case, and the decision maker is a human who can see the dates.
+    """
+    if leave.status is not LeaveStatus.APPROVED:
+        return False
+    if caller.employee_id != leave.employee_id:
+        return False
+    return leave.withdrawal_status in (
+        LeaveWithdrawalStatus.NONE,
+        LeaveWithdrawalStatus.REJECTED,
+    )
+
+
+def may_decide_withdrawal(
+    caller: CurrentUser, leave: Leave, requester_manager_id: uuid.UUID | None
+) -> bool:
+    """Who may grant or refuse a withdrawal request.
+
+    The same people who could decide the leave in the first place - the direct
+    manager, or HR - and never the requester, whatever role they hold. Taking
+    days back is the same decision as granting them, so it cannot have a weaker
+    rule than `may_decide` or the approval is worth less than it looks.
+    """
+    if leave.withdrawal_status is not LeaveWithdrawalStatus.REQUESTED:
+        return False
+    return may_decide(caller, leave, requester_manager_id)
 
 
 def leave_weight(leave_type: LeaveType) -> float:

@@ -79,7 +79,7 @@ async def test_a_team_lead_without_the_manager_role_can_still_review_their_repor
         hr_external_id="hr-lead",
         work_email="lead@corp.test",
         full_name="Lee Lead",
-        role=Role.EMPLOYEE,  # runs a team without the title
+        role=Role.EXECUTIVE,  # runs a team without the title
         status=EmployeeStatus.ACTIVE,
         is_active=True,
     )
@@ -89,7 +89,7 @@ async def test_a_team_lead_without_the_manager_role_can_still_review_their_repor
         hr_external_id="hr-junior",
         work_email="junior@corp.test",
         full_name="Jun Junior",
-        role=Role.EMPLOYEE,
+        role=Role.EXECUTIVE,
         manager_id=lead.id,
         status=EmployeeStatus.ACTIVE,
         is_active=True,
@@ -118,7 +118,7 @@ async def test_a_team_lead_cannot_review_outside_their_own_team(
         hr_external_id="hr-lead2",
         work_email="lead2@corp.test",
         full_name="Lou Lead",
-        role=Role.EMPLOYEE,
+        role=Role.EXECUTIVE,
         status=EmployeeStatus.ACTIVE,
         is_active=True,
     )
@@ -128,7 +128,7 @@ async def test_a_team_lead_cannot_review_outside_their_own_team(
         hr_external_id="hr-junior2",
         work_email="junior2@corp.test",
         full_name="Jay Junior",
-        role=Role.EMPLOYEE,
+        role=Role.EXECUTIVE,
         manager_id=lead.id,
         status=EmployeeStatus.ACTIVE,
         is_active=True,
@@ -341,7 +341,7 @@ async def test_a_viewer_never_picks_up_reports_from_the_org_chart(
         hr_external_id="hr-intern",
         work_email="intern@corp.test",
         full_name="Ira Intern",
-        role=Role.EMPLOYEE,
+        role=Role.EXECUTIVE,
         manager_id=viewer.id,
         status=EmployeeStatus.ACTIVE,
         is_active=True,

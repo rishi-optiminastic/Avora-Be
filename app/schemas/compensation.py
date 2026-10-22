@@ -92,10 +92,18 @@ class CompensationRead(ORMModel):
     account_type: AccountType | None
     updated_by: uuid.UUID | None
     updated_at: datetime
+    # True once the person is in Circle: pay (amount, currency, period, PF)
+    # and bank (bank name, account number, IFSC) are then edited in Circle,
+    # and `circle_url` is where.
+    circle_managed: bool = False
+    circle_url: str | None = None
 
     @classmethod
-    def from_model(cls, model: Compensation, account_number: str | None) -> CompensationRead:
-        """Build from the ORM row plus the already-decrypted account number."""
+    def from_model(
+        cls, model: Compensation, account_number: str | None, *, circle_url: str | None = None
+    ) -> CompensationRead:
+        """Build from the ORM row plus the already-decrypted account number;
+        `circle_url` is set only for a Circle-managed record."""
         return cls(
             employee_id=model.employee_id,
             amount_minor=model.amount_minor,
@@ -112,4 +120,6 @@ class CompensationRead(ORMModel):
             account_type=model.account_type,
             updated_by=model.updated_by,
             updated_at=model.updated_at,
+            circle_managed=circle_url is not None,
+            circle_url=circle_url,
         )

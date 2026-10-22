@@ -216,6 +216,38 @@ class FormAssignmentRepository:
     async def get(self, assignment_id: uuid.UUID) -> FormAssignment | None:
         return await self._session.get(FormAssignment, assignment_id)
 
+    async def assignment_ids_for(
+        self, form_id: uuid.UUID, assignee_id: uuid.UUID
+    ) -> list[uuid.UUID]:
+        """This person's live assignments for this form, newest first. Lets a
+        page link straight to "your copy" instead of a list to search."""
+        rows = await self._session.scalars(
+            select(FormAssignment.id)
+            .where(
+                FormAssignment.form_id == form_id,
+                FormAssignment.assignee_id == assignee_id,
+                FormAssignment.status != AssignmentStatus.CANCELLED,
+            )
+            .order_by(FormAssignment.created_at.desc())
+        )
+        return list(rows.all())
+
+    async def assignee_ids_for_form(self, form_id: uuid.UUID) -> set[uuid.UUID]:
+        """Everyone who already holds this form, so a re-send tops up rather
+        than handing somebody a second copy.
+
+        CANCELLED assignments are excluded on purpose: a cancelled form is one
+        HR explicitly took back, and sending it again is a deliberate act.
+        """
+        rows = await self._session.scalars(
+            select(FormAssignment.assignee_id).where(
+                FormAssignment.form_id == form_id,
+                FormAssignment.assignee_id.is_not(None),
+                FormAssignment.status != AssignmentStatus.CANCELLED,
+            )
+        )
+        return {row for row in rows.all() if row is not None}
+
     async def get_for_update(
         self, assignment_id: uuid.UUID, *, skip_locked: bool = False
     ) -> FormAssignment | None:
@@ -380,9 +412,64 @@ class FormResponseRepository:
         except IntegrityError as exc:  # a racing submit of the same form won
             raise ConflictError("This form has already been submitted.") from exc
         for values in answers:
-            self._session.add(FormAnswer(response_id=response.id, **values))
+            self._session.add(
+                FormAnswer(response_id=response.id, answered_by_id=respondent_id, **values)
+            )
         await self._session.flush()
         return response
+
+    async def append(
+        self,
+        *,
+        assignment: FormAssignment,
+        respondent_id: uuid.UUID,
+        submitted_at: datetime,
+        answers: Sequence[dict[str, Any]],
+    ) -> FormResponse:
+        """Add one stage's answers, creating the response on the first stage.
+
+        A two-stage form has ONE response with two authors, so the second
+        submitter appends to the first's rather than starting a second
+        response - `form_responses.assignment_id` is unique, and more to the
+        point two half-responses would have to be stitched together by every
+        reader forever.
+
+        `submitted_at` is left at the FIRST stage's time and moved to the last
+        one by the caller when the form is actually finished, so "submitted"
+        keeps meaning "complete".
+        """
+        response = await self.for_assignment(assignment.id)
+        if response is None:
+            return await self.add(
+                assignment=assignment,
+                respondent_id=respondent_id,
+                submitted_at=submitted_at,
+                answers=answers,
+            )
+        for values in answers:
+            self._session.add(
+                FormAnswer(response_id=response.id, answered_by_id=respondent_id, **values)
+            )
+        # The person who FINISHES it is the respondent of record; the per-answer
+        # `answered_by_id` keeps each half attributed to whoever wrote it.
+        response.respondent_id = respondent_id
+        response.submitted_at = submitted_at
+        await self._session.flush()
+        return response
+
+    async def contributor_ids(self, assignment_id: uuid.UUID) -> set[uuid.UUID]:
+        """Everyone who wrote any part of this assignment.
+
+        On a two-stage form the first person stops being the assignee the
+        moment they hand it on, so this is what keeps them able to see the half
+        they wrote instead of a 404 the instant they submit it.
+        """
+        rows = await self._session.execute(
+            select(FormAnswer.answered_by_id)
+            .join(FormResponse, FormAnswer.response_id == FormResponse.id)
+            .where(FormResponse.assignment_id == assignment_id)
+        )
+        return {row for (row,) in rows.all() if row is not None}
 
     async def for_assignment(self, assignment_id: uuid.UUID) -> FormResponse | None:
         result = await self._session.execute(

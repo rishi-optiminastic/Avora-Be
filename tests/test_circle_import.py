@@ -27,10 +27,15 @@ from app.models.document import EmployeeDocument
 from app.models.employee import Employee, Gender
 from app.repositories.audit import AuditRepository
 from app.repositories.circle_document_import import CircleDocumentImportRepository
+from app.repositories.circle_record import CircleRecordRepository
+from app.repositories.compensation import CompensationRepository
 from app.repositories.document import DocumentRepository
 from app.repositories.employee import EmployeeRepository
 from app.services.circle_client import CircleClient
+from app.services.circle_compensation_sync import CircleCompensationSync
+from app.services.circle_details_sync import CircleDetailsSync
 from app.services.circle_document_sync import CircleDocumentSync
+from app.services.circle_history_sync import CircleHistorySync
 from app.services.circle_profile_sync import CircleProfileSync, map_gender, parse_birth_date
 from app.services.document_service import MAX_DOC_BYTES
 from tests.conftest import _FakeJwksClient, _Seed, auth_headers
@@ -87,6 +92,8 @@ class FakeCircle:
         self.avatar: bytes = b"\x89PNG\r\n\x1a\n" + b"0" * 64
         self.avatar_fetches = 0
         self.content_fetches = 0
+        self.appraisals: list[dict[str, Any]] = []
+        self.assets: list[dict[str, Any]] = []
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         if self.down:
@@ -106,6 +113,9 @@ class FakeCircle:
             return httpx.Response(200, content=self.avatar, headers={"content-type": "image/png"})
         if path == "/compensation":
             return httpx.Response(200, json=self.compensation or person["compensation"])
+        if path in ("/appraisals", "/assets"):
+            key = path.removeprefix("/")
+            return httpx.Response(200, json={key: getattr(self, key)})
         if path == "/documents":
             return httpx.Response(200, json={"documents": person["documents"] + self.extra_docs})
         doc_id = path.split("/")[2]
@@ -259,18 +269,31 @@ def scheduler(
             CircleClient(configured, transport=httpx.MockTransport(fake.handler)),
         )
 
+    def client() -> CircleClient:
+        return CircleClient(configured, transport=httpx.MockTransport(fake.handler))
+
     def build_profile(session: AsyncSession) -> CircleProfileSync:
+        employees = EmployeeRepository(session)
         return CircleProfileSync(
-            EmployeeRepository(session),
+            employees,
             CircleDocumentImportRepository(session),
             AuditRepository(session),
             configured,
-            CircleClient(configured, transport=httpx.MockTransport(fake.handler)),
+            client(),
+            CircleDetailsSync(employees, CircleRecordRepository(session), configured),
+        )
+
+    def build_records(session: AsyncSession) -> tuple[CircleCompensationSync, CircleHistorySync]:
+        audit = AuditRepository(session)
+        return (
+            CircleCompensationSync(CompensationRepository(session), audit, configured, client()),
+            CircleHistorySync(CircleRecordRepository(session), audit, client()),
         )
 
     monkeypatch.setattr(module, "SessionFactory", session_factory)
     monkeypatch.setattr(module, "_build_service", build)
     monkeypatch.setattr(module, "_build_profile_sync", build_profile)
+    monkeypatch.setattr(module, "_build_record_syncs", build_records)
     return module, fake
 
 
@@ -544,7 +567,7 @@ async def test_fills_missing_birthday_gender_and_photo(
 ) -> None:
     module, _ = scheduler
     filled = await module.fill_profile_for(seed.report.id)
-    assert filled == ["date_of_birth", "gender", "avatar"]
+    assert filled[:3] == ["date_of_birth", "gender", "avatar"]
     report = await _reload(db, seed.report.id)
     assert str(report.date_of_birth) == "1998-04-12"
     assert report.gender is Gender.FEMALE
@@ -563,7 +586,8 @@ async def test_never_overwrites_what_avora_already_has(
     report.avatar_content = b"existing"
     report.avatar_content_type = "image/jpeg"
     await db.commit()
-    assert await module.fill_profile_for(seed.report.id) == []
+    filled = await module.fill_profile_for(seed.report.id)
+    assert not {"date_of_birth", "gender", "avatar"} & set(filled)
     report = await _reload(db, seed.report.id)
     assert str(report.date_of_birth) == "1990-01-01" and report.gender is Gender.MALE
     assert report.avatar_content == b"existing"

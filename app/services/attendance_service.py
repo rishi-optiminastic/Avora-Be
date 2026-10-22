@@ -859,6 +859,7 @@ def _daily_row(
         day=day.isoformat(),
         weekday=day.strftime("%a"),
         status=status,
+        present=None if row is None else int(row.status in PRESENT_STATUSES),
         check_in=clock(row.login_at if row else None),
         check_out=clock(row.logout_at if row else None),
         worked_hours=round(row.worked_minutes / 60, 2) if row else 0.0,
@@ -867,6 +868,12 @@ def _daily_row(
         in_source=(row.clock_in_source if row else None) or "-",
         out_source=(row.clock_out_source if row else None) or "-",
     )
+
+
+# What payroll counts as a present day: worked, however late or short.
+PRESENT_STATUSES = frozenset(
+    {AttendanceStatus.FULL_DAY, AttendanceStatus.HALF_DAY, AttendanceStatus.LATE}
+)
 
 
 def _summary_row(person: Employee, s: AttendanceMonthSummary) -> AttendanceSummaryRow:

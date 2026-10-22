@@ -235,11 +235,13 @@ class TaskService:
             logger.warning("task_assigned_email_failed", extra={"task_id": str(task.id)})
 
     async def create_bulk(self, caller: CurrentUser, payload: TaskBulkCreate) -> list[Task]:
-        """Create many tasks at once (the paste-import flow). Manager-only, and
-        every assignee is authorized up front — one out-of-scope assignee fails
-        the whole batch (atomic; nothing is created)."""
-        if not caller.is_manager:
-            raise AuthorizationError()
+        """Create many tasks at once (the paste-import flow).
+
+        Open to everyone, authorized per row by the same rule as a single task
+        (`_can_assign_to`): yourself, your reporting tree, or a granted edge. A
+        ROLE gate here refused team leads carrying the employee/executive role,
+        whom the board offers this flow to. One out-of-scope assignee fails the
+        whole batch (atomic; nothing is created)."""
         for item in payload.tasks:
             if not await self._can_assign_to(caller, item.assignee_id):
                 raise AuthorizationError()
@@ -266,7 +268,9 @@ class TaskService:
         return tasks
 
     async def parse_tasks(self, caller: CurrentUser, text: str) -> list[ParsedTask]:
-        """Turn a pasted blob into structured tasks. Manager-only.
+        """Turn a pasted blob into structured tasks. Open to everyone; names
+        resolve only against the caller's own visible roster, so someone with
+        no reports can only ever match themselves.
 
         The deterministic parser runs first and handles the format people
         actually paste (a name header, then one task per line) with no model call
@@ -278,8 +282,6 @@ class TaskService:
         roster, so a name can never resolve to someone outside their scope and
         the model is never trusted with an id.
         """
-        if not caller.is_manager:
-            raise AuthorizationError()
         roster = [(e.id, e.full_name) for e in await self._employees.all_in_scope(caller)]
         direct = parse_paste(text, roster)
         if direct.structured:

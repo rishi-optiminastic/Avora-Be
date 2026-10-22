@@ -175,7 +175,7 @@ async def test_inactive_employee_lookup(db: AsyncSession, settings: Settings, se
         hr_external_id="hr-inactive",
         work_email="inactive@corp.test",
         full_name="Ina Inactive",
-        role=Role.EMPLOYEE,
+        role=Role.EXECUTIVE,
         status=EmployeeStatus.INACTIVE,
         is_active=False,
     )

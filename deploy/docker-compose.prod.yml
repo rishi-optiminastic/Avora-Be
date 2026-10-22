@@ -121,8 +121,9 @@ services:
     <<: *app-image
     command: ["python", "-m", "worker.task_escalation_scheduler"]
 
-  # Copies employees' Circle documents into Avora (idle until CIRCLE_API_URL /
-  # CIRCLE_API_SECRET are set). Never deletes or changes anything in Circle.
+  # Copies employees' Circle documents into Avora and keeps the fields Circle
+  # owns (pay, bank, personal details, appraisals, assets) in step (idle until
+  # CIRCLE_API_URL / CIRCLE_API_SECRET are set). Never changes anything in Circle.
   scheduler-circle-documents:
     <<: *app-image
     command: ["python", "-m", "worker.circle_documents_scheduler"]

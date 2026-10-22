@@ -26,6 +26,14 @@ from app.schemas.employee import HREmployeeUpsert
 
 logger = get_logger("app.hr")
 
+# Roles that carry no privilege beyond the person's own record. HR may move these
+# accounts around (email change, deactivation); anything above them is changed
+# inside Avora by an admin (rule 5.5). This used to be a single `is not
+# Role.EMPLOYEE` check - when EMPLOYEE became INTERN and everyone who held it
+# became EXECUTIVE, that check would have reclassified the entire company as
+# privileged and started rejecting ordinary HR offboards.
+UNPRIVILEGED_ROLES = (Role.INTERN, Role.EXECUTIVE)
+
 
 class HRService:
     def __init__(self, employees: EmployeeRepository, audit: AuditRepository) -> None:
@@ -127,7 +135,7 @@ class HRService:
         role - to whoever owns the new address. HR may do that for an ordinary
         employee; on a privileged account it must be done inside Avora by an
         admin (rule 5.5: the webhook never moves privilege)."""
-        if employee.role is not Role.EMPLOYEE or employee.payroll_manager:
+        if employee.role not in UNPRIVILEGED_ROLES or employee.payroll_manager:
             raise ConflictError(
                 "Email change on a privileged account must be made in Avora by an admin."
             )
@@ -141,7 +149,7 @@ class HRService:
     def _guard_deactivation(employee: Employee) -> None:
         """A wrong status in the HR system must never lock out the people who
         run Avora: privileged accounts are deactivated by an admin in Avora."""
-        if employee.role is not Role.EMPLOYEE or employee.payroll_manager:
+        if employee.role not in UNPRIVILEGED_ROLES or employee.payroll_manager:
             raise ConflictError(
                 "Deactivating a privileged account must be done in Avora by an admin."
             )

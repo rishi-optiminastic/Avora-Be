@@ -44,6 +44,21 @@ class LeaveStatus(StrEnum):
     WITHDRAWN = "withdrawn"
 
 
+class LeaveWithdrawalStatus(StrEnum):
+    """Where an APPROVED leave's withdrawal request has got to.
+
+    Separate from `LeaveStatus` on purpose. Until the manager decides, the leave
+    is still approved and still counts against the balance and payroll - folding
+    "asked to withdraw" into the leave's own status would silently return the
+    days the moment someone asked for them back.
+    """
+
+    NONE = "none"  # nothing asked
+    REQUESTED = "requested"  # waiting on the manager
+    APPROVED = "approved"  # granted; the leave itself is now CANCELLED
+    REJECTED = "rejected"  # declined; the leave stands
+
+
 class Leave(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "leaves"
     __table_args__ = (Index("ix_leaves_employee_status", "employee_id", "status"),)
@@ -66,3 +81,23 @@ class Leave(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     decision_note: Mapped[str | None] = mapped_column(String(1000), default=None)
+
+    # --- withdrawing an approved leave ------------------------------------- #
+    # Taking back time off that was already granted is the manager's call, not
+    # the employee's: the team planned around the absence, and after the leave
+    # has started it also rewrites attendance and pay. So it is a request with
+    # its own small approval cycle rather than a button.
+    withdrawal_status: Mapped[LeaveWithdrawalStatus] = mapped_column(
+        default=LeaveWithdrawalStatus.NONE, index=True
+    )
+    withdrawal_reason: Mapped[str | None] = mapped_column(String(1000), default=None)
+    withdrawal_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    withdrawal_reviewer_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("employees.id", ondelete="SET NULL"), default=None
+    )
+    withdrawal_decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    withdrawal_decision_note: Mapped[str | None] = mapped_column(String(1000), default=None)

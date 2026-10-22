@@ -37,7 +37,9 @@ class EmployeeRead(ORMModel):
     biometric_id: str | None
     hire_date: date | None
     probation_months: int | None = None
-    uan_number: str | None
+    # True once the person is in Circle: pay, bank, work location, employee
+    # code and personal details are then edited in Circle, not here.
+    circle_linked: bool = False
     date_of_birth: date | None
     gender: Gender | None
     has_avatar: bool
@@ -120,7 +122,6 @@ class AdminProfileUpdate(BaseModel):
     manager_id: uuid.UUID | None = None
     timezone: str | None = Field(default=None, max_length=64)
     hire_date: date | None = None
-    uan_number: str | None = None
     date_of_birth: date | None = None
     gender: Gender | None = None
     biometric_id: str | None = Field(default=None, max_length=64)
@@ -129,26 +130,13 @@ class AdminProfileUpdate(BaseModel):
     # data-entry slip that would pin someone to the lowest leave band.
     probation_months: int | None = Field(default=None, ge=0, le=24)
 
-    @field_validator("uan_number")
-    @classmethod
-    def _valid_uan(cls, value: str | None) -> str | None:
-        """UAN is exactly 12 digits. Blank clears it; anything else must match."""
-        if value is None:
-            return None
-        cleaned = value.strip()
-        if not cleaned:
-            return None
-        if not (cleaned.isdigit() and len(cleaned) == 12):
-            raise ValueError("UAN must be exactly 12 digits.")
-        return cleaned
-
 
 class EmployeeCreate(AdminProfileUpdate):
     """Admin/HR adding a person straight to the roster — no invite, no email, no
     account. Used for people we only need a *record* of (contractors, staff who
     never sign in), and for backfilling the existing team.
 
-    Inherits every profile field (and the UAN validator) from `AdminProfileUpdate`
+    Inherits every profile field from `AdminProfileUpdate`
     so a directly-added person is describable exactly like anyone else, and adds
     the three things an invite would otherwise have supplied: their email (the
     identity key), their name (no Google profile to derive it from), and their
@@ -161,7 +149,7 @@ class EmployeeCreate(AdminProfileUpdate):
     """
 
     work_email: EmailStr
-    role: Role = Role.EMPLOYEE
+    role: Role = Role.EXECUTIVE
 
 
 class EmployeeStatusUpdate(BaseModel):

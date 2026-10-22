@@ -53,6 +53,7 @@ def to_field(field: FormField) -> FormFieldRead:
         options=list(field.options or []),
         with_comment=field.with_comment,
         weight=field.weight,
+        stage=field.stage,
     )
 
 

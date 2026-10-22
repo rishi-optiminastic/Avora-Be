@@ -10,15 +10,18 @@ import uuid
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, File, Form, Path, Response, UploadFile
+from fastapi import APIRouter, File, Form, Path, Response, UploadFile, status
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError as PydanticValidationError
 
-from app.core.deps import CurrentUserDep, ProbationServiceDep
+from app.core.deps import CurrentUserDep, FormAssignmentServiceDep, ProbationServiceDep
 from app.core.exceptions import ValidationError
 from app.core.uploads import detect_media_type
+from app.models.form import FormTrigger
 from app.models.probation_decision import ProbationOutcome
+from app.schemas.form import AssignmentRead
 from app.schemas.probation import (
+    MyProbationRead,
     ProbationChecklistRead,
     ProbationDecisionCreate,
     ProbationRosterEntry,
@@ -40,6 +43,22 @@ async def probation_roster(
 ) -> list[ProbationRosterEntry]:
     """Everyone currently on probation, soonest confirmation first."""
     return await service.roster(caller)
+
+
+@router.get("/me", response_model=MyProbationRead | None)
+async def my_probation(
+    caller: CurrentUserDep, service: ProbationServiceDep
+) -> MyProbationRead | None:
+    """Where the caller stands in their own probation.
+
+    Declared BEFORE `/{employee_id}` so "me" is not read as a UUID.
+
+    Deliberately not the checklist: that is HR's working document - who ticked
+    what, their notes, the manager's progress - and `GET /{employee_id}` now
+    refuses a self-read for exactly that reason. This is the dates, the outcome
+    once there is one, and whether they still owe the acknowledgement.
+    """
+    return await service.mine(caller)
 
 
 @router.get("/{employee_id}", response_model=ProbationChecklistRead)
@@ -125,3 +144,40 @@ async def download_probation_letter(
         media_type=_LETTER_TYPE,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.post(
+    "/{employee_id}/forms/{trigger}/send",
+    response_model=AssignmentRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def send_probation_form(
+    employee_id: uuid.UUID,
+    trigger: FormTrigger,
+    caller: CurrentUserDep,
+    service: FormAssignmentServiceDep,
+) -> AssignmentRead:
+    """Send one probation review form for this person, now.
+
+    The same act the scheduler performs when a review window opens, for the
+    cases the clock does not cover: a probation that was extended, a form
+    published after someone's window opened, a manager only put on file today.
+    The checklist step it owns is ticked as part of sending it.
+
+    HR and admins only. 409 when the form is not published yet, when it has
+    already gone out for this person, or when they have no probation end date.
+    """
+    return await service.send_probation_form(caller, employee_id, trigger)
+
+
+@router.post("/me/acknowledge", response_model=MyProbationRead | None)
+async def acknowledge_my_probation(
+    caller: CurrentUserDep, service: ProbationServiceDep
+) -> MyProbationRead | None:
+    """The probationer signs off their own confirmation or extension letter.
+
+    The one checklist step they own. A dedicated action rather than the general
+    step endpoint, which reads the whole checklist to answer - exactly what
+    they may not see. 409 when there is no letter to acknowledge.
+    """
+    return await service.acknowledge(caller)

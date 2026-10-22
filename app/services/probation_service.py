@@ -16,9 +16,15 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from app.core.exceptions import AuthorizationError, NotFoundError, ValidationError
+from app.core.exceptions import (
+    AuthorizationError,
+    ConflictError,
+    NotFoundError,
+    ValidationError,
+)
 from app.core.logging import get_logger
 from app.core.probation import (
+    ACKNOWLEDGE_STEP,
     RECENT_CONFIRMATION_DAYS,
     REVIEW_LEAD_DAYS,
     STEPS,
@@ -47,6 +53,7 @@ from app.repositories.probation_checklist import ProbationChecklistRepository
 from app.repositories.probation_decision import ProbationDecisionRepository
 from app.schemas.auth import CurrentUser
 from app.schemas.probation import (
+    MyProbationRead,
     ProbationChecklistRead,
     ProbationDecisionCreate,
     ProbationDecisionRead,
@@ -129,6 +136,14 @@ class ProbationService:
         excluded senior managers, who can read their whole department everywhere
         else in the app.
         """
+        if employee_id == caller.employee_id:
+            # Nobody reads their own probation review - not even HR, who would
+            # otherwise be reading the assessment of themselves. The checklist
+            # is HR's working document: who ticked what, their private notes,
+            # the manager's progress. What the probationer gets is `mine()`:
+            # where they stand, and the one step that is theirs to take.
+            # The same rule the probation FORMS use (`_may_open`).
+            raise NotFoundError()
         if not await self._employees.can_read(caller, employee_id):
             # 404 over 403: revealing that a given person is under review is
             # itself scope leakage (API conventions §7).
@@ -144,7 +159,9 @@ class ProbationService:
         """Everyone currently on probation, within the caller's scope."""
         # One scoped query covers every role: HR/Admin get the org, a senior
         # manager their department, a manager their reports, anyone else just themselves.
-        candidates = await self._employees.all_in_scope(caller)
+        candidates = [
+            e for e in await self._employees.all_in_scope(caller) if e.id != caller.employee_id
+        ]
         today = await self._org_today()
         default_months = await self._default_probation_months()
 
@@ -202,6 +219,84 @@ class ProbationService:
             target=f"employee:{employee.id}",
         )
         return result
+
+    async def mine(self, caller: CurrentUser) -> MyProbationRead | None:
+        """Where the caller stands in their OWN probation, and nothing else.
+
+        The counterpart to `checklist` refusing a self-read. They get the
+        dates, the outcome once HR has recorded one, and whether they still
+        owe the acknowledgement - never the 16 steps, the notes, or who has
+        done what. None when they have no probation to report, which is most
+        people most of the time.
+        """
+        employee = await self._employees.get(caller.employee_id)
+        if employee is None or employee.hire_date is None:
+            return None
+        today = await self._org_today()
+        months = await self._probation_months(employee)
+        ends_on = probation_end(employee.hire_date, months)
+        decision = await self._decisions.get(employee.id)
+        on_probation = (
+            tenure_status(employee.hire_date, today, probation_months=months)
+            is TenureStatus.PROBATION
+        )
+        # Nothing to say: confirmed long ago with no outcome on file. Returning
+        # a hollow record would put an empty card on everyone's dashboard.
+        if not on_probation and decision is None:
+            return None
+
+        rows = {row.step_no: row for row in await self._items.list_for_employee(employee.id)}
+        ack = rows.get(ACKNOWLEDGE_STEP)
+        return MyProbationRead(
+            employee_id=employee.id,
+            hire_date=employee.hire_date,
+            probation_end_date=ends_on,
+            review_start_date=ends_on - timedelta(days=REVIEW_LEAD_DAYS),
+            days_to_probation_end=(ends_on - today).days,
+            is_on_probation=on_probation,
+            decision=await self._decision_read(decision),
+            # Only once there is something to acknowledge, and not for a
+            # termination - Avora does not ask someone to sign off their own
+            # dismissal.
+            needs_acknowledgement=(
+                decision is not None
+                and decision.outcome is not ProbationOutcome.TERMINATED
+                and (ack is None or ack.status is ProbationStepStatus.PENDING)
+            ),
+        )
+
+    async def acknowledge(self, caller: CurrentUser) -> MyProbationRead | None:
+        """The probationer signs off their own confirmation or extension letter.
+
+        A dedicated action rather than `set_step`, because that one reads the
+        whole checklist to answer - which is precisely what they may no longer
+        see. This touches one step, the only one they own, and hands back the
+        same narrow view as `mine`.
+        """
+        employee = await self._employees.get(caller.employee_id)
+        if employee is None:
+            raise NotFoundError()
+        decision = await self._decisions.get(employee.id)
+        if decision is None or decision.outcome is ProbationOutcome.TERMINATED:
+            # Nothing to acknowledge, and Avora never asks anyone to sign off
+            # their own dismissal.
+            raise ConflictError("There is no letter to acknowledge yet.")
+
+        row = await self._items.get(employee.id, ACKNOWLEDGE_STEP)
+        if row is None:
+            row = ProbationChecklistItem(employee_id=employee.id, step_no=ACKNOWLEDGE_STEP)
+            self._items.add(row)
+        row.status = ProbationStepStatus.DONE
+        row.note = "Acknowledged by the employee in Avora."
+        row.actor_id = caller.employee_id
+        row.acted_at = datetime.now(UTC)
+        await self._items.flush()
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="probation.acknowledge",
+            target=f"employee:{employee.id}",
+        )
+        return await self.mine(caller)
 
     async def _build(self, caller: CurrentUser, employee: Employee) -> ProbationChecklistRead:
         """Merge the template with this employee's progress. No audit: a write

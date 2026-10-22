@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.models.workbook import WorkbookSharing
+from app.models.workbook import WorkbookAccess, WorkbookSharing
 
 TITLE_MAX = 120
 
@@ -49,6 +49,10 @@ class WorkbookContentSave(BaseModel):
     force: bool = False
 
 
+# What the caller may do with a sheet, as one word for the UI.
+MyAccess = Literal["owner", "edit", "view"]
+
+
 class WorkbookSummary(BaseModel):
     id: uuid.UUID
     title: str
@@ -58,8 +62,14 @@ class WorkbookSummary(BaseModel):
     version: int
     updated_at: datetime
     updated_by_name: str | None
+    my_access: MyAccess
     can_edit: bool
+    # Add, change and remove named people (owner, admins and editors).
+    can_share: bool
+    # Rename, change general access and delete (owner and admins).
     can_manage: bool
+    # Names of the people it is shared with by name, oldest first.
+    shared_with: list[str]
 
 
 class WorkbookRead(WorkbookSummary):
@@ -70,3 +80,26 @@ class WorkbookSaved(BaseModel):
     version: int
     updated_at: datetime
     updated_by_name: str | None
+
+
+class WorkbookMemberSet(BaseModel):
+    access: WorkbookAccess
+
+
+class WorkbookMemberRead(BaseModel):
+    employee_id: uuid.UUID
+    name: str
+    job_title: str | None
+    access: WorkbookAccess
+
+
+class WorkbookPerson(BaseModel):
+    """Someone the share picker can offer."""
+
+    id: uuid.UUID
+    name: str
+    job_title: str | None
+    department: str | None
+
+
+PEOPLE_QUERY_MAX = 64

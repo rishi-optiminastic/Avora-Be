@@ -16,7 +16,7 @@ import uuid
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import JSON, ForeignKey, Index, String
+from sqlalchemy import JSON, ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -24,9 +24,19 @@ from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 
 class WorkbookSharing(StrEnum):
-    PRIVATE = "private"  # the owner (and admins) only
-    ORG_VIEW = "org_view"  # everyone may open it; the owner edits
+    """General access: what everyone in the org gets, on top of the people the
+    sheet is shared with by name (`WorkbookMember`)."""
+
+    PRIVATE = "private"  # restricted: the owner, admins and named people only
+    ORG_VIEW = "org_view"  # everyone may open it
     ORG_EDIT = "org_edit"  # everyone may open and edit it
+
+
+class WorkbookAccess(StrEnum):
+    """What a named person may do with a sheet shared with them."""
+
+    VIEW = "view"
+    EDIT = "edit"
 
 
 class Workbook(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -41,5 +51,23 @@ class Workbook(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     version: Mapped[int] = mapped_column(default=1)
     updated_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("employees.id", ondelete="SET NULL"), default=None
+    )
+
+
+class WorkbookMember(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """One person a sheet is shared with by name, and what they may do."""
+
+    __tablename__ = "workbook_members"
+    __table_args__ = (UniqueConstraint("workbook_id", "employee_id"),)
+
+    workbook_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("workbooks.id", ondelete="CASCADE"), index=True
+    )
+    employee_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("employees.id", ondelete="CASCADE"), index=True
+    )
+    access: Mapped[WorkbookAccess] = mapped_column(default=WorkbookAccess.VIEW)
+    added_by_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("employees.id", ondelete="SET NULL"), default=None
     )

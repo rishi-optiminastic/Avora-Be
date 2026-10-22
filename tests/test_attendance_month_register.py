@@ -99,6 +99,23 @@ async def _daily_sheet(
     ]
 
 
+async def _summary_sheet(
+    client: AsyncClient, settings: Settings, who: Employee
+) -> list[dict[str, object]]:
+    """The first sheet of the register - one row per employee for the month."""
+    res = await client.get(
+        f"/api/v1/attendance/report/export?month={_MONTH}", headers=auth_headers(settings, who)
+    )
+    assert res.status_code == 200, res.text
+    wb = load_workbook(BytesIO(res.content))
+    sheet = wb[wb.sheetnames[0]]
+    headers = [c.value for c in sheet[1]]
+    return [
+        dict(zip(headers, [c.value for c in row], strict=True))
+        for row in sheet.iter_rows(min_row=2)
+    ]
+
+
 def _rows_for(sheet: list[dict[str, object]], person: Employee) -> dict[str, dict[str, object]]:
     return {str(r["Date"]): r for r in sheet if r["Employee"] == person.full_name}
 
@@ -328,6 +345,33 @@ async def test_daily_sheet_has_every_day_with_weekends_and_holidays(
     assert sunday["Check in"] == "10:00"
     assert sunday["Check out"] == "14:00"
     assert sunday["Day"] == "Sun"
+
+
+async def test_a_weekend_shift_counts_as_a_present_day(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """Present days are the days you were actually at work, not the working
+    days you were at work. Someone who came in on a Sunday is present that
+    Sunday, and the Summary says so.
+
+    Not a new rule - `_summarize` counts statuses and never filtered by
+    weekday - but nothing pinned it, so a future "only count working days"
+    tidy-up would have silently erased weekend work from everyone's month.
+    """
+    await _session(db, seed.report, _sep(1))  # Monday
+    await _session(db, seed.report, _sep(7), (10, 0), (18, 0))  # Sunday
+
+    res = await client.get(
+        f"/api/v1/attendance/report?month={_MONTH}", headers=auth_headers(settings, seed.admin)
+    )
+
+    assert res.status_code == 200, res.text
+    mine = next(r for r in res.json() if r["employee_id"] == str(seed.report.id))
+    assert mine["full_days"] == 2  # the Monday AND the Sunday
+
+    summary = await _summary_sheet(client, settings, seed.admin)
+    row = next(r for r in summary if r["Employee"] == seed.report.full_name)
+    assert row["Present days"] == 2
 
 
 # --------------------------------------------------------------------------- #

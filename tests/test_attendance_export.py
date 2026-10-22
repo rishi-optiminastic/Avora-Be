@@ -103,6 +103,28 @@ async def test_daily_sheet_carries_check_in_and_check_out(
     assert mine[0]["Check in"] == "09:30"
     assert mine[0]["Check out"] == "18:00"
     assert mine[0]["Hours"] == 8.5
+    assert mine[0]["Present"] == 1
+
+
+async def test_the_daily_present_column_adds_up_to_present_days(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """HR totals the Daily sheet's Present column; it must match the Summary."""
+    day = _recent_weekday()
+    await _worked(db, seed.report.id, day)
+
+    wb = _sheets((await _export(client, settings, seed.admin, _month_of(day))).content)
+    summary, daily = wb[wb.sheetnames[0]], wb[wb.sheetnames[1]]
+    s_head = [c.value for c in summary[1]]
+    d_head = [c.value for c in daily[1]]
+    for row in summary.iter_rows(min_row=2, values_only=True):
+        person = dict(zip(s_head, row, strict=True))
+        days = [
+            dict(zip(d_head, r, strict=True))
+            for r in daily.iter_rows(min_row=2, values_only=True)
+            if r[0] == person["Employee"]
+        ]
+        assert sum(d["Present"] or 0 for d in days) == person["Present days"]
 
 
 async def test_summary_sheet_agrees_with_the_api_report(

@@ -283,7 +283,7 @@ async def test_an_admin_still_handles_their_own_reports_leave(
         hr_external_id="hr-admin-report",
         work_email="admin.report@corp.test",
         full_name="Ana Report",
-        role=Role.EMPLOYEE,
+        role=Role.EXECUTIVE,
         manager_id=seed.admin.id,
         status=EmployeeStatus.ACTIVE,
         is_active=True,

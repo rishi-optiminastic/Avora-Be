@@ -48,6 +48,30 @@ class ProbationChecklistRead(BaseModel):
     can_decide: bool
 
 
+class MyProbationRead(BaseModel):
+    """What a probationer may see about their OWN review.
+
+    Deliberately NOT `ProbationChecklistRead`. The 16-step checklist is HR's
+    working document - who ticked what, HR's private notes, the manager's
+    progress - and showing someone the machinery of their own assessment is
+    both uncomfortable and none of their business. What they get is where they
+    stand: the dates, the outcome once there is one, and the one step that is
+    genuinely theirs to take.
+    """
+
+    employee_id: uuid.UUID
+    hire_date: date | None
+    probation_end_date: date | None
+    review_start_date: date | None
+    days_to_probation_end: int | None
+    is_on_probation: bool
+    # Set once HR has recorded one. Carries the letter's wording and, for an
+    # extension, what is expected by the new date - things said TO them.
+    decision: ProbationDecisionRead | None
+    # They still owe the acknowledgement of their letter (checklist step 14).
+    needs_acknowledgement: bool
+
+
 class ProbationRosterEntry(BaseModel):
     """A row in the "who is on probation" list."""
 

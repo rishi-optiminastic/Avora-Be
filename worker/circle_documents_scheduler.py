@@ -1,5 +1,7 @@
-"""Avora Circle scheduler - copies employees' Circle documents in, and fills
-the date of birth, gender and profile photo Avora is missing.
+"""Avora Circle scheduler - copies employees' Circle documents in, fills the
+date of birth, gender and profile photo Avora is missing, and keeps what Circle
+owns in step: pay and bank, personal and employment details (masked ID
+numbers only), the reporting manager, appraisal history and assets.
 
 Runs as its own process (like `worker/celebrations_scheduler.py`). Each tick it
 walks the active employees and copies any Circle document not copied before
@@ -11,6 +13,8 @@ Does nothing until the Circle link is configured. Env:
   DATABASE_URL                     Postgres URL (asyncpg-style, same as the API).
   CIRCLE_API_URL / CIRCLE_API_SECRET  the Circle link (both required).
   AWS_*                            so copies land in S3 like uploads do.
+  BANK_FERNET_KEY                  encrypts bank account numbers and contact
+                                   details at rest (same key as the API).
   CIRCLE_DOCUMENTS_TICK_SECONDS    seconds between runs (default 600 = 10 min).
 """
 
@@ -28,10 +32,15 @@ from app.core.config import get_settings
 from app.db.session import SessionFactory, engine
 from app.repositories.audit import AuditRepository
 from app.repositories.circle_document_import import CircleDocumentImportRepository
+from app.repositories.circle_record import CircleRecordRepository
+from app.repositories.compensation import CompensationRepository
 from app.repositories.document import DocumentRepository
 from app.repositories.employee import EmployeeRepository
 from app.services.circle_client import CircleClient
+from app.services.circle_compensation_sync import CircleCompensationSync
+from app.services.circle_details_sync import CircleDetailsSync
 from app.services.circle_document_sync import CircleDocumentSync, discard_stored
+from app.services.circle_history_sync import CircleHistorySync
 from app.services.circle_profile_sync import CircleProfileSync
 from worker.heartbeat import beat
 
@@ -43,12 +52,26 @@ HEARTBEAT_ENV = "HEARTBEAT_URL_CIRCLE_DOCUMENTS"
 
 def _build_profile_sync(session: AsyncSession) -> CircleProfileSync:
     settings = get_settings()
+    employees = EmployeeRepository(session)
     return CircleProfileSync(
-        EmployeeRepository(session),
+        employees,
         CircleDocumentImportRepository(session),
         AuditRepository(session),
         settings,
         CircleClient(settings),
+        CircleDetailsSync(employees, CircleRecordRepository(session), settings),
+    )
+
+
+def _build_record_syncs(
+    session: AsyncSession,
+) -> tuple[CircleCompensationSync, CircleHistorySync]:
+    settings = get_settings()
+    client = CircleClient(settings)
+    audit = AuditRepository(session)
+    return (
+        CircleCompensationSync(CompensationRepository(session), audit, settings, client),
+        CircleHistorySync(CircleRecordRepository(session), audit, client),
     )
 
 
@@ -110,9 +133,27 @@ async def fill_profile_for(employee_id: uuid.UUID) -> list[str]:
     return filled
 
 
+async def sync_records_for(employee_id: uuid.UUID) -> list[str]:
+    """Pay and bank, appraisal history and assets - Circle wins - in one
+    transaction. Returns the names of what changed."""
+    async with SessionFactory() as session:
+        employee = await EmployeeRepository(session).get(employee_id)
+        if employee is None:
+            return []
+        compensation, history = _build_record_syncs(session)
+        try:
+            changed = await compensation.sync(employee) + await history.sync(employee)
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+    return changed
+
+
 async def run_once() -> int:
-    """One pass over every active employee: copy new documents, then fill
-    missing profile details. Returns how many files were copied."""
+    """One pass over every active employee: copy new documents, fill missing
+    profile details and mirror what Circle owns. Returns how many files were
+    copied."""
     async with SessionFactory() as session:
         people = [(e.id, e.work_email) for e in await EmployeeRepository(session).list_all_active()]
     copied = 0
@@ -125,6 +166,10 @@ async def run_once() -> int:
             await fill_profile_for(employee_id)
         except Exception as exc:
             log.warning("profile fill failed for one employee: %s", type(exc).__name__)
+        try:
+            await sync_records_for(employee_id)
+        except Exception as exc:
+            log.warning("record sync failed for one employee: %s", type(exc).__name__)
     return copied
 
 

@@ -27,6 +27,8 @@ from app.schemas.leave import (
     LeaveCreate,
     LeaveDecision,
     LeaveRead,
+    LeaveWithdrawalDecision,
+    LeaveWithdrawalRequest,
 )
 from app.schemas.leave_policy import LeavePolicyRead, LeavePolicyUpdate
 from app.services.leave_service import LeaveService
@@ -46,6 +48,8 @@ async def _reads(
         read.comment_count = count
         read.can_decide = perms[leave.id].can_decide
         read.can_cancel = perms[leave.id].can_cancel
+        read.can_request_withdrawal = perms[leave.id].can_request_withdrawal
+        read.can_decide_withdrawal = perms[leave.id].can_decide_withdrawal
         out.append(read)
     return out
 
@@ -159,9 +163,39 @@ async def cancel_leave(
     service: LeaveServiceDep,
     payload: LeaveCancel | None = None,
 ) -> LeaveRead:
-    """Cancel an approved leave: the employee before it starts, or HR / their
-    manager at any time. Out-of-scope callers get 404."""
+    """Cancel an approved leave outright: HR or the requester's manager.
+
+    The employee's own route is `POST /{leave_id}/withdrawal`, which asks rather
+    than acts. Out-of-scope callers get 404."""
     leave = await service.cancel_approved(caller, leave_id, payload or LeaveCancel())
+    return await _read(service, caller, leave)
+
+
+@router.post("/{leave_id}/withdrawal", response_model=LeaveRead)
+async def request_leave_withdrawal(
+    leave_id: uuid.UUID,
+    payload: LeaveWithdrawalRequest,
+    caller: CurrentUserDep,
+    service: LeaveServiceDep,
+) -> LeaveRead:
+    """Ask for an already-approved leave to be given back.
+
+    The leave stays approved and keeps counting until the manager decides."""
+    leave = await service.request_withdrawal(caller, leave_id, payload)
+    return await _read(service, caller, leave)
+
+
+@router.post("/{leave_id}/withdrawal/decision", response_model=LeaveRead)
+async def decide_leave_withdrawal(
+    leave_id: uuid.UUID,
+    payload: LeaveWithdrawalDecision,
+    caller: CurrentUserDep,
+    service: LeaveServiceDep,
+) -> LeaveRead:
+    """Grant or refuse a withdrawal request (the requester's manager or HR).
+
+    Granting cancels the leave and returns the days."""
+    leave = await service.decide_withdrawal(caller, leave_id, payload)
     return await _read(service, caller, leave)
 
 

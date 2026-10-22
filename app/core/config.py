@@ -91,6 +91,13 @@ class Settings(BaseSettings):
     biometric_webhook_secret: str = Field(default="change-me", min_length=8)
     biometric_ip_allowlist: str = ""
 
+    # --- workspaces -------------------------------------------------------- #
+    # The workspace a request falls back to when it does not name one: every
+    # agent, HR webhook and biometric push that existed before Avora had more
+    # than one workspace. They keep working untouched, and a second workspace
+    # is reached only by asking for it explicitly.
+    primary_workspace_slug: str = "optiminastic"
+
     # Quick Meet — one-click Google Meet + Slack share -----------------------
     # Uses a Google Workspace service account with domain-wide delegation, so the
     # backend creates a Calendar event (with a Meet link) on behalf of whoever
@@ -111,6 +118,9 @@ class Settings(BaseSettings):
     # the Compensation "Import from Circle" and Circle documents simply hide.
     circle_api_url: str = ""  # e.g. https://api.circle.optiminastic.com
     circle_api_secret: str = ""  # Circle's AVORA_API_SECRET
+    # Circle's web app, for the "Edit in Circle" links on the fields Circle
+    # owns (pay, bank, personal details). Not a secret.
+    circle_app_url: str = "https://circle.optiminastic.com"
     quick_meet_message: str = "{starter} started a quick meeting. Join now: {url}"
 
     # Env Sync (App Store app) -----------------------------------------------

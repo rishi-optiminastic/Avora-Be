@@ -67,6 +67,9 @@ class AttendanceDailyRow:
     day: str
     weekday: str
     status: str
+    # 1 on a day counted as present, 0 on a recorded day that was not, blank
+    # when there was no workday to attend; the column sums to "Present days".
+    present: int | None
     check_in: str
     check_out: str
     worked_hours: float
@@ -82,6 +85,7 @@ class AttendanceDailyRow:
             self.day,
             self.weekday,
             self.status,
+            self.present,
             self.check_in,
             self.check_out,
             self.worked_hours,
@@ -112,6 +116,7 @@ _DAILY_HEADERS = [
     "Date",
     "Day",
     "Status",
+    "Present",
     "Check in",
     "Check out",
     "Hours",

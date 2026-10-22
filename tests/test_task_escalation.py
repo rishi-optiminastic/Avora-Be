@@ -206,7 +206,7 @@ async def test_an_inactive_manager_is_never_pulled_in(db: AsyncSession, seed: _S
         hr_external_id="hr-worker",
         work_email="worker@corp.test",
         full_name="Wen Worker",
-        role=Role.EMPLOYEE,
+        role=Role.EXECUTIVE,
         manager_id=lead.id,
         status=EmployeeStatus.ACTIVE,
         is_active=True,
@@ -242,7 +242,7 @@ async def test_me_reports_leading_a_team_from_the_reporting_line_not_the_role(
         hr_external_id="hr-quiet-lead",
         work_email="quiet.lead@corp.test",
         full_name="Lee Quiet",
-        role=Role.EMPLOYEE,  # runs a team without the title
+        role=Role.EXECUTIVE,  # runs a team without the title
         status=EmployeeStatus.ACTIVE,
         is_active=True,
     )
@@ -253,7 +253,7 @@ async def test_me_reports_leading_a_team_from_the_reporting_line_not_the_role(
             hr_external_id="hr-quiet-report",
             work_email="quiet.report@corp.test",
             full_name="Ray Report",
-            role=Role.EMPLOYEE,
+            role=Role.EXECUTIVE,
             manager_id=lead.id,
             status=EmployeeStatus.ACTIVE,
             is_active=True,
@@ -275,7 +275,7 @@ async def _lead_with_report(db: AsyncSession, tag: str) -> tuple[Employee, Emplo
         hr_external_id=f"hr-lead-{tag}",
         work_email=f"lead.{tag}@corp.test",
         full_name=f"Lead {tag}",
-        role=Role.EMPLOYEE,  # runs a team without the title
+        role=Role.EXECUTIVE,  # runs a team without the title
         status=EmployeeStatus.ACTIVE,
         is_active=True,
     )
@@ -285,7 +285,7 @@ async def _lead_with_report(db: AsyncSession, tag: str) -> tuple[Employee, Emplo
         hr_external_id=f"hr-rep-{tag}",
         work_email=f"rep.{tag}@corp.test",
         full_name=f"Report {tag}",
-        role=Role.EMPLOYEE,
+        role=Role.EXECUTIVE,
         manager_id=lead.id,
         status=EmployeeStatus.ACTIVE,
         is_active=True,
@@ -374,7 +374,7 @@ async def test_a_viewer_cannot_assign_to_someone_on_their_reporting_line(
         hr_external_id="hr-intern-assign",
         work_email="intern.assign@corp.test",
         full_name="Ira Intern",
-        role=Role.EMPLOYEE,
+        role=Role.EXECUTIVE,
         manager_id=viewer.id,
         status=EmployeeStatus.ACTIVE,
         is_active=True,

@@ -96,7 +96,7 @@ async def test_accept_readmits_offboarded_employee(
         hr_external_id="hr-stale-1",
         work_email="returning@acme.com",
         full_name="Returning Person",
-        role=Role.EMPLOYEE,
+        role=Role.EXECUTIVE,
         status=EmployeeStatus.INACTIVE,
         is_active=False,
     )
@@ -134,7 +134,7 @@ async def test_accept_uses_real_name_from_identity(
     profile, not an email-derived placeholder."""
     created = await client.post(
         "/api/v1/invitations",
-        json={"email": "tech5@acme.com", "role": "employee"},
+        json={"email": "tech5@acme.com", "role": "executive"},
         headers=auth_headers(settings, seed.admin),
     )
     token = created.json()["accept_url"].rsplit("/", 1)[1]
@@ -156,7 +156,7 @@ async def test_login_backfills_placeholder_name(
     later sign-in that carries one — but a real name is never overwritten."""
     created = await client.post(
         "/api/v1/invitations",
-        json={"email": "tech7@acme.com", "role": "employee"},
+        json={"email": "tech7@acme.com", "role": "executive"},
         headers=auth_headers(settings, seed.admin),
     )
     token = created.json()["accept_url"].rsplit("/", 1)[1]
@@ -213,7 +213,7 @@ async def test_accept_requires_matching_email(
 ) -> None:
     created = await client.post(
         "/api/v1/invitations",
-        json={"email": "intended@acme.com", "role": "employee"},
+        json={"email": "intended@acme.com", "role": "executive"},
         headers=auth_headers(settings, seed.admin),
     )
     token = created.json()["accept_url"].rsplit("/", 1)[1]

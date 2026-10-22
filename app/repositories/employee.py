@@ -163,7 +163,6 @@ class EmployeeRepository:
             "manager_id",
             "timezone",
             "hire_date",
-            "uan_number",
             "date_of_birth",
             "gender",
             "biometric_id",
@@ -181,6 +180,17 @@ class EmployeeRepository:
 
     async def set_buddy(self, employee: Employee, buddy_id: uuid.UUID | None) -> None:
         employee.buddy_id = buddy_id
+        await self._session.flush()
+
+    # The employee columns the Circle sync may set (guards setattr).
+    _CIRCLE_FIELDS = frozenset({"employee_number", "location", "manager_id", "circle_linked_at"})
+
+    async def apply_circle_fields(self, employee: Employee, fields: dict[str, object]) -> None:
+        """Circle's values for the employee columns Circle owns, and the link
+        marker. Never touches role or any privilege (rule 5.5)."""
+        for key, value in fields.items():
+            if key in self._CIRCLE_FIELDS:
+                setattr(employee, key, value)
         await self._session.flush()
 
     async def set_active(self, employee: Employee, is_active: bool) -> None:
@@ -293,7 +303,7 @@ class EmployeeRepository:
         with a correlated subquery so we needn't widen the token/CurrentUser.
 
         The direct-reports clause used to be gated on `role is MANAGER`, so a
-        person who ran a team while carrying the EMPLOYEE or EXECUTIVE role saw
+        person who ran a team while carrying the INTERN or EXECUTIVE role saw
         only themselves - none of their reports' attendance, leave or
         regularizations, and no way to action any of it. Three people lead teams
         under those roles here, one of them with five requests stuck pending and
@@ -598,7 +608,7 @@ class EmployeeRepository:
         if employee is None:
             employee = Employee(
                 hr_external_id=hr_external_id,
-                role=Role.EMPLOYEE,  # default only on create; never from HR
+                role=Role.EXECUTIVE,  # default only on create; never from HR
             )
             self._session.add(employee)
 

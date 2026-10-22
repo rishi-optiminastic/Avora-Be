@@ -46,7 +46,14 @@ class ProbationFormPanelService:
         self._audit = audit
 
     async def for_employee(self, caller: CurrentUser, employee_id: uuid.UUID) -> ProbationForms:
-        # The same scope as the checklist itself; 404 so existence never leaks.
+        # The same scope as the checklist itself, which means the subject is
+        # refused too. `_may_open_answers` already kept the ANSWERS and the
+        # score from them, but the panel still reported each form's status,
+        # who was reviewing them and when it came back - the machinery of their
+        # own assessment, which is exactly what the checklist stopped showing.
+        # 404 so existence never leaks.
+        if employee_id == caller.employee_id:
+            raise NotFoundError()
         if not await self._employees.can_read(caller, employee_id):
             raise NotFoundError()
         rows = await self._assignments.for_subject(employee_id, _ORDER)

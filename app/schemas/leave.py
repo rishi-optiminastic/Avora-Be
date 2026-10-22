@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.core.tenure import TenureStatus
-from app.models.leave import HalfDayPeriod, LeaveStatus, LeaveType
+from app.models.leave import HalfDayPeriod, LeaveStatus, LeaveType, LeaveWithdrawalStatus
 from app.schemas.common import ORMModel
 
 
@@ -52,9 +52,28 @@ class LeaveDecision(BaseModel):
 
 
 class LeaveCancel(BaseModel):
-    """Cancel an APPROVED leave (the employee before it starts; HR or their
-    manager at any time). The note is passed on to whoever is notified."""
+    """Cancel an APPROVED leave outright (HR or the requester's manager). The
+    employee's own route is a withdrawal request. The note is passed on to
+    whoever is notified."""
 
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class LeaveWithdrawalRequest(BaseModel):
+    """The employee asks for an approved leave to be given back.
+
+    The reason is required, unlike the one on a cancellation: the manager is
+    being asked to undo something they already agreed to, and "why" is the whole
+    content of that request.
+    """
+
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class LeaveWithdrawalDecision(BaseModel):
+    """The manager (or HR) grants or refuses a withdrawal request."""
+
+    approve: bool
     note: str | None = Field(default=None, max_length=1000)
 
 
@@ -79,6 +98,17 @@ class LeaveRead(ORMModel):
     # exactly the buttons the API will honour instead of re-deriving the policy.
     can_decide: bool = False
     can_cancel: bool = False
+
+    # Withdrawing an approved leave. `withdrawal_status` stays NONE for the vast
+    # majority of rows, so the UI can key the whole section off it.
+    withdrawal_status: LeaveWithdrawalStatus = LeaveWithdrawalStatus.NONE
+    withdrawal_reason: str | None = None
+    withdrawal_requested_at: datetime | None = None
+    withdrawal_reviewer_id: uuid.UUID | None = None
+    withdrawal_decided_at: datetime | None = None
+    withdrawal_decision_note: str | None = None
+    can_request_withdrawal: bool = False
+    can_decide_withdrawal: bool = False
 
 
 class TierQuotaRead(BaseModel):

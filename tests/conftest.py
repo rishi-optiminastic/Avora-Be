@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
-from typing import ClassVar
+from typing import Annotated, ClassVar
 
 import jwt
 import pytest
@@ -19,17 +19,27 @@ import pytest_asyncio
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from fastapi import Header
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import Environment, Settings
-from app.core.deps import get_db, get_email_service, get_jwks_client, get_settings
+from app.core.deps import (
+    _resolve_workspace,
+    get_db,
+    get_email_service,
+    get_jwks_client,
+    get_settings,
+)
+from app.core.exceptions import AuthorizationError
 from app.core.security import (
     compute_hmac_sha256,
     generate_device_token,
     hash_device_token,
 )
+from app.core.tenancy import InvalidWorkspaceSlug, use_schema
 from app.main import create_app
 from app.models import Base, Device, Employee, EmployeeStatus, Role
 from app.models.attendance_policy import AttendancePolicy
@@ -195,6 +205,13 @@ async def engine() -> AsyncIterator[object]:
         poolclass=StaticPool,
     )
     async with eng.begin() as conn:
+        # The workspace address book (`public.workspaces`,
+        # `public.workspace_members`) is schema-qualified, because in Postgres
+        # it has to live outside every workspace. SQLite has no schemas, but it
+        # does have attached databases, and they are addressed with the same
+        # `schema.table` syntax - so attaching one called `public` makes those
+        # two models create and query exactly as they do in production.
+        await conn.execute(text("ATTACH DATABASE ':memory:' AS public"))
         await conn.run_sync(Base.metadata.create_all)
     yield eng
     await eng.dispose()
@@ -218,8 +235,26 @@ async def client(
 ) -> AsyncIterator[AsyncClient]:
     app = create_app(settings)
 
-    async def _override_db() -> AsyncIterator[AsyncSession]:
+    async def _override_db(
+        authorization: Annotated[str | None, Header()] = None,
+        x_avora_workspace: Annotated[str | None, Header()] = None,
+    ) -> AsyncIterator[AsyncSession]:
+        """The test session, resolved through the REAL workspace rules.
+
+        The override exists to swap the engine, not to skip authorization. On
+        SQLite `use_schema` is a no-op - there are no schemas to point at - but
+        `_resolve_workspace` still decides whether this caller may reach the
+        workspace they named, so every HTTP test exercises that decision
+        instead of quietly bypassing it.
+        """
         async with session_factory() as s:
+            try:
+                schema = await _resolve_workspace(
+                    s, settings, _FakeJwksClient(), authorization, x_avora_workspace
+                )
+            except InvalidWorkspaceSlug as exc:
+                raise AuthorizationError("That workspace key is not valid.") from exc
+            await use_schema(s, schema)
             try:
                 yield s
                 await s.commit()
@@ -269,7 +304,7 @@ async def seed(db: AsyncSession, settings: Settings):
         hr_external_id="hr-report",
         work_email="report@corp.test",
         full_name="Remy Report",
-        role=Role.EMPLOYEE,
+        role=Role.EXECUTIVE,
         manager_id=manager.id,
         status=EmployeeStatus.ACTIVE,
         is_active=True,
@@ -278,7 +313,7 @@ async def seed(db: AsyncSession, settings: Settings):
         hr_external_id="hr-outsider",
         work_email="outsider@corp.test",
         full_name="Olive Outsider",
-        role=Role.EMPLOYEE,
+        role=Role.EXECUTIVE,
         status=EmployeeStatus.ACTIVE,
         is_active=True,
     )

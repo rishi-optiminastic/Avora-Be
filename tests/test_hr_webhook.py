@@ -49,7 +49,7 @@ async def test_valid_webhook_creates_employee(
     body = resp.json()
     assert body["hr_external_id"] == "hr-new-1"
     # HR-created employees default to the least-privileged role.
-    assert body["role"] == "employee"
+    assert body["role"] == "executive"
 
 
 async def test_webhook_cannot_set_role(
@@ -60,11 +60,11 @@ async def test_webhook_cannot_set_role(
     raw, headers = hr_headers(settings, _payload(role="admin"))
     resp = await client.post("/api/v1/hr/sync", content=raw, headers=headers)
     assert resp.status_code == 200
-    assert resp.json()["role"] == "employee"
+    assert resp.json()["role"] == "executive"
 
     created = await db.scalar(select(Employee).where(Employee.hr_external_id == "hr-new-1"))
     assert created is not None
-    assert created.role is Role.EMPLOYEE
+    assert created.role is Role.EXECUTIVE
 
 
 async def test_webhook_offboard_soft_deletes(
@@ -91,7 +91,7 @@ async def _add_employee(
     *,
     hr_external_id: str,
     work_email: str,
-    role: Role = Role.EMPLOYEE,
+    role: Role = Role.EXECUTIVE,
     manager: Employee | None = None,
 ) -> Employee:
     # The seed's `.test` addresses fail EmailStr, so payload-facing rows use corp.io.
@@ -345,3 +345,67 @@ async def test_hr_can_deactivate_an_ordinary_employee(
         _payload(hr_external_id="EMP-1001", work_email="one@corp.io", status="inactive"),
     )
     assert resp.status_code == 200 and resp.json()["is_active"] is False
+
+
+async def test_hr_can_deactivate_an_intern(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """INTERN is an unprivileged role, so an ordinary HR offboard goes through.
+
+    Pinned because the guard used to read `role is not Role.EMPLOYEE`. When
+    EMPLOYEE became INTERN that single check would have reclassified every
+    unprivileged person as privileged and started 409-ing routine offboards.
+    """
+    await _add_employee(
+        db, hr_external_id="EMP-1001", work_email="intern@corp.io", role=Role.INTERN
+    )
+    resp = await _post(
+        client,
+        settings,
+        _payload(hr_external_id="EMP-1001", work_email="intern@corp.io", status="inactive"),
+    )
+    assert resp.status_code == 200 and resp.json()["is_active"] is False
+
+
+async def test_hr_can_change_an_interns_email(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    await _add_employee(
+        db, hr_external_id="EMP-1001", work_email="intern@corp.io", role=Role.INTERN
+    )
+    resp = await _post(
+        client, settings, _payload(hr_external_id="EMP-1001", work_email="moved@corp.io")
+    )
+    assert resp.status_code == 200 and resp.json()["work_email"] == "moved@corp.io"
+
+
+async def test_hr_cannot_deactivate_a_manager(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """MANAGER stays privileged: it decides other people's leave and expenses, so
+    a wrong status in the HR system must not switch it off from outside Avora."""
+    await _add_employee(db, hr_external_id="EMP-1001", work_email="lead@corp.io", role=Role.MANAGER)
+    resp = await _post(
+        client,
+        settings,
+        _payload(hr_external_id="EMP-1001", work_email="lead@corp.io", status="inactive"),
+    )
+    assert resp.status_code == 409
+
+
+async def test_hr_cannot_deactivate_a_payroll_manager(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """The payroll grant makes an otherwise ordinary account privileged. It is a
+    separate column from `role`, so a role-only guard would miss it."""
+    employee = await _add_employee(
+        db, hr_external_id="EMP-1001", work_email="finance@corp.io", role=Role.EXECUTIVE
+    )
+    employee.payroll_manager = True
+    await db.commit()
+    resp = await _post(
+        client,
+        settings,
+        _payload(hr_external_id="EMP-1001", work_email="finance@corp.io", status="inactive"),
+    )
+    assert resp.status_code == 409

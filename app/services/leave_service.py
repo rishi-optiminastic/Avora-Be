@@ -30,7 +30,13 @@ from app.core.logging import get_logger
 from app.core.payroll import working_days_between
 from app.core.tenure import TenureStatus, accrued_units, probation_end, tenure_status
 from app.models.employee import Employee, Gender, Role
-from app.models.leave import HalfDayPeriod, Leave, LeaveStatus, LeaveType
+from app.models.leave import (
+    HalfDayPeriod,
+    Leave,
+    LeaveStatus,
+    LeaveType,
+    LeaveWithdrawalStatus,
+)
 from app.models.leave_comment import LeaveComment
 from app.models.notification import NotificationKind, NotificationLevel
 from app.repositories.audit import AuditRepository
@@ -48,6 +54,8 @@ from app.schemas.leave import (
     LeaveCreate,
     LeaveDecision,
     LeaveTypeBalance,
+    LeaveWithdrawalDecision,
+    LeaveWithdrawalRequest,
 )
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.email_service import EmailError, EmailService
@@ -59,6 +67,8 @@ from app.services.leave_rules import (
     leave_weight,
     may_cancel_approved,
     may_decide,
+    may_decide_withdrawal,
+    may_request_withdrawal,
     utc_date,
 )
 from app.services.notification_service import NotificationService
@@ -129,6 +139,8 @@ class LeavePermissions:
 
     can_decide: bool
     can_cancel: bool
+    can_request_withdrawal: bool = False
+    can_decide_withdrawal: bool = False
 
 
 logger = get_logger("app.leave")
@@ -641,8 +653,11 @@ class LeaveService:
         today = await self._org_today()
         if not may_cancel_approved(caller, leave, await self._requester_manager_id(leave), today):
             if caller.employee_id == leave.employee_id:
+                # Not an authorization failure to the person reading it - there
+                # IS a way to do this, and the message has to point at it.
                 raise ConflictError(
-                    "This leave has already started. Ask HR or your manager to cancel it."
+                    "Your own approved leave is given back by requesting a withdrawal, "
+                    "which your manager approves."
                 )
             raise AuthorizationError()
         await self._enforce_payroll_open(leave)
@@ -655,6 +670,133 @@ class LeaveService:
         )
         await self._notify_cancelled(caller, leave, payload.note)
         return leave
+
+    async def request_withdrawal(
+        self, caller: CurrentUser, leave_id: uuid.UUID, payload: LeaveWithdrawalRequest
+    ) -> Leave:
+        """The employee asks for an approved leave to be given back.
+
+        Nothing about the leave changes yet. It stays APPROVED, keeps counting
+        against the balance and still appears in payroll, because the days are
+        only returned once a manager agrees - a request that quietly released
+        them would let anyone refund their own leave by asking.
+        """
+        leave = await self._leaves.get_for_update(leave_id)
+        if leave is None or leave.employee_id != caller.employee_id:
+            # 404 over 403: whether someone else's leave exists is not the
+            # caller's business (rule 7).
+            raise NotFoundError()
+        if leave.status is not LeaveStatus.APPROVED:
+            raise ConflictError("Only an approved leave can be withdrawn.")
+        if not may_request_withdrawal(caller, leave):
+            raise ConflictError("A withdrawal request is already waiting for a decision.")
+        # Fail here rather than at the decision: there is no point asking a
+        # manager for days that payroll has already frozen.
+        await self._enforce_payroll_open(leave)
+
+        leave.withdrawal_status = LeaveWithdrawalStatus.REQUESTED
+        leave.withdrawal_reason = payload.reason
+        leave.withdrawal_requested_at = datetime.now(UTC)
+        leave.withdrawal_reviewer_id = None
+        leave.withdrawal_decided_at = None
+        leave.withdrawal_decision_note = None
+        await self._leaves.flush()
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="leave.withdrawal.request",
+            target=f"leave:{leave.id}",
+        )
+        await self._notify_withdrawal_requested(caller, leave)
+        return leave
+
+    async def decide_withdrawal(
+        self, caller: CurrentUser, leave_id: uuid.UUID, payload: LeaveWithdrawalDecision
+    ) -> Leave:
+        """The manager (or HR) grants or refuses the withdrawal.
+
+        Granting cancels the leave through the same CANCELLED status a direct
+        cancellation uses, so the balance, the calendar and payroll all behave
+        identically however the leave came back - there is no second notion of
+        "sort of cancelled" for them to disagree about.
+        """
+        leave = await self._leaves.get_in_scope(caller, leave_id, for_update=True)
+        if leave is None:
+            raise NotFoundError()
+        if leave.withdrawal_status is not LeaveWithdrawalStatus.REQUESTED:
+            raise ConflictError("There is no withdrawal request waiting on this leave.")
+        manager_id = await self._requester_manager_id(leave)
+        if not may_decide_withdrawal(caller, leave, manager_id):
+            raise AuthorizationError()
+
+        if payload.approve:
+            # Re-checked at decision time: a payslip can be released in the gap
+            # between asking and deciding.
+            await self._enforce_payroll_open(leave)
+            leave.status = LeaveStatus.CANCELLED
+            leave.withdrawal_status = LeaveWithdrawalStatus.APPROVED
+        else:
+            leave.withdrawal_status = LeaveWithdrawalStatus.REJECTED
+        leave.withdrawal_reviewer_id = caller.employee_id
+        leave.withdrawal_decided_at = datetime.now(UTC)
+        leave.withdrawal_decision_note = payload.note
+        await self._leaves.flush()
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="leave.withdrawal.decide",
+            target=f"leave:{leave.id}:{leave.withdrawal_status.value}",
+        )
+        await self._notify_withdrawal_decided(caller, leave)
+        return leave
+
+    async def _notify_withdrawal_requested(self, caller: CurrentUser, leave: Leave) -> None:
+        """Tell whoever decides this person's leave that they have been asked to
+        give days back. In-app only, like a cancellation: the leave email
+        template reads as an approve/reject decision and none fits this."""
+        requester = await self._employees.get(leave.employee_id)
+        name = requester.full_name if requester is not None else "An employee"
+        manager_id = requester.manager_id if requester is not None else None
+        body = f"{self._leave_line(leave)} · {leave.withdrawal_reason or ''}".strip(" ·")
+        for decider_id in await self._deciders_for(leave.employee_id, manager_id):
+            if decider_id == caller.employee_id:
+                continue
+            await self._notifications.notify(
+                recipient_id=decider_id,
+                kind=NotificationKind.LEAVE_REQUEST,
+                title=f"{name} asked to withdraw approved leave",
+                body=body,
+                level=NotificationLevel.WARNING,
+                link=_LEAVES_LINK,
+                entity_type="leave",
+                entity_id=leave.id,
+                actor_id=caller.employee_id,
+            )
+
+    async def _notify_withdrawal_decided(self, caller: CurrentUser, leave: Leave) -> None:
+        """Tell the employee the outcome. Never the decider, who just made it."""
+        if leave.employee_id == caller.employee_id:
+            return
+        granted = leave.withdrawal_status is LeaveWithdrawalStatus.APPROVED
+        note = leave.withdrawal_decision_note
+        await self._notifications.notify(
+            recipient_id=leave.employee_id,
+            kind=NotificationKind.LEAVE_DECISION,
+            title=(
+                "Your leave was withdrawn" if granted else "Your withdrawal request was declined"
+            ),
+            body=f"{self._leave_line(leave)}" + (f" · {note}" if note else ""),
+            level=NotificationLevel.INFO if granted else NotificationLevel.WARNING,
+            link=_LEAVES_LINK,
+            entity_type="leave",
+            entity_id=leave.id,
+            actor_id=caller.employee_id,
+        )
+
+    @staticmethod
+    def _leave_line(leave: Leave) -> str:
+        """ "Planned leave · 04 Mar - 06 Mar" - the one-line identity of a leave,
+        shared by every withdrawal notification."""
+        label = _leave_type_label(leave.leave_type, leave.half_day_period)
+        return f"{label} · {leave.start_date:%d %b} - {leave.end_date:%d %b}"
 
     async def _enforce_payroll_open(self, leave: Leave) -> None:
         """Refuse to change leave in a month whose payroll is already released
@@ -717,6 +859,8 @@ class LeaveService:
             out[leave.id] = LeavePermissions(
                 can_decide=can_decide_now(caller, leave, manager_id),
                 can_cancel=may_cancel_approved(caller, leave, manager_id, today),
+                can_request_withdrawal=may_request_withdrawal(caller, leave),
+                can_decide_withdrawal=may_decide_withdrawal(caller, leave, manager_id),
             )
         return out
 

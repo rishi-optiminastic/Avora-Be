@@ -17,6 +17,7 @@ from app.models.category_rule import CategoryRule
 from app.models.celebration_settings import CelebrationSettings
 from app.models.changelog import ChangelogEntry
 from app.models.circle_document_import import CircleDocumentImport
+from app.models.circle_record import EmployeeAppraisal, EmployeeAsset, EmployeeCircleProfile
 from app.models.compensation import Compensation, PayPeriod
 from app.models.device import Device
 from app.models.document import DocumentCategory, EmployeeDocument
@@ -25,6 +26,7 @@ from app.models.env_access_token import EnvAccessToken
 from app.models.env_project import EnvMemberRole, EnvProject, EnvProjectMember, EnvVersion
 from app.models.eod_report import EodReport, EodStatus
 from app.models.eod_settings import EodSettings
+from app.models.event import Event, EventStatus
 from app.models.festival import Festival
 from app.models.form import (
     AssignmentStatus,
@@ -34,6 +36,7 @@ from app.models.form import (
     FormField,
     FormFieldType,
     FormResponse,
+    FormStage,
     FormStatus,
     FormTrigger,
 )
@@ -60,6 +63,7 @@ from app.models.payroll_adjustment import (
     PayrollAdjustmentKind,
     PayrollAdjustmentTarget,
 )
+from app.models.payroll_receipt import PayrollReceipt, PayrollReceiptKind
 from app.models.payroll_run import PayrollRun, PayrollRunSource
 from app.models.payroll_settings import PayCycle, PayrollSettings
 from app.models.payslip import Payslip, PayslipStatus
@@ -82,7 +86,8 @@ from app.models.task_collaborator import TaskCollaborator
 from app.models.task_comment import TaskComment
 from app.models.work_entity import WorkEntity
 from app.models.work_session import WorkSession
-from app.models.workbook import Workbook, WorkbookSharing
+from app.models.workbook import Workbook, WorkbookAccess, WorkbookMember, WorkbookSharing
+from app.models.workspace import Workspace, WorkspaceMember, WorkspaceStatus
 from app.models.workspace_file import (
     WorkspaceFile,
     WorkspaceFileCategory,
@@ -111,6 +116,9 @@ __all__ = [
     "Device",
     "DocumentCategory",
     "Employee",
+    "EmployeeAppraisal",
+    "EmployeeAsset",
+    "EmployeeCircleProfile",
     "EmployeeDocument",
     "EmployeeStatus",
     "EnvAccessToken",
@@ -121,6 +129,8 @@ __all__ = [
     "EodReport",
     "EodSettings",
     "EodStatus",
+    "Event",
+    "EventStatus",
     "Festival",
     "Form",
     "FormAnswer",
@@ -128,6 +138,7 @@ __all__ = [
     "FormField",
     "FormFieldType",
     "FormResponse",
+    "FormStage",
     "FormStatus",
     "FormTrigger",
     "Gender",
@@ -160,6 +171,8 @@ __all__ = [
     "PayrollAdjustment",
     "PayrollAdjustmentKind",
     "PayrollAdjustmentTarget",
+    "PayrollReceipt",
+    "PayrollReceiptKind",
     "PayrollRun",
     "PayrollRunSource",
     "PayrollSettings",
@@ -194,8 +207,13 @@ __all__ = [
     "WorkEntity",
     "WorkSession",
     "Workbook",
+    "WorkbookAccess",
+    "WorkbookMember",
     "WorkbookSharing",
+    "Workspace",
     "WorkspaceFile",
     "WorkspaceFileCategory",
+    "WorkspaceMember",
+    "WorkspaceStatus",
     "WorkspaceVisibility",
 ]

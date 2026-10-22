@@ -316,7 +316,7 @@ async def test_approve_emails_only_the_reporting_manager(
     email = _CapturingEmail()
     service = _build_service(db, settings, llm=_StubLlm(), email=email)
     report_caller = CurrentUser(
-        employee_id=seed.report.id, role=Role.EMPLOYEE, manager_id=seed.manager.id
+        employee_id=seed.report.id, role=Role.EXECUTIVE, manager_id=seed.manager.id
     )
     result = await service.approve(report_caller, draft.id)
 
@@ -343,7 +343,7 @@ async def test_report_with_no_manager_mails_nobody_but_still_closes_out(
 
     email = _CapturingEmail()
     service = _build_service(db, settings, llm=_StubLlm(), email=email)
-    caller = CurrentUser(employee_id=seed.outsider.id, role=Role.EMPLOYEE, manager_id=None)
+    caller = CurrentUser(employee_id=seed.outsider.id, role=Role.EXECUTIVE, manager_id=None)
     result = await service.approve(caller, draft.id)
 
     assert result.status == "sent"
@@ -646,7 +646,7 @@ async def _add_department(db: AsyncSession, department: str, *names: str) -> lis
             hr_external_id=f"hr-{name.lower()}",
             work_email=f"{name.lower()}@corp.test",
             full_name=name.title(),
-            role=Role.EMPLOYEE,
+            role=Role.EXECUTIVE,
             department=department,
             status=EmployeeStatus.ACTIVE,
             is_active=True,
