@@ -27,6 +27,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import Settings
 from app.core.exceptions import (
     AuthorizationError,
     ConflictError,
@@ -61,7 +62,9 @@ class WorkspaceService:
         workspaces: WorkspaceRepository,
         employees: EmployeeRepository,
         audit: AuditRepository,
+        settings: Settings,
     ) -> None:
+        self._settings = settings
         self._session = session
         self._workspaces = workspaces
         self._employees = employees
@@ -96,9 +99,22 @@ class WorkspaceService:
 
         Keyed on the email in their token, not on an employee row: the whole
         point is to list workspaces they are not currently inside.
+
+        The FIRST workspace is always included. `_resolve_workspace` lets
+        anyone authenticated into it without a membership row - gating it would
+        lock out everybody the moment one row was missing - and this has to say
+        the same thing. It did not, so `bootstrap` (which grants nobody)
+        produced a primary workspace that nothing listed: somebody with one
+        other workspace saw a list of one, and the switcher, which hides below
+        two, never appeared at all.
         """
         here = await self.current_schema()
-        rows = await self._workspaces.list_for_email(email)
+        rows = list(await self._workspaces.list_for_email(email))
+        primary = await self._workspaces.get_by_slug(
+            validate_slug(self._settings.primary_workspace_slug)
+        )
+        if primary is not None and not any(w.id == primary.id for w in rows):
+            rows.insert(0, primary)
         return [
             WorkspaceRead(
                 id=w.id,

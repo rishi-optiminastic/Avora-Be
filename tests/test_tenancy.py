@@ -386,3 +386,65 @@ async def test_the_workspace_header_survives_a_cors_preflight(
     assert res.status_code == 200, res.text
     allowed = res.headers.get("access-control-allow-headers", "").lower()
     assert WORKSPACE_HEADER.lower() in allowed, allowed
+
+
+async def test_the_switcher_always_includes_the_first_workspace(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """The regression that made the switcher invisible on the real deploy.
+
+    `bootstrap` grants nobody a membership row for the first workspace, because
+    `_resolve_workspace` lets anyone authenticated into it anyway. But `mine()`
+    listed only workspaces with a membership row, so someone granted ONE other
+    workspace saw a list of one - and the switcher hides below two. It never
+    appeared.
+    """
+    db.add(
+        Workspace(
+            slug=settings.primary_workspace_slug,
+            schema_name=SHARED_SCHEMA,
+            name="Primary",
+            location="HQ",
+            status=WorkspaceStatus.ACTIVE,
+            provisioned_at=datetime.now(UTC),
+        )
+    )
+    acme = await _workspace(db, "acme")
+    await WorkspaceRepository(db).grant(acme.id, seed.report.work_email, granted_by_email=None)
+    await db.commit()
+
+    res = await client.get("/api/v1/workspaces/mine", headers=auth_headers(settings, seed.report))
+
+    assert res.status_code == 200, res.text
+    slugs = [w["slug"] for w in res.json()]
+    assert settings.primary_workspace_slug in slugs
+    assert "acme" in slugs
+    assert len(slugs) >= 2, "two workspaces, or the switcher stays hidden"
+    # Exactly one is marked current, and it is the one we are in.
+    assert [w["slug"] for w in res.json() if w["is_current"]] == [settings.primary_workspace_slug]
+
+
+async def test_the_first_workspace_is_not_listed_twice(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """Someone WITH a membership row for it must not see it duplicated."""
+    db.add(
+        Workspace(
+            slug=settings.primary_workspace_slug,
+            schema_name=SHARED_SCHEMA,
+            name="Primary",
+            location="HQ",
+            status=WorkspaceStatus.ACTIVE,
+            provisioned_at=datetime.now(UTC),
+        )
+    )
+    await db.commit()
+    primary = await WorkspaceRepository(db).get_by_slug(settings.primary_workspace_slug)
+    assert primary is not None
+    await WorkspaceRepository(db).grant(primary.id, seed.report.work_email, granted_by_email=None)
+    await db.commit()
+
+    res = await client.get("/api/v1/workspaces/mine", headers=auth_headers(settings, seed.report))
+
+    slugs = [w["slug"] for w in res.json()]
+    assert slugs.count(settings.primary_workspace_slug) == 1, slugs

@@ -1021,8 +1021,9 @@ def get_workspace_service(
     workspaces: Annotated[WorkspaceRepository, Depends(get_workspace_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    settings: SettingsDep,
 ) -> WorkspaceService:
-    return WorkspaceService(db, workspaces, employees, audit)
+    return WorkspaceService(db, workspaces, employees, audit, settings)
 
 
 WorkspaceServiceDep = Annotated[WorkspaceService, Depends(get_workspace_service)]
