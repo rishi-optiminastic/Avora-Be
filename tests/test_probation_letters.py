@@ -347,7 +347,9 @@ async def test_hr_can_download_the_letter_and_it_is_audited(
     assert "probation.letter.download" in actions
 
 
-@pytest.mark.parametrize(("who", "status"), [("manager", 403), ("report", 403), ("outsider", 404)])
+# `report` is the SUBJECT: 404 rather than 403, because their own review is
+# not theirs to reach. Their letter still reaches them - HR emails it.
+@pytest.mark.parametrize(("who", "status"), [("manager", 403), ("report", 404), ("outsider", 404)])
 async def test_only_hr_or_admin_can_download(
     client: AsyncClient,
     db: AsyncSession,

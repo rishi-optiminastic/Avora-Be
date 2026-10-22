@@ -251,7 +251,9 @@ async def test_the_employee_cannot_confirm_themselves(
         {"outcome": "confirmed", "effective_date": "2026-10-27"},
     )
 
-    assert res.status_code == 403
+    # 404, not 403: their own review is not theirs to reach at all, so the
+    # refusal happens before anyone asks whether they may decide it.
+    assert res.status_code == 404
 
 
 # --- the attachment ---------------------------------------------------------- #

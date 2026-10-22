@@ -15,7 +15,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import api_router
 from app.core.config import Settings, get_settings
-from app.core.deps import configure_rate_limiter
+from app.core.deps import WORKSPACE_HEADER, configure_rate_limiter
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
@@ -71,7 +71,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_origins=settings.cors_origin_list,
         allow_credentials=True,  # cookies must cross origins to the dashboard
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
-        allow_headers=["Authorization", "Content-Type", "X-Signature", "X-HR-Signature"],
+        # An explicit allowlist, so any new header the dashboard sends has to be
+        # added HERE too: a missing one fails the browser's CORS preflight and
+        # the request never arrives - which no test or build can catch, because
+        # neither speaks CORS.
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "X-Signature",
+            "X-HR-Signature",
+            WORKSPACE_HEADER,
+        ],
     )
 
     register_exception_handlers(app)

@@ -356,3 +356,33 @@ async def test_a_malformed_workspace_header_is_refused(
 def test_a_random_uuid_is_not_a_workspace() -> None:
     with pytest.raises(InvalidWorkspaceSlug):
         validate_slug(str(uuid.uuid4()))
+
+
+# --------------------------------------------------------------------------- #
+# The browser has to be allowed to send it
+# --------------------------------------------------------------------------- #
+async def test_the_workspace_header_survives_a_cors_preflight(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """The dashboard is a different origin from the API, so every request
+    carrying this header is preflighted first.
+
+    `allow_headers` is an explicit allowlist. Leaving the header out of it
+    fails the preflight and the request never arrives - a break that neither
+    the test suite nor a production build can see, because neither speaks
+    CORS. Hence this test.
+    """
+    origin = settings.cors_origin_list[0]
+
+    res = await client.options(
+        "/api/v1/workspaces/mine",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": WORKSPACE_HEADER,
+        },
+    )
+
+    assert res.status_code == 200, res.text
+    allowed = res.headers.get("access-control-allow-headers", "").lower()
+    assert WORKSPACE_HEADER.lower() in allowed, allowed

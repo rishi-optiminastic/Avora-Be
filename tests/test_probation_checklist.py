@@ -24,6 +24,7 @@ _PROBATION_MONTHS = 6
 _HR_STEP = 1  # "Initiate probation review process"
 _EMPLOYEE_STEP = 3  # "Employee completes self-assessment"
 _MANAGER_STEP = 5  # "Reporting manager reviews performance"
+_ACK_STEP = 14  # "Employee acknowledges and signs" - theirs alone
 
 
 async def _set_hire_date(db: AsyncSession, employee_id: object, hire: date) -> None:
@@ -166,13 +167,19 @@ async def test_an_outsider_cannot_read_someone_elses_checklist(
     assert res.status_code == 404
 
 
-async def test_the_employee_and_their_manager_can_both_read_it(
+async def test_the_manager_can_read_it_but_the_subject_cannot(
     client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
 ) -> None:
+    """The checklist is HR's working document - who ticked what, their notes,
+    the manager's progress. Its subject does not read it; they get
+    `/probation/me` instead."""
     await _put_probationer(db, seed)
 
-    assert (await _checklist(client, settings, seed.report, seed.report)).status_code == 200
-    assert (await _checklist(client, settings, seed.manager, seed.report)).status_code == 200
+    theirs = await _checklist(client, settings, seed.manager, seed.report)
+    mine = await _checklist(client, settings, seed.report, seed.report)
+
+    assert theirs.status_code == 200, theirs.text
+    assert mine.status_code == 404, mine.text
 
 
 async def test_a_senior_manager_sees_their_whole_department(
@@ -231,25 +238,28 @@ async def test_the_employee_cannot_tick_an_hr_step(
 
     res = await _set_step(client, settings, seed.report, seed.report, _HR_STEP)
 
-    assert res.status_code == 403
+    # 404, not 403: their own checklist is closed to them, so the refusal
+    # happens before anyone asks whose step it is.
+    assert res.status_code == 404
 
 
-async def test_the_employee_can_complete_their_own_step(
+async def test_the_employee_reaches_their_own_step_through_the_form_not_here(
     client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
 ) -> None:
+    """Their own steps are still theirs alone to complete - HR signing them
+    would empty the actor column of meaning. They simply no longer complete
+    them HERE: step 3 is ticked by Avora when they submit the self-assessment
+    form, and step 14 by `POST /probation/me/acknowledge`. This endpoint reads
+    the whole checklist to answer, which is exactly what they may not see."""
     await _put_probationer(db, seed)
 
-    res = await _set_step(
+    mine = await _set_step(
         client, settings, seed.report, seed.report, _EMPLOYEE_STEP, note="Submitted"
     )
+    by_hr = await _set_step(client, settings, seed.admin, seed.report, _EMPLOYEE_STEP)
 
-    assert res.status_code == 200
-    step = next(s for s in res.json()["steps"] if s["no"] == _EMPLOYEE_STEP)
-    assert step["status"] == "done"
-    assert step["note"] == "Submitted"
-    assert step["actor_name"] == seed.report.full_name
-    assert step["acted_at"] is not None
-    assert res.json()["settled_steps"] == 1
+    assert mine.status_code == 404, mine.text
+    assert by_hr.status_code == 403, by_hr.text
 
 
 async def test_the_reporting_manager_can_complete_a_manager_step(
@@ -268,14 +278,19 @@ async def test_the_reporting_manager_can_complete_a_manager_step(
 async def test_can_update_tells_the_ui_what_this_caller_may_move(
     client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
 ) -> None:
-    """So the UI disables a control rather than offering one the API will reject."""
+    """So the UI disables a control rather than offering one the API will reject.
+
+    Read as the MANAGER: the subject can no longer open their own checklist at
+    all, so the flags are only ever rendered for somebody else's review."""
     await _put_probationer(db, seed)
 
-    body = (await _checklist(client, settings, seed.report, seed.report)).json()
+    body = (await _checklist(client, settings, seed.manager, seed.report)).json()
 
     by_no = {s["no"]: s for s in body["steps"]}
-    assert by_no[_EMPLOYEE_STEP]["can_update"] is True
+    assert by_no[_MANAGER_STEP]["can_update"] is True
     assert by_no[_HR_STEP]["can_update"] is False
+    # The acknowledgement is a signature - nobody moves it for them.
+    assert by_no[_ACK_STEP]["can_update"] is False
 
 
 # --- writes ----------------------------------------------------------------- #

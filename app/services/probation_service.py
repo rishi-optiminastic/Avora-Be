@@ -115,12 +115,24 @@ class ProbationService:
         """HR and Admin run probation reviews. It is a people-ops process."""
         return caller.role in (Role.ADMIN, Role.HR)
 
-    def _may_update_step(self, caller: CurrentUser, employee: Employee, owner: StepOwner) -> bool:
-        """Whether `caller` may move a step this employee owns via `owner`."""
+    def _may_update_step(
+        self, caller: CurrentUser, employee: Employee, owner: StepOwner, step_no: int
+    ) -> bool:
+        """Whether `caller` may move this step of this employee's review."""
         is_self = caller.employee_id == employee.id
         is_their_manager = employee.manager_id == caller.employee_id
         if owner is StepOwner.EMPLOYEE:
-            # Only the employee signs their own self-assessment and acknowledgement.
+            # Only the employee signs their own self-assessment and
+            # acknowledgement. The whole point of the actor column is
+            # accountability: if HR can tick these, the record stops meaning
+            # anything.
+            #
+            # They reach neither through this endpoint any more - their own
+            # checklist is closed to them. Step 3 is ticked by Avora when they
+            # SUBMIT the self-assessment form, and step 14 by
+            # `acknowledge()`. A review run without the forms simply leaves
+            # step 3 pending, which is true: no self-assessment was submitted.
+            del step_no
             return is_self
         if owner is StepOwner.HR:
             return self._may_manage(caller)
@@ -328,7 +340,7 @@ class ProbationService:
                     actor_id=row.actor_id if row else None,
                     actor_name=actor.full_name if actor else None,
                     acted_at=row.acted_at if row else None,
-                    can_update=self._may_update_step(caller, employee, step.owner),
+                    can_update=self._may_update_step(caller, employee, step.owner, step.no),
                 )
             )
 
@@ -389,7 +401,7 @@ class ProbationService:
         step = step_or_none(step_no)
         if step is None:
             raise ValidationError("That step is not part of the probation checklist.")
-        if not self._may_update_step(caller, employee, step.owner):
+        if not self._may_update_step(caller, employee, step.owner, step_no):
             raise AuthorizationError("This step is not yours to complete.")
 
         row = await self._items.get(employee.id, step_no)
