@@ -7,6 +7,7 @@ This script owns everything that happens OUTSIDE a single request:
     uv run python -m scripts.tenancy bootstrap
     uv run python -m scripts.tenancy list
     uv run python -m scripts.tenancy create acme --name "Acme" --location "Pune"
+    uv run python -m scripts.tenancy admin acme boss@acme.com --name "Dana Boss"
     uv run python -m scripts.tenancy migrate
     uv run python -m scripts.tenancy grant acme someone@corp.com
     uv run python -m scripts.tenancy revoke acme someone@corp.com
@@ -34,19 +35,29 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.core.exceptions import ConflictError
+from app.core.names import clean_display_name, placeholder_name_from_email
 from app.core.tenancy import (
     SHARED_SCHEMA,
     InvalidWorkspaceSlug,
     create_schema,
     list_workspace_schemas,
     new_schema_for,
+    use_schema,
     use_shared_only,
     validate_schema_name,
     validate_slug,
 )
 from app.db.session import SessionFactory, engine
+from app.models.employee import EmployeeStatus, Role
 from app.models.workspace import Workspace, WorkspaceStatus
+from app.repositories.employee import EmployeeRepository
 from app.repositories.workspace import WorkspaceRepository, normalize_email
+
+# `it_admin` is a full admin everywhere (`CurrentUser._normalize_role`), so
+# somebody holding it is already an admin of their workspace and must not be
+# reported as "promoted".
+ADMIN_ROLES = (Role.ADMIN, Role.IT_ADMIN)
 
 
 def _say(message: str) -> None:
@@ -177,9 +188,105 @@ async def create(slug: str, name: str, location: str) -> int:
     finally:
         await session.close()
 
-    _say(f"workspace {slug!r} is ready. Grant someone access:")
-    _say(f"  uv run python -m scripts.tenancy grant {slug} you@company.com")
+    _say(f"workspace {slug!r} is ready, and EMPTY - it has no employees at all.")
+    _say("Give it its first admin (this is the step that makes it openable):")
+    _say(f'  uv run python -m scripts.tenancy admin {slug} you@company.com --name "Your Name"')
     return 0
+
+
+# --------------------------------------------------------------------------- #
+# admin - the first person inside a new workspace
+# --------------------------------------------------------------------------- #
+async def _install_admin(session: AsyncSession, schema: str, email: str, name: str | None) -> str:
+    """Make one person an ADMIN EMPLOYEE inside a workspace, and say what changed.
+
+    The session is pointed at that workspace's own schema for the length of
+    this and put back afterwards, because the row has to be written where that
+    workspace's employees live rather than in `public` with the address book.
+    `expunge_all` either side for the reason `_place_in_target` does it: the
+    identity map is full of rows read from the other schema, and a lookup after
+    the switch would otherwise be answered from the wrong workspace's cache.
+    """
+    address = normalize_email(email)
+    session.expunge_all()
+    await use_schema(session, schema)
+    try:
+        employees = EmployeeRepository(session)
+        # Insensitive, because the email is typed on a command line and the row
+        # may have been written with different capitalisation. The exact lookup
+        # would miss it and the create below would then hit the unique index.
+        existing = await employees.find_by_work_email_insensitive(address)
+        if existing is None:
+            # The real name backfills from the identity provider on first
+            # sign-in (`refresh_display_name`), so omitting --name costs
+            # nothing permanent.
+            await employees.create_direct(
+                work_email=address,
+                full_name=clean_display_name(name) or placeholder_name_from_email(address),
+                role=Role.ADMIN,
+                profile={},
+            )
+            return "created as an admin"
+
+        changed: list[str] = []
+        if not existing.is_active:
+            existing.is_active = True
+            existing.status = EmployeeStatus.ACTIVE
+            changed.append("reactivated")
+        if existing.role not in ADMIN_ROLES:
+            changed.append(f"promoted from {existing.role.value} to admin")
+            existing.role = Role.ADMIN
+        await session.flush()
+        return " and ".join(changed) if changed else "was already an admin there"
+    finally:
+        # Always back, even on failure - the grant below is written in `public`.
+        session.expunge_all()
+        await use_shared_only(session)
+
+
+async def admin(slug: str, email: str, name: str | None) -> int:
+    """Install a workspace's first admin.
+
+    This is the one act that cannot be done from inside the app, and without it
+    a new workspace is unreachable forever. `grant` alone is not enough: it
+    writes a membership row, so the workspace appears in the switcher, but
+    every workspace keeps its OWN employees and `get_current_user` refuses
+    anyone without an active employee row in the schema it landed in. Clicking
+    the new workspace then 401s, the dashboard treats that as a stale choice
+    and clears the cookie, and the person is bounced straight back to the
+    workspace they started in with nothing said.
+
+    Granting membership here too, so one command makes the workspace openable.
+    """
+    session = await _shared_session()
+    try:
+        workspaces = WorkspaceRepository(session)
+        workspace = await workspaces.get_by_slug(validate_slug(slug))
+        if workspace is None:
+            _say(f"no workspace {slug!r}")
+            return 1
+        if workspace.provisioned_at is None:
+            _say(f"{workspace.slug!r} has not finished building - run migrate first.")
+            return 1
+        # Read off the row BEFORE `_install_admin` expunges it.
+        workspace_id, label = workspace.id, workspace.slug
+        schema = validate_schema_name(workspace.schema_name)
+
+        try:
+            what = await _install_admin(session, schema, email, name)
+        except ConflictError as exc:
+            # Two rows differing only in case: picking one at random would make
+            # an admin of whichever the index happened to return.
+            _say(f"cannot do this safely: {exc}")
+            return 1
+        await workspaces.grant(workspace_id, email, granted_by_email="cli")
+        await session.commit()
+
+        _say(f"{normalize_email(email)} {what} in {label!r} ({schema})")
+        _say(f"Sign in and pick {label!r} from the workspace menu.")
+        return 0
+    finally:
+        await session.close()
 
 
 # --------------------------------------------------------------------------- #
@@ -312,6 +419,11 @@ def main() -> int:
     create_cmd.add_argument("--name", required=True)
     create_cmd.add_argument("--location", default="")
 
+    admin_cmd = sub.add_parser("admin", help="install a workspace's first admin employee")
+    admin_cmd.add_argument("slug")
+    admin_cmd.add_argument("email")
+    admin_cmd.add_argument("--name", default=None, help="display name; defaults to the email")
+
     for verb in ("grant", "revoke"):
         access = sub.add_parser(verb, help=f"{verb} one person's access to a workspace")
         access.add_argument("slug")
@@ -327,6 +439,8 @@ def main() -> int:
             return asyncio.run(migrate())
         if args.command == "create":
             return asyncio.run(create(args.slug, args.name, args.location))
+        if args.command == "admin":
+            return asyncio.run(admin(args.slug, args.email, args.name))
         if args.command == "grant":
             return asyncio.run(grant(args.slug, args.email))
         if args.command == "revoke":

@@ -33,7 +33,7 @@ _BANDS: dict[Role, tuple[int, int]] = {
     Role.HR: (60_000, 85_000),
     Role.MANAGER: (60_000, 90_000),
     Role.EXECUTIVE: (70_000, 100_000),
-    Role.EMPLOYEE: (35_000, 60_000),
+    Role.INTERN: (35_000, 60_000),
     Role.IT_ADMIN: (45_000, 70_000),
     Role.VIEWER: (30_000, 45_000),
 }

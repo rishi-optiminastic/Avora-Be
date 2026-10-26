@@ -91,6 +91,7 @@ class EmailService:
         html: str,
         cc: list[str] | None = None,
         attachments: list[EmailAttachment] | None = None,
+        copy_hr: bool = False,
     ) -> None:
         """Deliver one HTML email through the configured provider.
 
@@ -98,16 +99,45 @@ class EmailService:
         one mail each — the difference between a visible "everyone was wished" and
         a hundred identical private emails, and (on Gmail SMTP) the difference
         between one send and a hundred against the daily cap.
+
+        `copy_hr` BCCs the shared HR mailbox (`hr_notification_email`). It
+        defaults to False so a new email is private until someone decides HR
+        should hold a copy, and the decision is made once in the named `send_*`
+        wrapper below rather than at each call site.
         """
         recipients = _dedupe_cc(to, cc)
+        bcc = self._hr_bcc(to, recipients) if copy_hr else []
         if self._settings.uses_smtp:
             await self._send_smtp(
-                to=to, subject=subject, html=html, cc=recipients, attachments=attachments
+                to=to,
+                subject=subject,
+                html=html,
+                cc=recipients,
+                bcc=bcc,
+                attachments=attachments,
             )
         else:
             await self._send_sendgrid(
-                to=to, subject=subject, html=html, cc=recipients, attachments=attachments
+                to=to,
+                subject=subject,
+                html=html,
+                cc=recipients,
+                bcc=bcc,
+                attachments=attachments,
             )
+
+    def _hr_bcc(self, to: str, cc: list[str]) -> list[str]:
+        """The HR mailbox as a BCC list, empty when there is nothing to add.
+
+        Dropped when HR is already the To or a CC: the mailbox would otherwise
+        receive the same message twice, which reads as a bug and makes a thread
+        in a shared inbox harder to follow, not easier.
+        """
+        address = self._settings.hr_copy_address
+        if not address:
+            return []
+        already = {to.strip().lower(), *(c.strip().lower() for c in cc)}
+        return [] if address.lower() in already else [address]
 
     async def send_broadcast(
         self,
@@ -141,11 +171,14 @@ class EmailService:
         subject: str,
         html: str,
         cc: list[str] | None = None,
+        bcc: list[str] | None = None,
         attachments: list[EmailAttachment] | None = None,
     ) -> None:
         personalization: dict[str, object] = {"to": [{"email": to}]}
         if cc:
             personalization["cc"] = [{"email": address} for address in cc]
+        if bcc:
+            personalization["bcc"] = [{"email": address} for address in bcc]
         payload: dict[str, object] = {
             "personalizations": [personalization],
             "from": {
@@ -185,6 +218,7 @@ class EmailService:
         subject: str,
         html: str,
         cc: list[str] | None = None,
+        bcc: list[str] | None = None,
         attachments: list[EmailAttachment] | None = None,
     ) -> None:
         message = EmailMessage()
@@ -194,6 +228,11 @@ class EmailService:
             # smtplib's send_message reads To/Cc off the headers, so setting the
             # header is what actually delivers to them — no separate envelope list.
             message["Cc"] = ", ".join(cc)
+        if bcc:
+            # Same mechanism, with one difference that matters: `send_message`
+            # reads Bcc for the envelope and then strips the header from what it
+            # transmits, so the copy stays hidden from the To and Cc lines.
+            message["Bcc"] = ", ".join(bcc)
         message["Subject"] = subject
         # HTML with a minimal plaintext fallback for non-HTML clients.
         message.set_content("This email requires an HTML-capable email client to view.")
@@ -239,7 +278,7 @@ class EmailService:
             accept_url=accept_url,
             expires_label=expires_label,
         )
-        await self.send(to=to, subject=subject, html=html)
+        await self.send(to=to, subject=subject, html=html, copy_hr=True)
 
     async def send_payslip(
         self,
@@ -267,6 +306,7 @@ class EmailService:
             attachments=[
                 EmailAttachment(filename=pdf_filename, content=pdf, content_type="application/pdf")
             ],
+            copy_hr=True,
         )
 
     def _absolute(self, link_path: str) -> str:
@@ -294,7 +334,7 @@ class EmailService:
             note=note,
             leave_url=self._absolute(link_path),
         )
-        await self.send(to=to, subject=subject, html=html)
+        await self.send(to=to, subject=subject, html=html, copy_hr=True)
 
     async def send_task_assigned(
         self,
@@ -338,7 +378,7 @@ class EmailService:
             can_decide=can_decide,
             leave_url=self._absolute(link_path),
         )
-        await self.send(to=to, subject=subject, html=html)
+        await self.send(to=to, subject=subject, html=html, copy_hr=True)
 
     async def send_task_escalated(
         self,
@@ -397,7 +437,7 @@ class EmailService:
             reason=reason,
             url=self._absolute(link_path),
         )
-        await self.send(to=to, subject=subject, html=html)
+        await self.send(to=to, subject=subject, html=html, copy_hr=True)
 
     async def send_resignation_decision(
         self,
@@ -418,7 +458,7 @@ class EmailService:
             note=note,
             url=self._absolute(link_path),
         )
-        await self.send(to=to, subject=subject, html=html)
+        await self.send(to=to, subject=subject, html=html, copy_hr=True)
 
     async def send_probation_confirmed(
         self,
@@ -436,7 +476,13 @@ class EmailService:
             effective_label=effective_label,
             has_letter=letter is not None,
         )
-        await self.send(to=to, subject=subject, html=html, attachments=[letter] if letter else None)
+        await self.send(
+            to=to,
+            subject=subject,
+            html=html,
+            attachments=[letter] if letter else None,
+            copy_hr=True,
+        )
 
     async def send_probation_extended(
         self,
@@ -451,7 +497,13 @@ class EmailService:
             new_end_label=new_end_label,
             has_letter=letter is not None,
         )
-        await self.send(to=to, subject=subject, html=html, attachments=[letter] if letter else None)
+        await self.send(
+            to=to,
+            subject=subject,
+            html=html,
+            attachments=[letter] if letter else None,
+            copy_hr=True,
+        )
 
     async def send_birthday(self, *, to: str, person_name: str, audience: list[str]) -> None:
         """Wish one person, with the team CC'd so the wish is visibly public."""

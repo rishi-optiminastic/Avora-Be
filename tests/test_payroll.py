@@ -351,8 +351,10 @@ async def test_export_register_columns_and_consistency(
     ws = load_workbook(BytesIO(res.content)).active
     assert ws is not None
     headers = [c.value for c in ws[1]]
-    assert len(headers) == 40
-    assert headers[0] == "Period" and headers[-1] == "Business Expense Reimbursements"
+    assert len(headers) == 41
+    assert headers[0] == "Period"
+    # The three pay columns close the sheet, in the order finance reads them.
+    assert headers[-3:] == ["Net Monthly Total Pay", "Reimbursement Pay", "Total Pay"]
 
     row = _sheet_row_by_name(res.content, "Remy Report")
     assert row["Period"] == "June 2026"
@@ -374,8 +376,10 @@ async def test_export_register_columns_and_consistency(
     assert row["Total Deductions"] == (
         row["EPF Contribution"] + row["Income Tax"] + row["Maharashtra Professional Tax"]
     )
-    assert row["Net Pay"] == row["Gross Pay"] - row["Total Deductions"]
-    assert row["Business Expense Reimbursements"] == 0  # none approved yet
+    assert row["Net Monthly Total Pay"] == row["Gross Pay"] - row["Total Deductions"]
+    assert row["Reimbursement Pay"] == 0  # none approved yet
+    # Nothing to repay, so the total is the salary and the columns still add up.
+    assert row["Total Pay"] == row["Net Monthly Total Pay"]
 
 
 async def test_live_payslip_pdf_self_or_hr_admin(
@@ -463,7 +467,10 @@ async def test_export_includes_approved_reimbursement(
         "/api/v1/payroll/export?month=2026-06", headers=auth_headers(settings, seed.admin)
     )
     row = _sheet_row_by_name(res.content, "Remy Report")
-    assert row["Business Expense Reimbursements"] == 500
+    assert row["Reimbursement Pay"] == 500
+    # Reported in its own column AND added into what gets paid, without being
+    # mistaken for salary.
+    assert row["Total Pay"] == row["Net Monthly Total Pay"] + 500
 
 
 # ---- authorization: payroll is HR/Admin only (CLAUDE §9) ------------------- #
@@ -1158,8 +1165,12 @@ async def test_the_register_reports_exactly_what_the_screen_shows(
     sheet = load_workbook(BytesIO(export.content)).active
     assert sheet is not None
     header = [c.value for c in sheet[1]]
-    name_i, net_i = header.index("Employee Name"), header.index("Net Pay")
-    reimb_i = header.index("Business Expense Reimbursements")
+    name_i = header.index("Employee Name")
+    # `net_minor` on screen already includes the approved reimbursement, so the
+    # column that has to match it is the total, not salary alone.
+    net_i = header.index("Total Pay")
+    reimb_i = header.index("Reimbursement Pay")
+    salary_i = header.index("Net Monthly Total Pay")
 
     rows = {r[name_i]: r for r in sheet.iter_rows(min_row=2, values_only=True) if r[name_i]}
     for name, net_minor in on_screen.items():
@@ -1172,6 +1183,10 @@ async def test_the_register_reports_exactly_what_the_screen_shows(
     claimant = rows[seed.report.full_name]
     assert claimant[reimb_i] == pytest.approx(7193)
     assert claimant[net_i] > rows[seed.manager.full_name][net_i]
+    # The split is honest in both directions: the expense is NOT in salary, and
+    # the two columns reconstruct the total exactly.
+    assert claimant[salary_i] == claimant[net_i] - 7193
+    assert claimant[salary_i] + claimant[reimb_i] == claimant[net_i]
 
 
 async def test_nobody_is_paid_a_negative_amount(
@@ -1207,9 +1222,9 @@ async def test_nobody_is_paid_a_negative_amount(
         for r in sheet.iter_rows(min_row=2, values_only=True)
         if r[header.index("Employee Name")]
     }
-    assert rows[seed.report.full_name][header.index("Net Pay")] == 0
+    assert rows[seed.report.full_name][header.index("Total Pay")] == 0
     for row in rows.values():
-        assert (row[header.index("Net Pay")] or 0) >= 0, "a register row pays a negative amount"
+        assert (row[header.index("Total Pay")] or 0) >= 0, "a register row pays a negative amount"
 
 
 async def _approved_claim_for(
@@ -1285,8 +1300,9 @@ async def test_reimbursements_can_ride_with_payroll_or_be_paid_separately(
     with_reimb = await client.get(f"/api/v1/payroll/export?month={month}", headers=headers)
     assert with_reimb.status_code == 200, with_reimb.text
     header, rows = _rows(with_reimb.content)
-    net_i = header.index("Net Pay")
-    reimb_i = header.index("Business Expense Reimbursements")
+    net_i = header.index("Total Pay")
+    reimb_i = header.index("Reimbursement Pay")
+    salary_i = header.index("Net Monthly Total Pay")
     included_net = rows[seed.report.full_name][net_i]
     assert rows[seed.report.full_name][reimb_i] == pytest.approx(7193)
 
@@ -1300,6 +1316,9 @@ async def test_reimbursements_can_ride_with_payroll_or_be_paid_separately(
     assert rows_without[seed.report.full_name][reimb_i] == 0
     # The money actually left the total, not just the column.
     assert included_net - excluded_net == pytest.approx(7193)
+    # Salary is the one figure that must NOT move between the two runs - it is
+    # the same month's work either way.
+    assert rows_without[seed.report.full_name][salary_i] == rows[seed.report.full_name][salary_i]
 
     # 3. The reimbursement-only register carries exactly that difference.
     only = await client.get(f"/api/v1/payroll/export/reimbursements?month={month}", headers=headers)
@@ -1307,7 +1326,10 @@ async def test_reimbursements_can_ride_with_payroll_or_be_paid_separately(
     header2, rows_only = _rows(only.content)
     row = rows_only[seed.report.full_name]
     assert list(header2) == list(header), "the layout must match the salary register"
-    assert row[header2.index("Net Pay")] == pytest.approx(7193)
+    assert row[header2.index("Total Pay")] == pytest.approx(7193)
+    # No salary in an expenses-only run, so the whole total is the repayment.
+    assert row[header2.index("Net Monthly Total Pay")] == 0
+    assert row[header2.index("Reimbursement Pay")] == pytest.approx(7193)
     assert row[header2.index("Payroll Type")] == "Reimbursement"
     # Salary-free: nothing earned, nothing deducted, no days.
     for column in (

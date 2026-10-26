@@ -449,7 +449,7 @@ class PayrollService:
         reimbursement_minor: int,
         adjustments: Sequence[PayrollAdjustment] = (),
     ) -> PayrollExportRow:
-        """Build one 40-column register row from the line the screen already shows.
+        """Build one 41-column register row from the line the screen already shows.
 
         This deliberately does NOT recompute the salary. It used to: the register
         re-derived every figure on a fixed 30-day base while the estimate prorated
@@ -470,6 +470,8 @@ class PayrollService:
         total_deductions = rupees(line.prorated.total_deduction_minor) + rupees(
             line.adjustment_deductions_minor
         )
+        net_salary = rupees(line.net_minor - line.reimbursement_minor)
+        reimbursement = rupees(reimbursement_minor)
         account_number = (
             decrypt_pii(self._settings, comp.account_number_encrypted)
             if comp is not None and comp.account_number_encrypted
@@ -515,16 +517,23 @@ class PayrollService:
             professional_tax=rupees(line.prorated.professional_tax_minor),
             total_deductions=total_deductions,
             gross_pay=total_earnings,
-            # The screen's net, which already folds in adjustments, any NET_PAY
-            # override, and the approved reimbursement. Recomputing it here is
-            # what let the file disagree with the figure HR signed off.
+            # The three pay columns, split so each answers one question.
+            #
+            # `line.net_minor` is the screen's net, which already folds in
+            # adjustments, any NET_PAY override, AND the approved reimbursement.
+            # Taking `line.reimbursement_minor` back out leaves salary alone -
+            # the figure that reconciles against the salary ledger.
             #
             # `reimbursement_minor` is the line's own figure normally, and 0 when
-            # expenses are being paid from their own run — so swapping it out
-            # takes the reimbursement back out of the net too, instead of zeroing
-            # the column while the money stayed inside the total.
-            net_pay=rupees(line.net_minor - line.reimbursement_minor + reimbursement_minor),
-            business_expense_reimbursements=rupees(reimbursement_minor),
+            # expenses are being paid from their own run, so the money is never
+            # counted in two files.
+            #
+            # Total is the SUM OF THE TWO ROUNDED COLUMNS, not a third rounding
+            # of the underlying minors: HR adds the columns up by eye, and a
+            # half-rupee that rounded differently would read as a broken sheet.
+            net_monthly_total_pay=net_salary,
+            reimbursement_pay=reimbursement,
+            total_pay=net_salary + reimbursement,
         )
 
     def _reimbursement_row(
@@ -536,7 +545,7 @@ class PayrollService:
         period_label: str,
         reimbursement_minor: int,
     ) -> PayrollExportRow:
-        """One row of the reimbursement-only register: the same 40 columns, with
+        """One row of the reimbursement-only register: the same 41 columns, with
         every salary figure zero.
 
         Expense repayment is not earnings, so nothing here is prorated, taxed or
@@ -589,8 +598,11 @@ class PayrollService:
             professional_tax=0,
             total_deductions=0,
             gross_pay=amount,
-            net_pay=amount,
-            business_expense_reimbursements=amount,
+            # No salary in this run, so net salary is zero and the whole of the
+            # total is the expense repayment.
+            net_monthly_total_pay=0,
+            reimbursement_pay=amount,
+            total_pay=amount,
         )
 
     async def export_reimbursements_xlsx(

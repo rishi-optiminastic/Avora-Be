@@ -19,11 +19,13 @@ from datetime import UTC, datetime
 
 import pytest
 from httpx import AsyncClient
+from scripts.tenancy import _install_admin
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.deps import WORKSPACE_HEADER, _resolve_workspace
-from app.core.exceptions import AuthorizationError
+from app.core.exceptions import AuthorizationError, ConflictError
+from app.core.names import placeholder_name_from_email
 from app.core.tenancy import (
     SHARED_SCHEMA,
     InvalidWorkspaceSlug,
@@ -31,7 +33,9 @@ from app.core.tenancy import (
     validate_schema_name,
     validate_slug,
 )
+from app.models.employee import Employee, EmployeeStatus, Role
 from app.models.workspace import Workspace, WorkspaceStatus
+from app.repositories.employee import EmployeeRepository
 from app.repositories.workspace import WorkspaceRepository, normalize_email
 from tests.conftest import _FakeJwksClient, _Seed, auth_headers, bearer_for_email
 
@@ -448,3 +452,138 @@ async def test_the_first_workspace_is_not_listed_twice(
 
     slugs = [w["slug"] for w in res.json()]
     assert slugs.count(settings.primary_workspace_slug) == 1, slugs
+
+
+# --------------------------------------------------------------------------- #
+# The first admin of a new workspace
+# --------------------------------------------------------------------------- #
+# A brand new workspace is built from the migration chain and is therefore
+# EMPTY - no employees at all. Every in-app way to add one needs an employee
+# record in that workspace already, so without this command the workspace can
+# never be opened by anybody. `grant` is not enough and was the actual bug: it
+# writes a membership row, so the workspace shows up in the switcher, but
+# `get_current_user` refuses anyone with no active employee row in the schema
+# the request landed in, and the dashboard reads that 401 as a stale choice and
+# bounces them back where they came from without a word.
+#
+# These exercise the create/promote/readmit decision. They cannot exercise the
+# schema switch itself: the suite runs on SQLite, which has no schemas, so
+# `use_schema` is a no-op there and every workspace shares one namespace (see
+# `_supports_schemas`).
+async def _reread(db: AsyncSession, email: str) -> Employee:
+    """Read the row back after `_install_admin`.
+
+    Not `db.refresh(person)`: the call expunges the identity map - it has to,
+    because it moves the session between schemas and a cached object would
+    answer from the wrong one - so anything held across it is detached.
+    """
+    found = await EmployeeRepository(db).find_by_work_email_insensitive(email)
+    assert found is not None
+    return found
+
+
+async def _employee(db: AsyncSession, email: str, role: Role, *, active: bool = True) -> Employee:
+    person = Employee(
+        hr_external_id=f"test:{uuid.uuid4()}",
+        work_email=email,
+        full_name="Existing Person",
+        role=role,
+        status=EmployeeStatus.ACTIVE if active else EmployeeStatus.INACTIVE,
+        is_active=active,
+    )
+    db.add(person)
+    await db.commit()
+    return person
+
+
+async def test_the_first_admin_is_created_where_there_was_nobody(db: AsyncSession) -> None:
+    what = await _install_admin(db, SHARED_SCHEMA, "boss@acme.com", "Dana Boss")
+    await db.commit()
+
+    assert "created" in what
+    placed = await EmployeeRepository(db).get_by_work_email("boss@acme.com")
+    assert placed is not None
+    assert placed.role is Role.ADMIN
+    assert placed.is_active is True
+    assert placed.full_name == "Dana Boss"
+
+
+async def test_without_a_name_the_email_stands_in(db: AsyncSession) -> None:
+    """The real name backfills from the identity provider on first sign-in, so
+    omitting --name costs nothing permanent."""
+    await _install_admin(db, SHARED_SCHEMA, "dana.boss@acme.com", None)
+    await db.commit()
+
+    placed = await EmployeeRepository(db).get_by_work_email("dana.boss@acme.com")
+    assert placed is not None
+    assert placed.full_name == placeholder_name_from_email("dana.boss@acme.com")
+
+
+async def test_an_existing_person_is_promoted_not_duplicated(db: AsyncSession) -> None:
+    await _employee(db, "lead@acme.com", Role.MANAGER)
+
+    what = await _install_admin(db, SHARED_SCHEMA, "lead@acme.com", None)
+    await db.commit()
+
+    assert "promoted from manager to admin" in what
+    person = await _reread(db, "lead@acme.com")
+    assert person.role is Role.ADMIN
+    assert person.full_name == "Existing Person"  # not overwritten
+
+
+async def test_an_offboarded_person_is_brought_back(db: AsyncSession) -> None:
+    await _employee(db, "returner@acme.com", Role.EXECUTIVE, active=False)
+
+    what = await _install_admin(db, SHARED_SCHEMA, "returner@acme.com", None)
+    await db.commit()
+
+    assert "reactivated" in what and "promoted" in what
+    person = await _reread(db, "returner@acme.com")
+    assert person.is_active is True
+    assert person.status is EmployeeStatus.ACTIVE
+    assert person.role is Role.ADMIN
+
+
+async def test_running_it_twice_changes_nothing_the_second_time(db: AsyncSession) -> None:
+    await _install_admin(db, SHARED_SCHEMA, "boss@acme.com", "Dana Boss")
+    await db.commit()
+
+    what = await _install_admin(db, SHARED_SCHEMA, "boss@acme.com", "Dana Boss")
+    await db.commit()
+
+    assert what == "was already an admin there"
+
+
+async def test_an_it_admin_is_not_reported_as_promoted(db: AsyncSession) -> None:
+    """`it_admin` normalizes to a full admin (`CurrentUser._normalize_role`), so
+    they already administer the workspace and nothing should change."""
+    await _employee(db, "it@acme.com", Role.IT_ADMIN)
+
+    what = await _install_admin(db, SHARED_SCHEMA, "it@acme.com", None)
+    await db.commit()
+
+    assert what == "was already an admin there"
+    assert (await _reread(db, "it@acme.com")).role is Role.IT_ADMIN
+
+
+async def test_a_differently_cased_email_matches_the_same_person(db: AsyncSession) -> None:
+    """The email is typed on a command line. An exact-match lookup would miss
+    the row and the create would then collide with the unique index."""
+    await _employee(db, "Dana.Boss@Acme.com", Role.EXECUTIVE)
+
+    what = await _install_admin(db, SHARED_SCHEMA, "dana.boss@acme.com", None)
+    await db.commit()
+
+    assert "promoted" in what
+    assert (await _reread(db, "Dana.Boss@Acme.com")).role is Role.ADMIN
+    assert len(await EmployeeRepository(db).list_all_active()) == 1
+
+
+async def test_two_rows_differing_only_in_case_are_refused(db: AsyncSession) -> None:
+    """Picking one at random would make an admin of whichever the index
+    happened to return first."""
+    await _employee(db, "dup@acme.com", Role.EXECUTIVE)
+    await _employee(db, "DUP@acme.com", Role.EXECUTIVE)
+
+    with pytest.raises(ConflictError):
+        await _install_admin(db, SHARED_SCHEMA, "dup@acme.com", None)

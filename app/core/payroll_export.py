@@ -1,7 +1,7 @@
 """Monthly payroll Excel (.xlsx) builder — the "Payrun Employee Salary statement".
 
 Pure and deterministic (no I/O beyond an in-memory buffer). Given the per-employee
-rows for a month, produce a single flat sheet in the 40-column Indian payroll
+rows for a month, produce a single flat sheet in the 41-column Indian payroll
 register layout (one row per employee) and return the raw bytes.
 
 Money is written as whole-currency **numbers** so totals sum in Excel; day counts
@@ -64,8 +64,12 @@ _COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("Maharashtra Professional Tax", "professional_tax", _MONEY),
     ("Total Deductions", "total_deductions", _MONEY),
     ("Gross Pay", "gross_pay", _MONEY),
-    ("Net Pay", "net_pay", _MONEY),
-    ("Business Expense Reimbursements", "business_expense_reimbursements", _MONEY),
+    # The three pay columns HR reconciles against the bank. Kept in this order
+    # and adjacent on purpose: `Total Pay` is the visible sum of the two before
+    # it, so a reader can check the arithmetic without leaving the row.
+    ("Net Monthly Total Pay", "net_monthly_total_pay", _MONEY),
+    ("Reimbursement Pay", "reimbursement_pay", _MONEY),
+    ("Total Pay", "total_pay", _MONEY),
 )
 
 _HEADER_FILL = PatternFill("solid", fgColor="5A48E0")
@@ -121,8 +125,17 @@ class PayrollExportRow:
     professional_tax: int
     total_deductions: int
     gross_pay: int
-    net_pay: int
-    business_expense_reimbursements: int
+    # Salary only - what the month's work earned, after deductions, with
+    # expense repayment deliberately NOT folded in. `Net Pay` used to carry
+    # this column's name while silently including reimbursements, so a month
+    # with an expense claim made salary look higher than it was and the figure
+    # could not be reconciled against the salary ledger.
+    net_monthly_total_pay: int
+    # Approved business expenses repaid in this run. Zero on a salary run whose
+    # expenses are being paid separately, so the money is counted once.
+    reimbursement_pay: int
+    # What actually leaves the bank for this person: the two above, added.
+    total_pay: int
 
     def as_cells(self) -> list[object]:
         return [getattr(self, name) for _header, name, _kind in _COLUMNS]

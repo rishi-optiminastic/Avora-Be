@@ -6,7 +6,7 @@ bulk-payment report. Either way the file is untrusted input (Golden rule #1):
 
 - The type is decided from the bytes, never from the filename or the browser's
   Content-Type (same reasoning as `app.core.uploads`).
-- Headers vary ("Employee No" / "Emp ID", "Net Pay" / "Amount" / "Paid Amount"),
+- Headers vary ("Employee No" / "Emp ID", "Total Pay" / "Net Pay" / "Amount"),
   so each logical field accepts a list of aliases and the header row is found by
   scanning the first rows of every sheet.
 - Size, the unzipped size of an xlsx, the rows scanned (blank ones included)
@@ -108,8 +108,8 @@ class PayoutField(StrEnum):
 IDENTIFIER_FIELDS = (PayoutField.EMPLOYEE_NUMBER, PayoutField.ACCOUNT_NUMBER, PayoutField.EMAIL)
 
 # Normalised header (lowercase, alphanumerics only) -> field. Within a field the
-# first alias present wins, so "Net Pay" beats "Amount" and "Employee Name" beats
-# "Account Holder Name".
+# first alias present wins, so "Total Pay" beats "Net Pay" beats "Amount", and
+# "Employee Name" beats "Account Holder Name".
 _ALIASES: dict[PayoutField, tuple[str, ...]] = {
     PayoutField.EMPLOYEE_NUMBER: (
         "employeeno", "employeenumber", "empno", "employeeid", "empid", "employeecode",
@@ -127,6 +127,11 @@ _ALIASES: dict[PayoutField, tuple[str, ...]] = {
         "employeename", "name", "payeename", "beneficiaryname", "accountholdername",
     ),
     PayoutField.AMOUNT: (
+        # "totalpay" leads because it is what our own register calls the figure
+        # that actually leaves the bank (salary + reimbursement). A proof file
+        # built from that register carries all three pay columns, and matching
+        # the salary-only one would under-count every row with an expense claim.
+        "totalpay", "netmonthlytotalpay",
         "netpay", "amountpaid", "paidamount", "payoutamount", "transactionamount",
         "txnamount", "creditamount", "netamount", "netsalary", "netpayable", "amountinr",
         "amount",
@@ -478,6 +483,6 @@ def parse_payout_file(data: bytes) -> ParsedPayoutFile:
             warnings=warnings,
         )
     raise PayoutFileError(
-        "No payout header found. The file needs an amount column (e.g. Net Pay) and "
+        "No payout header found. The file needs an amount column (e.g. Total Pay) and "
         "Employee No, Account Number or Email."
     )

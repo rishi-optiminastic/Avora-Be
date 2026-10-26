@@ -163,6 +163,30 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_starttls: bool = True
 
+    # A shared HR mailbox BCC'd on the HR-relevant transactional mail (joiners,
+    # leave, resignations, probation, forms, reimbursement decisions, payroll),
+    # so HR holds the same record the employee got without being a named
+    # recipient on it. Empty disables the copy entirely.
+    #
+    # BCC, not CC: the employee does not need HR's address on their leave
+    # rejection, and a visible HR line invites a reply-all that bypasses the
+    # workflow the app is there to run.
+    #
+    # Deliberately NOT copied: EOD reports and the birthday / anniversary /
+    # festival / holiday broadcasts. Those are daily and org-wide, and routing
+    # them here would bury the mail HR actually has to act on.
+    #
+    # Transport config, so it lives with the other mail settings rather than in
+    # a DB settings row: `EmailService` is constructed from `Settings` alone in
+    # the API and in all five schedulers, and giving it a DB read would mean a
+    # query before every send in every worker.
+    hr_notification_email: str = ""
+
+    @property
+    def hr_copy_address(self) -> str:
+        """The HR mailbox, or empty when no copy should be sent."""
+        return self.hr_notification_email.strip()
+
     @property
     def uses_smtp(self) -> bool:
         return self.email_provider.strip().lower() == "smtp"
