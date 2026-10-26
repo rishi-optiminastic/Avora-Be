@@ -47,10 +47,22 @@ BUDDY_DAYS = 30
 class _RecordingEmail:
     def __init__(self, *, fail: bool = False) -> None:
         self.sent: list[tuple[str, str]] = []
+        # Whether each send asked for the HR mailbox copy, in send order.
+        self.copied_hr: list[bool] = []
         self._fail = fail
 
-    async def send(self, *, to: str, subject: str, html: str) -> None:
-        del html
+    async def send(
+        self,
+        *,
+        to: str,
+        subject: str,
+        html: str,
+        cc: list[str] | None = None,
+        attachments: list[object] | None = None,
+        copy_hr: bool = False,
+    ) -> None:
+        del html, cc, attachments
+        self.copied_hr.append(copy_hr)
         if self._fail:
             raise RuntimeError("smtp down")
         self.sent.append((to, subject))
@@ -139,6 +151,11 @@ async def test_joiner_gets_their_form_on_day_15_once(
     assert assignment.status is AssignmentStatus.PENDING
     assert assignment.notified_at is not None
     assert [to for to, _ in email.sent] == [seed.report.work_email]
+    # HR holds a copy of every form sent out. Asserted here because the failure
+    # mode is silent: the service swallows any exception from `send` and simply
+    # reports the mail as failed, so a dropped or mistyped argument looks like
+    # an outage rather than a bug.
+    assert email.copied_hr == [True]
 
 
 async def test_people_who_joined_before_go_live_are_left_alone(

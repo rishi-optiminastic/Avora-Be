@@ -42,6 +42,20 @@ from app.services.employee_service import MAX_AVATAR_BYTES
 router = APIRouter(prefix="/employees", tags=["employees"])
 
 
+@router.get("/guests", response_model=list[EmployeeRead])
+async def list_guests(
+    caller: CurrentUserDep,
+    service: EmployeeServiceDep,
+) -> list[EmployeeRead]:
+    """People from another workspace who hold an account in this one.
+
+    Declared BEFORE `/{employee_id}`: FastAPI matches in definition order, so
+    the other way round "guests" would be parsed as an employee id and 422.
+    """
+    people = await service.list_guests(caller)
+    return [EmployeeRead.model_validate(e) for e in people]
+
+
 @router.get("", response_model=Page[EmployeeRead])
 async def list_employees(
     caller: CurrentUserDep,

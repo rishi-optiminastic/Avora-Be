@@ -497,7 +497,7 @@ async def _employee(db: AsyncSession, email: str, role: Role, *, active: bool = 
 
 
 async def test_the_first_admin_is_created_where_there_was_nobody(db: AsyncSession) -> None:
-    what = await _install_admin(db, SHARED_SCHEMA, "boss@acme.com", "Dana Boss")
+    what = await _install_admin(db, SHARED_SCHEMA, "boss@acme.com", "Dana Boss", guest=False)
     await db.commit()
 
     assert "created" in what
@@ -511,7 +511,7 @@ async def test_the_first_admin_is_created_where_there_was_nobody(db: AsyncSessio
 async def test_without_a_name_the_email_stands_in(db: AsyncSession) -> None:
     """The real name backfills from the identity provider on first sign-in, so
     omitting --name costs nothing permanent."""
-    await _install_admin(db, SHARED_SCHEMA, "dana.boss@acme.com", None)
+    await _install_admin(db, SHARED_SCHEMA, "dana.boss@acme.com", None, guest=False)
     await db.commit()
 
     placed = await EmployeeRepository(db).get_by_work_email("dana.boss@acme.com")
@@ -522,7 +522,7 @@ async def test_without_a_name_the_email_stands_in(db: AsyncSession) -> None:
 async def test_an_existing_person_is_promoted_not_duplicated(db: AsyncSession) -> None:
     await _employee(db, "lead@acme.com", Role.MANAGER)
 
-    what = await _install_admin(db, SHARED_SCHEMA, "lead@acme.com", None)
+    what = await _install_admin(db, SHARED_SCHEMA, "lead@acme.com", None, guest=False)
     await db.commit()
 
     assert "promoted from manager to admin" in what
@@ -534,7 +534,7 @@ async def test_an_existing_person_is_promoted_not_duplicated(db: AsyncSession) -
 async def test_an_offboarded_person_is_brought_back(db: AsyncSession) -> None:
     await _employee(db, "returner@acme.com", Role.EXECUTIVE, active=False)
 
-    what = await _install_admin(db, SHARED_SCHEMA, "returner@acme.com", None)
+    what = await _install_admin(db, SHARED_SCHEMA, "returner@acme.com", None, guest=False)
     await db.commit()
 
     assert "reactivated" in what and "promoted" in what
@@ -545,10 +545,10 @@ async def test_an_offboarded_person_is_brought_back(db: AsyncSession) -> None:
 
 
 async def test_running_it_twice_changes_nothing_the_second_time(db: AsyncSession) -> None:
-    await _install_admin(db, SHARED_SCHEMA, "boss@acme.com", "Dana Boss")
+    await _install_admin(db, SHARED_SCHEMA, "boss@acme.com", "Dana Boss", guest=False)
     await db.commit()
 
-    what = await _install_admin(db, SHARED_SCHEMA, "boss@acme.com", "Dana Boss")
+    what = await _install_admin(db, SHARED_SCHEMA, "boss@acme.com", "Dana Boss", guest=False)
     await db.commit()
 
     assert what == "was already an admin there"
@@ -559,7 +559,7 @@ async def test_an_it_admin_is_not_reported_as_promoted(db: AsyncSession) -> None
     they already administer the workspace and nothing should change."""
     await _employee(db, "it@acme.com", Role.IT_ADMIN)
 
-    what = await _install_admin(db, SHARED_SCHEMA, "it@acme.com", None)
+    what = await _install_admin(db, SHARED_SCHEMA, "it@acme.com", None, guest=False)
     await db.commit()
 
     assert what == "was already an admin there"
@@ -571,7 +571,7 @@ async def test_a_differently_cased_email_matches_the_same_person(db: AsyncSessio
     the row and the create would then collide with the unique index."""
     await _employee(db, "Dana.Boss@Acme.com", Role.EXECUTIVE)
 
-    what = await _install_admin(db, SHARED_SCHEMA, "dana.boss@acme.com", None)
+    what = await _install_admin(db, SHARED_SCHEMA, "dana.boss@acme.com", None, guest=False)
     await db.commit()
 
     assert "promoted" in what
@@ -586,4 +586,4 @@ async def test_two_rows_differing_only_in_case_are_refused(db: AsyncSession) -> 
     await _employee(db, "DUP@acme.com", Role.EXECUTIVE)
 
     with pytest.raises(ConflictError):
-        await _install_admin(db, SHARED_SCHEMA, "dup@acme.com", None)
+        await _install_admin(db, SHARED_SCHEMA, "dup@acme.com", None, guest=False)

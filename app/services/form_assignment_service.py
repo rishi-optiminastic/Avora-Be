@@ -704,11 +704,12 @@ class FormAssignmentService:
             # The shared HR mailbox holds a copy of what was sent out. The two
             # HR loops below deliberately do NOT: they already mail every HR
             # person individually, so a copy per recipient would arrive N times.
-            await self._email.send(
-                to=person.work_email, subject=subject, html=html, copy_hr=True
+            await self._email.send(to=person.work_email, subject=subject, html=html, copy_hr=True)
+        except Exception as exc:
+            logger.warning(
+                "form_email_failed",
+                extra={"assignment": str(assignment.id), "cause": type(exc).__name__},
             )
-        except Exception:
-            logger.warning("form_email_failed", extra={"assignment": str(assignment.id)})
             return False
         await self._notifications.notify(
             recipient_id=person.id,

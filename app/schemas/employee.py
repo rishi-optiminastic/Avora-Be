@@ -31,6 +31,9 @@ class EmployeeRead(ORMModel):
     role: Role
     payroll_manager: bool = False
     location_check_exempt: bool = False
+    # Holds an account here on behalf of another workspace: full role, but not
+    # this workspace's personnel. Defaulted so existing callers are unaffected.
+    is_guest: bool = False
     status: EmployeeStatus
     is_active: bool
     tracking_mode: TrackingMode

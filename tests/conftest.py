@@ -111,7 +111,16 @@ class _FakeEmailService:
                     if isinstance(address, str):
                         type(self).outbox.append((method, address))
 
-    async def send(self, *, to: str, subject: str, html: str) -> None:
+    async def send(
+        self,
+        *,
+        to: str,
+        subject: str,
+        html: str,
+        cc: list[str] | None = None,
+        attachments: list[object] | None = None,
+        copy_hr: bool = False,
+    ) -> None:
         return None
 
     async def send_invite(self, **kwargs: object) -> None:

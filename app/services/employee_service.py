@@ -107,6 +107,18 @@ class EmployeeService:
     ) -> tuple[Sequence[Employee], int]:
         return await self._employees.list_for_scope(caller, offset=offset, limit=limit)
 
+    async def list_guests(self, caller: CurrentUser) -> Sequence[Employee]:
+        """Who from outside this workspace holds an account in it.
+
+        HR/Admin only. Every other roster hides guests, so this is the only way
+        anyone here can find out who outside the company can read their payroll
+        and attendance - and the people responsible for that data are exactly
+        who should be able to ask.
+        """
+        if not (caller.is_admin or caller.role is Role.HR):
+            raise AuthorizationError()
+        return await self._employees.list_guests()
+
     async def list_assignable(self, caller: CurrentUser) -> Sequence[Employee]:
         """Everyone this caller may put a task on — their reporting scope plus any
         explicitly granted people (see `AssignmentGrant`). Mirrors exactly what

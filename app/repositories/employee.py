@@ -23,6 +23,20 @@ from app.models.resignation import Resignation, ResignationStatus
 from app.models.work_session import WorkSession
 from app.schemas.auth import CurrentUser
 
+# "Is this workspace's own personnel" - the one expression that says so.
+#
+# A guest holds an account here to administer or observe this workspace on
+# behalf of another one. Every query answering "who works here" carries this:
+# the directory and its headcount, the attendance and activity rollups, the
+# leave/EOD scope, direct reports, and the org-wide roster that payroll and the
+# celebration broadcast run on. Without it, granting an HQ admin a second
+# workspace enrolled them in its payroll.
+#
+# Queries answering "who can ACT here" deliberately leave it off - `list_admins`,
+# `list_by_role` and `list_payroll_managers` are notification and capability
+# lookups, and a guest admin is there precisely to be one.
+_STAFF_ONLY = Employee.is_guest.is_(False)
+
 # `hr_external_id` prefixes for rows created inside the PMS rather than by HR.
 # A row carrying one is a placeholder that the first HR sync for the same work
 # email claims, instead of creating a duplicate person.
@@ -380,6 +394,7 @@ class EmployeeRepository:
         `_personal_scope_clause`."""
         clauses = self._personal_scope_clause(caller)
         clauses.append(Employee.is_active.is_(True))
+        clauses.append(_STAFF_ONLY)
         rows = await self._session.execute(
             select(Employee).where(*clauses).order_by(Employee.full_name)
         )
@@ -401,6 +416,7 @@ class EmployeeRepository:
         clauses = self._scope_clause(caller)
         if not include_inactive:
             clauses.append(Employee.is_active.is_(True))
+        clauses.append(_STAFF_ONLY)
 
         base = select(Employee).where(*clauses)
         total = await self._session.scalar(select(func.count()).select_from(base.subquery()))
@@ -414,6 +430,7 @@ class EmployeeRepository:
         attendance/activity rollups that must include people with zero samples."""
         clauses = self._scope_clause(caller)
         clauses.append(Employee.is_active.is_(True))
+        clauses.append(_STAFF_ONLY)
         rows = await self._session.execute(
             select(Employee).where(*clauses).order_by(Employee.full_name)
         )
@@ -462,6 +479,9 @@ class EmployeeRepository:
             Resignation.last_working_day >= period.first_day,
         )
         clauses = [] if org_wide else self._scope_clause(caller)
+        # Outside the or_ below, not inside it: a guest must be excluded whether
+        # or not they happen to have a session, a leave or a resignation here.
+        clauses.append(_STAFF_ONLY)
         clauses.append(or_(Employee.hire_date.is_(None), Employee.hire_date <= period.last_day))
         clauses.append(
             or_(
@@ -527,7 +547,7 @@ class EmployeeRepository:
         """
         row = await self._session.execute(
             select(Employee.id)
-            .where(Employee.manager_id == employee_id, Employee.is_active.is_(True))
+            .where(Employee.manager_id == employee_id, Employee.is_active.is_(True), _STAFF_ONLY)
             .limit(1)
         )
         return row.scalar_one_or_none() is not None
@@ -573,10 +593,28 @@ class EmployeeRepository:
         )
         return rows.scalars().all()
 
+    async def list_guests(self) -> Sequence[Employee]:
+        """People from another workspace with an account in this one.
+
+        The deliberate counterpart to `_STAFF_ONLY`: every other roster hides
+        them, so without this nobody in this workspace could find out who
+        outside it can read their payroll and attendance. That answer belongs
+        to this workspace's own admins, which is why it is a list and not a
+        secret.
+        """
+        rows = await self._session.execute(
+            select(Employee)
+            .where(Employee.is_active.is_(True), Employee.is_guest.is_(True))
+            .order_by(Employee.full_name)
+        )
+        return rows.scalars().all()
+
     async def list_all_active(self) -> Sequence[Employee]:
         """Every active employee (org-wide) — used by the celebration broadcast."""
         rows = await self._session.execute(
-            select(Employee).where(Employee.is_active.is_(True)).order_by(Employee.full_name)
+            select(Employee)
+            .where(Employee.is_active.is_(True), _STAFF_ONLY)
+            .order_by(Employee.full_name)
         )
         return rows.scalars().all()
 

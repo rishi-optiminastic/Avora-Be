@@ -142,6 +142,24 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Admin-set; only meaningful when the org requires location for clock-in.
     location_check_exempt: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # Access without employment (orthogonal to both `role` and `is_active`).
+    #
+    # A guest is someone from ANOTHER workspace who holds an account here in
+    # order to administer or observe this one - an HQ admin, or HR running pay
+    # for a sister company. They sign in normally, their `role` applies in full,
+    # and their actions are audited like anyone's.
+    #
+    # What they are NOT is this workspace's personnel. Before this flag existed
+    # there was one axis, so granting an HQ admin access to a second workspace
+    # also enrolled them in its headcount, its payroll run, its attendance
+    # report (absent every day, having never clocked in) and its org chart.
+    #
+    # Anything answering "who works here" must therefore exclude guests - see
+    # `_STAFF_ONLY` in `EmployeeRepository`, which is the one place that says so.
+    # Anything answering "who can act here" (role lookups for notifications,
+    # the payroll-manager grant) deliberately includes them.
+    is_guest: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
     status: Mapped[EmployeeStatus] = mapped_column(default=EmployeeStatus.ACTIVE, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
 

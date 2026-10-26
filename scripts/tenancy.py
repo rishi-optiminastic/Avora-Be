@@ -52,6 +52,7 @@ from app.db.session import SessionFactory, engine
 from app.models.employee import EmployeeStatus, Role
 from app.models.workspace import Workspace, WorkspaceStatus
 from app.repositories.employee import EmployeeRepository
+from app.repositories.org_settings import OrgSettingsRepository
 from app.repositories.workspace import WorkspaceRepository, normalize_email
 
 # `it_admin` is a full admin everywhere (`CurrentUser._normalize_role`), so
@@ -184,6 +185,10 @@ async def create(slug: str, name: str, location: str) -> int:
         if workspace is None:  # pragma: no cover - just written above
             return 1
         workspace.provisioned_at = datetime.now(UTC)
+        # Name the workspace inside its own schema. Without this the chrome
+        # falls back to the column defaults and the workspace introduces itself
+        # as whichever company those defaults were written for.
+        await _apply_branding(session, schema, name, location)
         await session.commit()
     finally:
         await session.close()
@@ -194,10 +199,79 @@ async def create(slug: str, name: str, location: str) -> int:
     return 0
 
 
+async def _apply_branding(session: AsyncSession, schema: str, name: str, location: str) -> str:
+    """Point a workspace's in-schema `org_settings` at its own name.
+
+    Two rows carry a workspace's name and they live in different places: the
+    `workspaces` registry in `public` (what the switcher lists) and
+    `org_settings` inside the workspace's own schema (what the dashboard chrome
+    renders). A new schema is built from the migration chain, which knows
+    nothing about who the workspace is, so its `org_settings` fell back to the
+    column defaults - and those defaults were the FIRST company's name. Every
+    new workspace was therefore born calling itself "Optiminastic - HQ" while
+    the switcher beside it correctly said "Alt Opti - Pune".
+
+    The session is pointed at the workspace's schema for the length of this and
+    put back afterwards, with `expunge_all` either side for the same reason
+    `_install_admin` does it: the identity map holds rows read from `public`,
+    and a lookup after the switch would otherwise be answered from the wrong
+    schema's cache.
+    """
+    session.expunge_all()
+    await use_schema(session, schema)
+    try:
+        orgs = OrgSettingsRepository(session)
+        org = await orgs.get()
+        if org is None:
+            org = await orgs.create_default()
+            verb = "set"
+        elif (org.name, org.location) == (name, location):
+            return "already correct"
+        else:
+            verb = f"changed from {org.name!r} - {org.location!r} to"
+        org.name = name
+        org.location = location
+        await orgs.flush()
+        return f"{verb} {name!r} - {location!r}"
+    finally:
+        # Always back: the caller commits in `public`.
+        session.expunge_all()
+        await use_shared_only(session)
+
+
+async def brand(slug: str) -> int:
+    """Re-sync one workspace's chrome with its registry name.
+
+    `create` does this automatically. This exists for the workspaces built
+    before it did, which are still wearing another company's name.
+    """
+    session = await _shared_session()
+    try:
+        workspaces = WorkspaceRepository(session)
+        workspace = await workspaces.get_by_slug(validate_slug(slug))
+        if workspace is None:
+            _say(f"no workspace {slug!r}")
+            return 1
+        if workspace.provisioned_at is None:
+            _say(f"{workspace.slug!r} has not finished building - run migrate first.")
+            return 1
+        # Read the values off the row BEFORE `_apply_branding` expunges it.
+        label, name, location = workspace.slug, workspace.name, workspace.location
+        schema = validate_schema_name(workspace.schema_name)
+        what = await _apply_branding(session, schema, name, location)
+        await session.commit()
+        _say(f"{label!r} branding {what}")
+        return 0
+    finally:
+        await session.close()
+
+
 # --------------------------------------------------------------------------- #
 # admin - the first person inside a new workspace
 # --------------------------------------------------------------------------- #
-async def _install_admin(session: AsyncSession, schema: str, email: str, name: str | None) -> str:
+async def _install_admin(
+    session: AsyncSession, schema: str, email: str, name: str | None, *, guest: bool
+) -> str:
     """Make one person an ADMIN EMPLOYEE inside a workspace, and say what changed.
 
     The session is pointed at that workspace's own schema for the length of
@@ -220,15 +294,27 @@ async def _install_admin(session: AsyncSession, schema: str, email: str, name: s
             # The real name backfills from the identity provider on first
             # sign-in (`refresh_display_name`), so omitting --name costs
             # nothing permanent.
-            await employees.create_direct(
+            created = await employees.create_direct(
                 work_email=address,
                 full_name=clean_display_name(name) or placeholder_name_from_email(address),
                 role=Role.ADMIN,
                 profile={},
             )
-            return "created as an admin"
+            # Set after the create because `create_direct` is the shared path
+            # for a hand-entered EMPLOYEE; guest status is this command's
+            # business, not something to widen that signature for.
+            created.is_guest = guest
+            await session.flush()
+            return "created as a guest admin" if guest else "created as an admin"
 
         changed: list[str] = []
+        if existing.is_guest != guest:
+            # The repair path that matters: somebody already installed as a
+            # full employee here can be turned into a guest, which takes them
+            # out of the headcount, the payroll run and the attendance report
+            # without disturbing their role or their audit history.
+            existing.is_guest = guest
+            changed.append("made a guest" if guest else "made a full employee")
         if not existing.is_active:
             existing.is_active = True
             existing.status = EmployeeStatus.ACTIVE
@@ -244,7 +330,7 @@ async def _install_admin(session: AsyncSession, schema: str, email: str, name: s
         await use_shared_only(session)
 
 
-async def admin(slug: str, email: str, name: str | None) -> int:
+async def admin(slug: str, email: str, name: str | None, guest: bool) -> int:
     """Install a workspace's first admin.
 
     This is the one act that cannot be done from inside the app, and without it
@@ -273,7 +359,7 @@ async def admin(slug: str, email: str, name: str | None) -> int:
         schema = validate_schema_name(workspace.schema_name)
 
         try:
-            what = await _install_admin(session, schema, email, name)
+            what = await _install_admin(session, schema, email, name, guest=guest)
         except ConflictError as exc:
             # Two rows differing only in case: picking one at random would make
             # an admin of whichever the index happened to return.
@@ -419,7 +505,18 @@ def main() -> int:
     create_cmd.add_argument("--name", required=True)
     create_cmd.add_argument("--location", default="")
 
+    brand_cmd = sub.add_parser("brand", help="re-sync a workspace's chrome with its name")
+    brand_cmd.add_argument("slug")
+
     admin_cmd = sub.add_parser("admin", help="install a workspace's first admin employee")
+    admin_cmd.add_argument(
+        "--guest",
+        action="store_true",
+        help=(
+            "they administer this workspace on behalf of another one: full admin "
+            "role, but kept out of its headcount, payroll and attendance"
+        ),
+    )
     admin_cmd.add_argument("slug")
     admin_cmd.add_argument("email")
     admin_cmd.add_argument("--name", default=None, help="display name; defaults to the email")
@@ -439,8 +536,10 @@ def main() -> int:
             return asyncio.run(migrate())
         if args.command == "create":
             return asyncio.run(create(args.slug, args.name, args.location))
+        if args.command == "brand":
+            return asyncio.run(brand(args.slug))
         if args.command == "admin":
-            return asyncio.run(admin(args.slug, args.email, args.name))
+            return asyncio.run(admin(args.slug, args.email, args.name, args.guest))
         if args.command == "grant":
             return asyncio.run(grant(args.slug, args.email))
         if args.command == "revoke":
