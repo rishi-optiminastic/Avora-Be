@@ -21,7 +21,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.activity import ActivitySample
 from app.models.attendance_policy import AttendancePolicy
 from app.models.work_session import WorkSession
+from app.repositories.attendance_policy import AttendancePolicyRepository
+from app.repositories.audit import AuditRepository
+from app.repositories.work_session import WorkSessionRepository
+from app.schemas.monitoring import CaptureWindowState
+from app.services.attendance_policy_service import AttendancePolicyService
+from app.services.monitoring_gate import MonitoringGateService
 from tests.conftest import _Seed, agent_headers
+
+
+def _gate(db: AsyncSession) -> MonitoringGateService:
+    return MonitoringGateService(
+        WorkSessionRepository(db),
+        AttendancePolicyService(AttendancePolicyRepository(db), AuditRepository(db)),
+    )
 
 
 def _sample(sequence: int) -> dict[str, object]:
@@ -132,3 +145,57 @@ async def test_dropped_on_non_working_day(
     await _add_session(db, seed, source="biometric", clock_out_source=None, open_session=True)
     assert await _ingest(client, seed) == 202
     assert await _stored_count(db, seed) == 0
+
+
+# --------------------------------------------------------------------------- #
+# The same verdict, with its reason kept. `should_suppress` flattens these to a
+# bool for the ingest path; the admin fleet needs to know WHICH of them it is,
+# because "they have not clocked in" is somebody's to fix and "it is Sunday" is
+# nobody's.
+# --------------------------------------------------------------------------- #
+
+
+async def test_state_says_not_clocked_in_rather_than_just_no(db: AsyncSession, seed: _Seed) -> None:
+    await _set_working_days(db, 7)
+    gate = _gate(db)
+    assert await gate.state_for(seed.report.id) is CaptureWindowState.NOT_CLOCKED_IN
+    assert await gate.should_suppress(seed.report.id) is True
+
+
+async def test_state_says_capturing_during_an_open_session(db: AsyncSession, seed: _Seed) -> None:
+    await _set_working_days(db, 7)
+    await _add_session(db, seed, source="dashboard", clock_out_source=None, open_session=True)
+    gate = _gate(db)
+    assert await gate.state_for(seed.report.id) is CaptureWindowState.CAPTURING
+    assert await gate.should_suppress(seed.report.id) is False
+
+
+async def test_state_blames_the_day_not_the_person(db: AsyncSession, seed: _Seed) -> None:
+    # An open session on a non-working day: still nothing stored, but the reason
+    # is the calendar - chasing the employee would be wrong.
+    await _set_working_days(db, 0)
+    await _add_session(db, seed, source="dashboard", clock_out_source=None, open_session=True)
+    assert await _gate(db).state_for(seed.report.id) is CaptureWindowState.NON_WORKING_DAY
+
+
+async def test_states_for_resolves_a_mixed_roster(db: AsyncSession, seed: _Seed) -> None:
+    await _set_working_days(db, 7)
+    await _add_session(db, seed, source="dashboard", clock_out_source=None, open_session=True)
+    states = await _gate(db).states_for([seed.report.id, seed.manager.id, seed.outsider.id])
+    assert states == {
+        seed.report.id: CaptureWindowState.CAPTURING,
+        seed.manager.id: CaptureWindowState.NOT_CLOCKED_IN,
+        seed.outsider.id: CaptureWindowState.NOT_CLOCKED_IN,
+    }
+
+
+async def test_states_for_collapses_duplicates(db: AsyncSession, seed: _Seed) -> None:
+    # Two laptops, one person: the roster the fleet view hands over has the id
+    # twice, and the answer is keyed by person.
+    await _set_working_days(db, 7)
+    states = await _gate(db).states_for([seed.report.id, seed.report.id])
+    assert states == {seed.report.id: CaptureWindowState.NOT_CLOCKED_IN}
+
+
+async def test_states_for_an_empty_roster_asks_nothing(db: AsyncSession) -> None:
+    assert await _gate(db).states_for([]) == {}

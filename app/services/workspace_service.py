@@ -306,8 +306,12 @@ class WorkspaceService:
         Both halves run in ONE transaction across two schemas. If the new row
         cannot be written, the offboard rolls back with it - the alternative is
         somebody deactivated in one workspace and absent from the other.
+
+        Admin or HR of THIS workspace, and the caller must be able to open the
+        target. HR is included because this is people work, not access work;
+        see `_require_people_admin_here`.
         """
-        source = await self._require_admin_here(caller)
+        source = await self._require_people_admin_here(caller)
         target = await self._transfer_target(caller, payload.target_slug, source)
 
         employee = await self._employees.get(payload.employee_id)
@@ -445,9 +449,38 @@ class WorkspaceService:
             await use_schema(self._session, here)
 
     async def _require_admin_here(self, caller: CurrentUser) -> Workspace:
-        """Admin of the workspace this request is in - not of any other one."""
+        """Admin of the workspace this request is in - not of any other one.
+
+        The gate on ACCESS: who may open this workspace, and who from outside
+        may hold an account in it. Deliberately not HR.
+        """
         if not caller.is_admin:
             raise AuthorizationError("Only an admin can manage workspace access.")
+        return await self._here()
+
+    async def _require_people_admin_here(self, caller: CurrentUser) -> Workspace:
+        """Admin or HR of the workspace this request is in.
+
+        The gate on PEOPLE, which is wider on purpose. A transfer is an
+        offboard in this workspace and a joiner in another, and both halves are
+        ordinary HR work: HR already offboards people here and onboards them in
+        any workspace it holds an account in. Requiring an admin to do the two
+        together bought nothing except a message to an admin, and left HR -
+        who actually runs inter-entity moves - looking at a page with no button
+        on it.
+
+        It does not widen what a transfer can do. The target still has to be a
+        workspace the caller may open (`_transfer_target`), the person still
+        arrives as an ordinary EXECUTIVE whatever they held here, and handing
+        out ACCESS stays `_require_admin_here` - letting another company read
+        this one's payroll is a different act from administering its people.
+        """
+        if not (caller.is_admin or caller.role is Role.HR):
+            raise AuthorizationError("Only an admin or HR can move someone between workspaces.")
+        return await self._here()
+
+    async def _here(self) -> Workspace:
+        """The workspace this request landed in, or a refusal naming the fix."""
         workspace = await self.current()
         if workspace is None:
             raise ConflictError(

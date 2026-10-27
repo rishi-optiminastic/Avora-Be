@@ -59,6 +59,26 @@ class WorkSessionRepository:
         )
         return rows.scalar_one_or_none()
 
+    async def open_employee_ids(self, employee_ids: Sequence[uuid.UUID]) -> set[uuid.UUID]:
+        """Which of these employees are clocked in right now, in one query.
+
+        The batch form of `get_open` for callers that have a whole roster in hand
+        (the agent fleet view asks about every enrolled device at once), so the
+        capture verdict never costs one round trip per person.
+        """
+        ids = list(employee_ids)
+        if not ids:
+            return set()
+        rows = await self._session.execute(
+            select(WorkSession.employee_id)
+            .where(
+                WorkSession.employee_id.in_(ids),
+                WorkSession.clock_out_at.is_(None),
+            )
+            .distinct()
+        )
+        return set(rows.scalars().all())
+
     async def create(
         self,
         *,

@@ -11,6 +11,24 @@ from pydantic import BaseModel
 from app.core.categories import ProductivityCategory
 
 
+class CaptureWindowState(StrEnum):
+    """Whether this employee's monitoring uploads are being STORED right now.
+
+    Not the same question as "is the agent alive". The agent may be running and
+    talking to us while every sample and screenshot it sends is accepted and
+    dropped, because capture is allowed only during an open work session on a
+    working day (`MonitoringGateService`). A reader that only knows the device is
+    alive would call that healthy and then wonder where the screenshots went.
+
+    The server decides this and says so; nobody re-derives it from the clock
+    (Security rule 5.1).
+    """
+
+    CAPTURING = "capturing"
+    NOT_CLOCKED_IN = "not_clocked_in"  # working day, no open session: nothing stored
+    NON_WORKING_DAY = "non_working_day"  # the configured weekly off: nothing stored
+
+
 class AttendanceStatus(StrEnum):
     FULL_DAY = "full_day"  # on time (or regularized) + enough hours
     HALF_DAY = "half_day"  # too late (past the reg window) or too few hours

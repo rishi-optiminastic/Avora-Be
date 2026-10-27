@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.tenancy import SHARED_SCHEMA
-from app.models.employee import Employee
+from app.models.employee import Employee, EmployeeStatus, Role
 from app.models.workspace import Workspace, WorkspaceStatus
 from app.repositories.workspace import WorkspaceRepository
 from tests.conftest import _Seed, auth_headers
@@ -81,13 +81,92 @@ async def test_unauthenticated_is_rejected(client: AsyncClient, seed: _Seed) -> 
     assert res.status_code == 401
 
 
-async def test_only_an_admin_can_transfer(
+async def test_an_ordinary_employee_cannot_transfer(
     client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
 ) -> None:
     await _setup(db, settings, seed.admin)
     for actor in (seed.report, seed.manager, seed.outsider):
         res = await _transfer(client, settings, actor, seed.report)
         assert res.status_code == 403, f"{actor.full_name}: {res.text}"
+
+
+async def _hr(db: AsyncSession) -> Employee:
+    person = Employee(
+        hr_external_id="hr-hana",
+        work_email="hana@corp.io",
+        full_name="Hana Hr",
+        role=Role.HR,
+        status=EmployeeStatus.ACTIVE,
+        is_active=True,
+    )
+    db.add(person)
+    await db.commit()
+    return person
+
+
+async def test_hr_can_transfer(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """A transfer is an offboard here and a joiner there, and HR does both
+    every week. Gating it on admin left the people who actually run
+    inter-entity moves looking at a profile with no button on it.
+
+    The 409 is the SQLite collision the module docstring describes - both
+    workspaces share one `employees` table, so the arrival hits the unique work
+    email. What it proves here is that HR got through the authorization gate:
+    a refusal would be 403 and would never reach the target at all.
+    """
+    hr = await _hr(db)
+    target = await _setup(db, settings, seed.admin)
+    await WorkspaceRepository(db).grant(target.id, hr.work_email, granted_by_email=None)
+    await db.commit()
+
+    res = await _transfer(client, settings, hr, seed.report)
+
+    assert res.status_code != 403, res.text
+    assert res.status_code == 409, res.text
+
+
+async def test_hr_still_cannot_send_someone_where_hr_cannot_go(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """Widening the caller set must not widen the destinations. Without this,
+    HR could inject people into a company whose workspace it was never let
+    into."""
+    hr = await _hr(db)
+    await _setup(db, settings, seed.admin)  # granted to the admin, not to HR
+
+    res = await _transfer(client, settings, hr, seed.report)
+
+    assert res.status_code == 403, res.text
+
+
+async def test_hr_still_cannot_hand_out_access(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """Moving a person is people work; letting another company read this one's
+    payroll is not. The wider gate is on `transfer` alone."""
+    hr = await _hr(db)
+    await _setup(db, settings, seed.admin)
+
+    for call in (
+        client.get("/api/v1/workspaces/members", headers=auth_headers(settings, hr)),
+        client.post(
+            "/api/v1/workspaces/members",
+            json={"email": "someone@corp.io"},
+            headers=auth_headers(settings, hr),
+        ),
+        client.post(
+            "/api/v1/workspaces/guests",
+            json={"email": "someone@corp.io", "name": "", "role": "hr"},
+            headers=auth_headers(settings, hr),
+        ),
+        client.delete(
+            f"/api/v1/workspaces/guests/{hr.work_email}", headers=auth_headers(settings, hr)
+        ),
+    ):
+        res = await call
+        assert res.status_code == 403, res.text
 
 
 async def test_you_cannot_send_someone_to_a_workspace_you_cannot_open(

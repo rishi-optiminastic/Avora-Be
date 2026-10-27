@@ -496,8 +496,9 @@ def get_device_service(
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
     screenshots: Annotated[ScreenshotRepository, Depends(get_screenshot_repo)],
     activity: Annotated[ActivityRepository, Depends(get_activity_repo)],
+    gate: Annotated[MonitoringGateService, Depends(get_monitoring_gate)],
 ) -> DeviceService:
-    return DeviceService(settings, devices, employees, audit, screenshots, activity)
+    return DeviceService(settings, devices, employees, audit, screenshots, activity, gate)
 
 
 def get_monitoring_service(

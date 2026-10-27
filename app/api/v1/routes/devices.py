@@ -86,7 +86,7 @@ async def revoke_device(
     caller: CurrentUserDep,
     service: DeviceServiceDep,
 ) -> DeviceRead:
-    return service.to_read(caller, await service.revoke(caller, device_id))
+    return await service.to_read(caller, await service.revoke(caller, device_id))
 
 
 @router.post("/{device_id}/reassign", response_model=DeviceReassigned)
@@ -106,7 +106,7 @@ async def reassign_device(
     """
     device, previous, shots, samples = await service.reassign(caller, device_id, payload)
     return DeviceReassigned(
-        device=service.to_read(caller, device),
+        device=await service.to_read(caller, device),
         previous_employee_id=previous,
         screenshots_moved=shots,
         activity_samples_moved=samples,

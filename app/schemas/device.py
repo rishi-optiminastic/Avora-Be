@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.common import ORMModel
+from app.schemas.monitoring import CaptureWindowState
 
 
 class DeviceCreate(BaseModel):
@@ -131,6 +132,11 @@ class DeviceRead(ORMModel):
     created_at: datetime
     updated_at: datetime
     health: DeviceHealthRead | None = None
+    # Whether anything this device sends is actually being STORED right now, and
+    # why not. `last_seen_at` only says the agent is alive: a suppressed upload
+    # still marks it alive, so without this an admin reads "reporting" off a
+    # device whose every screenshot is being dropped. Filled by DeviceService.
+    capture_window: CaptureWindowState | None = None
 
 
 class DeviceReassign(BaseModel):

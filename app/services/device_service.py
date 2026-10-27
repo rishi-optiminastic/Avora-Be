@@ -22,7 +22,9 @@ from app.repositories.employee import EmployeeRepository
 from app.repositories.screenshot import ScreenshotRepository
 from app.schemas.auth import CurrentUser
 from app.schemas.device import DeviceCreate, DeviceRead, DeviceReassign, DeviceSelfEnroll
+from app.schemas.monitoring import CaptureWindowState
 from app.services.device_health_service import build_health_read, can_see_health_errors
+from app.services.monitoring_gate import MonitoringGateService
 
 
 def _can_manage(caller: CurrentUser) -> bool:
@@ -46,6 +48,7 @@ class DeviceService:
         audit: AuditRepository,
         screenshots: ScreenshotRepository,
         activity: ActivityRepository,
+        gate: MonitoringGateService,
     ) -> None:
         self._settings = settings
         self._devices = devices
@@ -53,21 +56,30 @@ class DeviceService:
         self._audit = audit
         self._screenshots = screenshots
         self._activity = activity
+        self._gate = gate
 
     async def list_for_caller(self, caller: CurrentUser) -> list[DeviceRead]:
         devices = await self._devices.list_for_scope(caller)
         now = datetime.now(UTC)
-        return [self._read(caller, device, now) for device in devices]
+        # One batched verdict for the whole roster, not one query per device.
+        capture = await self._gate.states_for([d.employee_id for d in devices], now)
+        return [self._read(caller, d, now, capture.get(d.employee_id)) for d in devices]
 
-    def to_read(self, caller: CurrentUser, device: Device) -> DeviceRead:
-        """The response shape for a device the caller may already see, with its
-        capture-health verdict computed here rather than in the client."""
-        return self._read(caller, device, datetime.now(UTC))
+    async def to_read(self, caller: CurrentUser, device: Device) -> DeviceRead:
+        """The response shape for a device the caller may already see, with both
+        verdicts (capture health, and whether anything is being stored) computed
+        here rather than in the client."""
+        now = datetime.now(UTC)
+        return self._read(caller, device, now, await self._gate.state_for(device.employee_id, now))
 
     @staticmethod
-    def _read(caller: CurrentUser, device: Device, now: datetime) -> DeviceRead:
+    def _read(
+        caller: CurrentUser, device: Device, now: datetime, capture: CaptureWindowState | None
+    ) -> DeviceRead:
         health = build_health_read(device, now, include_error=can_see_health_errors(caller))
-        return DeviceRead.model_validate(device).model_copy(update={"health": health})
+        return DeviceRead.model_validate(device).model_copy(
+            update={"health": health, "capture_window": capture}
+        )
 
     async def enroll(self, caller: CurrentUser, payload: DeviceCreate) -> tuple[Device, str]:
         """Returns (device, raw_token). The raw token is shown to the admin once."""
