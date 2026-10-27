@@ -181,14 +181,21 @@ async def create(slug: str, name: str, location: str) -> int:
     session = await _shared_session()
     try:
         workspaces = WorkspaceRepository(session)
+        # Name the workspace inside its own schema FIRST. Without this the
+        # chrome falls back to the column defaults and the workspace introduces
+        # itself as whichever company those defaults were written for.
+        #
+        # The order is not cosmetic. `_apply_branding` expunges the identity map
+        # - it has to, because it moves the session between schemas - so a row
+        # modified before it is detached with its change still pending, and that
+        # UPDATE never reaches the commit. Marking the workspace provisioned
+        # first would therefore have left every new workspace stuck at "not
+        # ready", which both `brand` and `admin` refuse to touch.
+        await _apply_branding(session, schema, name, location)
         workspace = await workspaces.get_by_slug(slug)
         if workspace is None:  # pragma: no cover - just written above
             return 1
         workspace.provisioned_at = datetime.now(UTC)
-        # Name the workspace inside its own schema. Without this the chrome
-        # falls back to the column defaults and the workspace introduces itself
-        # as whichever company those defaults were written for.
-        await _apply_branding(session, schema, name, location)
         await session.commit()
     finally:
         await session.close()

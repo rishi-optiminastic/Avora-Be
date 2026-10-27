@@ -197,6 +197,17 @@ class WorkspaceService:
         employee = await self._employees.get(payload.employee_id)
         if employee is None or not employee.is_active:
             raise NotFoundError()
+        if employee.is_guest:
+            # A guest is not employed here, so there is no employment to move.
+            # Transferring one would offboard an outside administrator, strip
+            # the grant that lets them open this workspace, and recreate them
+            # in the target as an ordinary executive - silently demoting a
+            # cross-workspace admin into a member of staff.
+            raise ConflictError(
+                "They hold access to this workspace on behalf of another one, so there is "
+                "nothing to transfer. Revoke their access here, or give them access to the "
+                "other workspace directly."
+            )
         starts_on = payload.starts_on or date.today()
         identity: Mapping[str, object] = {
             "hr_external_id": employee.hr_external_id,

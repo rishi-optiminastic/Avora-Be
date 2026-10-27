@@ -71,7 +71,19 @@ class _CapturingEmail:
         self.sent: list[str] = []
         self.messages: list[dict[str, object]] = []
 
-    async def send(self, *, to: str, subject: str, html: str, cc: list[str] | None = None) -> None:
+    async def send(
+        self,
+        *,
+        to: str,
+        subject: str,
+        html: str,
+        cc: list[str] | None = None,
+        attachments: list[object] | None = None,
+        copy_hr: bool = False,
+    ) -> None:
+        del attachments, copy_hr  # EOD is not copied to HR; accepted so the
+        # signature matches the real service and a future change fails loudly
+        # here rather than looking like a mail outage.
         self.sent.append(to)
         self.messages.append({"to": to, "subject": subject, "html": html, "cc": cc or []})
 

@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 
 import pytest
 from httpx import AsyncClient
-from scripts.tenancy import _install_admin
+from scripts.tenancy import _apply_branding, _install_admin
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
@@ -36,6 +36,7 @@ from app.core.tenancy import (
 from app.models.employee import Employee, EmployeeStatus, Role
 from app.models.workspace import Workspace, WorkspaceStatus
 from app.repositories.employee import EmployeeRepository
+from app.repositories.org_settings import OrgSettingsRepository
 from app.repositories.workspace import WorkspaceRepository, normalize_email
 from tests.conftest import _FakeJwksClient, _Seed, auth_headers, bearer_for_email
 
@@ -587,3 +588,169 @@ async def test_two_rows_differing_only_in_case_are_refused(db: AsyncSession) -> 
 
     with pytest.raises(ConflictError):
         await _install_admin(db, SHARED_SCHEMA, "dup@acme.com", None, guest=False)
+
+
+# --------------------------------------------------------------------------- #
+# Guest admins - access to a workspace without employment in it
+#
+# `admin --guest` is how someone from headquarters administers a sister
+# company. The flag is the only thing standing between that and enrolling them
+# in the other company's payroll, so both directions are pinned here.
+# --------------------------------------------------------------------------- #
+async def test_a_guest_admin_is_created_outside_the_headcount(db: AsyncSession) -> None:
+    what = await _install_admin(db, SHARED_SCHEMA, "hq@acme.com", "Hq Person", guest=True)
+    await db.commit()
+
+    assert what == "created as a guest admin"
+    person = await _reread(db, "hq@acme.com")
+    assert person.role is Role.ADMIN  # full privilege, as intended
+    assert person.is_guest is True
+
+
+async def test_an_existing_employee_can_be_turned_into_a_guest(db: AsyncSession) -> None:
+    """The repair path. Somebody installed as a full employee before the flag
+    existed is taken out of the headcount, the payroll run and the attendance
+    report - without disturbing their role or their audit history."""
+    await _employee(db, "already@acme.com", Role.ADMIN)
+
+    what = await _install_admin(db, SHARED_SCHEMA, "already@acme.com", None, guest=True)
+    await db.commit()
+
+    assert "made a guest" in what
+    person = await _reread(db, "already@acme.com")
+    assert person.is_guest is True
+    assert person.role is Role.ADMIN
+
+
+async def test_a_guest_can_be_turned_back_into_a_real_employee(db: AsyncSession) -> None:
+    """The other direction, for the day somebody is actually hired here."""
+    await _install_admin(db, SHARED_SCHEMA, "joining@acme.com", "Joins Later", guest=True)
+    await db.commit()
+
+    what = await _install_admin(db, SHARED_SCHEMA, "joining@acme.com", None, guest=False)
+    await db.commit()
+
+    assert "made a full employee" in what
+    assert (await _reread(db, "joining@acme.com")).is_guest is False
+
+
+async def test_installing_the_same_guest_twice_changes_nothing(db: AsyncSession) -> None:
+    await _install_admin(db, SHARED_SCHEMA, "twice@acme.com", "Twice", guest=True)
+    await db.commit()
+
+    what = await _install_admin(db, SHARED_SCHEMA, "twice@acme.com", None, guest=True)
+    await db.commit()
+
+    assert what == "was already an admin there"
+
+
+# --------------------------------------------------------------------------- #
+# Branding - a new workspace must not introduce itself as another company
+#
+# The name lives in two places: the `workspaces` registry in `public` (what the
+# switcher lists) and `org_settings` inside the workspace's own schema (what the
+# dashboard chrome renders). A schema built from the migration chain knows
+# nothing about who it is, so its `org_settings` fell back to column defaults -
+# and those defaults were the FIRST company's name.
+# --------------------------------------------------------------------------- #
+async def test_a_workspace_with_no_settings_row_gets_its_own_name(db: AsyncSession) -> None:
+    what = await _apply_branding(db, SHARED_SCHEMA, "Alt Opti", "Pune")
+    await db.commit()
+
+    assert what == "set 'Alt Opti' - 'Pune'"
+    org = await OrgSettingsRepository(db).get()
+    assert org is not None
+    assert (org.name, org.location) == ("Alt Opti", "Pune")
+
+
+async def test_branding_repairs_a_workspace_wearing_another_companys_name(
+    db: AsyncSession,
+) -> None:
+    """The bug as it actually appeared: the chrome said "Optiminastic - HQ"
+    while the switcher beside it correctly said "Alt Opti - Pune"."""
+    orgs = OrgSettingsRepository(db)
+    stale = await orgs.create_default()
+    await db.commit()
+    assert stale.name == "Optiminastic", "the default this command exists to undo"
+
+    what = await _apply_branding(db, SHARED_SCHEMA, "Alt Opti", "Pune")
+    await db.commit()
+
+    assert what == "changed from 'Optiminastic' - 'HQ' to 'Alt Opti' - 'Pune'"
+    org = await OrgSettingsRepository(db).get()
+    assert org is not None
+    assert (org.name, org.location) == ("Alt Opti", "Pune")
+
+
+async def test_rebranding_to_the_same_name_reports_no_change(db: AsyncSession) -> None:
+    """Idempotent, and says so - `brand` is safe to re-run across every
+    workspace without having to know which ones were already correct."""
+    await _apply_branding(db, SHARED_SCHEMA, "Alt Opti", "Pune")
+    await db.commit()
+
+    what = await _apply_branding(db, SHARED_SCHEMA, "Alt Opti", "Pune")
+    await db.commit()
+
+    assert what == "already correct"
+
+
+async def test_branding_leaves_a_curated_logo_alone(db: AsyncSession) -> None:
+    """It syncs the NAME, not the whole identity row. A workspace admin who has
+    uploaded a logo and set a product wordmark must not lose them to a repair
+    command that only ever meant to fix the name."""
+    orgs = OrgSettingsRepository(db)
+    org = await orgs.create_default()
+    org.product_name = "Altera"
+    org.logo_object_key = "logos/alt-opti.png"
+    await db.commit()
+
+    await _apply_branding(db, SHARED_SCHEMA, "Alt Opti", "Pune")
+    await db.commit()
+
+    fresh = await OrgSettingsRepository(db).get()
+    assert fresh is not None
+    assert fresh.product_name == "Altera"
+    assert fresh.logo_object_key == "logos/alt-opti.png"
+
+
+async def test_a_row_changed_before_branding_is_dropped(db: AsyncSession) -> None:
+    """The hazard that decides the order of operations in `create`.
+
+    `_apply_branding` expunges the identity map - it has to, because it moves
+    the session between schemas and a cached row would otherwise be answered
+    from the wrong one. The cost is that anything modified but not yet flushed
+    is detached along with it, and its UPDATE never reaches the commit.
+
+    `create` therefore brands FIRST and writes `provisioned_at` afterwards.
+    Written the other way round, every new workspace stayed at "not ready" -
+    the state both `brand` and `admin` refuse to touch, so the workspace could
+    not be opened at all.
+
+    Pinned as a test rather than a comment because the failure is silent: the
+    commit succeeds and reports nothing, the row simply never changed.
+    """
+    workspaces = WorkspaceRepository(db)
+    workspaces.add(
+        Workspace(
+            slug="hazard",
+            schema_name=SHARED_SCHEMA,
+            name="Hazard",
+            location="Nowhere",
+            status=WorkspaceStatus.ACTIVE,
+            provisioned_at=None,
+        )
+    )
+    await db.commit()
+
+    row = await workspaces.get_by_slug("hazard")
+    assert row is not None
+    row.provisioned_at = datetime.now(UTC)  # modified, deliberately not flushed
+    await _apply_branding(db, SHARED_SCHEMA, "Hazard", "Nowhere")
+    await db.commit()
+
+    after = await WorkspaceRepository(db).get_by_slug("hazard")
+    assert after is not None
+    assert after.provisioned_at is None, (
+        "the change survived the expunge - if this ever passes, `create` may "
+        "safely set provisioned_at before branding again"
+    )

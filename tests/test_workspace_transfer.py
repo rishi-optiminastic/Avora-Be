@@ -211,3 +211,36 @@ async def test_leaving_a_workspace_takes_the_grant_to_open_it(
     # did not happen.
     assert await repo.is_member(source_id, email)
     assert target is not None
+
+
+async def test_a_guest_cannot_be_transferred(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """A guest holds access to this workspace on behalf of another one, so
+    there is no employment here to move.
+
+    Transferring one would offboard an outside administrator, revoke the grant
+    that lets them open this workspace, and recreate them in the target as an
+    ordinary executive - silently demoting a cross-workspace admin into a
+    member of staff, and taking their access away in the process. Every step of
+    that succeeds individually, which is why it has to be refused up front.
+    """
+    await _setup(db, settings, seed.admin)
+    guest = await db.get(Employee, seed.report.id)
+    assert guest is not None
+    guest.is_guest = True
+    await db.commit()
+
+    res = await client.post(
+        "/api/v1/workspaces/transfer",
+        json={"employee_id": str(seed.report.id), "target_slug": "acme"},
+        headers=auth_headers(settings, seed.admin),
+    )
+
+    assert res.status_code == 409, res.text
+    assert "nothing to transfer" in res.json()["error"]["message"]
+
+    # Refused means untouched: still active, still a guest, still here.
+    await db.refresh(guest)
+    assert guest.is_active is True
+    assert guest.is_guest is True

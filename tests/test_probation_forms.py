@@ -51,9 +51,21 @@ _LABELS = ["1", "2", "3", "4", "5"]
 class _RecordingEmail:
     def __init__(self) -> None:
         self.sent: list[tuple[str, str]] = []
+        # Whether each send asked for the HR mailbox copy, in send order.
+        self.copied_hr: list[bool] = []
 
-    async def send(self, *, to: str, subject: str, html: str) -> None:
-        del html
+    async def send(
+        self,
+        *,
+        to: str,
+        subject: str,
+        html: str,
+        cc: list[str] | None = None,
+        attachments: list[object] | None = None,
+        copy_hr: bool = False,
+    ) -> None:
+        del html, cc, attachments
+        self.copied_hr.append(copy_hr)
         self.sent.append((to, subject))
 
 
