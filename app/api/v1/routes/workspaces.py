@@ -13,10 +13,12 @@ from __future__ import annotations
 from fastapi import APIRouter, status
 
 from app.core.deps import AuthIdentityDep, CurrentUserDep, WorkspaceServiceDep
+from app.schemas.employee import EmployeeRead
 from app.schemas.workspace import (
     EmployeeTransfer,
     TransferResult,
     WorkspaceAccessGrant,
+    WorkspaceGuestInvite,
     WorkspaceMemberRead,
     WorkspaceRead,
 )
@@ -64,6 +66,39 @@ async def revoke_workspace_access(
     """Take someone's access to this workspace away. Their employee record and
     everything they did stays; they simply can no longer open it."""
     await service.revoke(caller, email)
+
+
+@router.post("/guests", response_model=EmployeeRead, status_code=status.HTTP_201_CREATED)
+async def add_workspace_guest(
+    payload: WorkspaceGuestInvite, caller: CurrentUserDep, service: WorkspaceServiceDep
+) -> EmployeeRead:
+    """Give somebody from outside an account here without employing them.
+
+    The pair to `POST /members`, and the one that actually works end to end:
+    membership alone lists the workspace in their switcher but cannot let them
+    in, because every workspace keeps its own employees. This writes the
+    employee row too, flagged as a guest so it stays out of the headcount, the
+    attendance report and the payroll run.
+
+    Admin of THIS workspace only. HR can read the guest list
+    (`GET /employees/guests`) but cannot add to it. 409 when the email already
+    belongs to a real employee record here.
+    """
+    guest = await service.add_guest(caller, payload)
+    return EmployeeRead.model_validate(guest)
+
+
+@router.delete("/guests/{email}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_workspace_guest(
+    email: str, caller: CurrentUserDep, service: WorkspaceServiceDep
+) -> None:
+    """Take an outsider's account here away.
+
+    Deactivates the guest employee row and revokes the membership with it.
+    Refuses on anything that is not an active guest, so it cannot be used to
+    offboard a real employee. 409 on your own address.
+    """
+    await service.remove_guest(caller, email)
 
 
 @router.post("/transfer", response_model=TransferResult)

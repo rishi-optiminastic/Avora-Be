@@ -105,6 +105,8 @@ class HRService:
         - Known HR id: fine, unless the new email belongs to someone else, or
           the email would change on a privileged account (below).
         - Unknown HR id, email on a PMS-created placeholder: claim it.
+        - Unknown HR id, email on a GUEST row: conflict. It looks like a
+          placeholder (synthetic id) and is the opposite of one.
         - Unknown HR id, email on another HR record: conflict.
         """
         email_owner = await self._employees.find_by_work_email_insensitive(email)
@@ -120,6 +122,14 @@ class HRService:
             return
         if email_owner is None:
             return
+        if email_owner.is_guest:
+            # A guest row carries a synthetic `manual:` id like a placeholder,
+            # but it is not one: it is a deliberate grant of access to somebody
+            # ANOTHER workspace employs, and it holds admin or HR. Claiming it
+            # would hand a privileged account to the HR feed - which rule 5.5
+            # forbids - and would quietly enrol a visitor in this company's
+            # headcount and payroll run. Refuse and let a human resolve it.
+            raise ConflictError("Work email already belongs to an outside administrator.")
         if not has_synthetic_external_id(email_owner):
             raise ConflictError("Work email already belongs to another HR record.")
 

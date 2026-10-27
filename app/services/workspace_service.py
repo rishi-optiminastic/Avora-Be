@@ -12,9 +12,12 @@ admin in B to do that. The alternative - a global super-admin who can open any
 workspace - is exactly the thing two separate companies in one deployment must
 not have.
 
-The first member of a brand new workspace is therefore granted from the command
-line (`scripts/tenancy.py grant`), by whoever runs the deployment. Bootstrapping
-access is a deployment act, not an in-app one.
+The FIRST admin of a brand new workspace is therefore installed from the command
+line (`scripts/tenancy.py admin`), by whoever runs the deployment: with nobody
+inside it yet, there is no admin to grant anything. Bootstrapping access is a
+deployment act. Everyone after that is added from inside the app - `add_guest`
+for somebody who administers this workspace on behalf of another, HR's own
+onboarding for somebody it actually employs.
 """
 
 from __future__ import annotations
@@ -34,6 +37,7 @@ from app.core.exceptions import (
     NotFoundError,
     ValidationError,
 )
+from app.core.names import clean_display_name, placeholder_name_from_email
 from app.core.tenancy import (
     SHARED_SCHEMA,
     InvalidWorkspaceSlug,
@@ -50,6 +54,7 @@ from app.schemas.workspace import (
     EmployeeTransfer,
     TransferResult,
     WorkspaceAccessGrant,
+    WorkspaceGuestInvite,
     WorkspaceMemberRead,
     WorkspaceRead,
 )
@@ -137,9 +142,13 @@ class WorkspaceService:
     ) -> WorkspaceMemberRead:
         """Let one more person open this workspace.
 
-        Does NOT create an employee record for them. They can sign in and see
-        the workspace in their switcher; HR still has to add them properly, and
-        the member list shows the gap until that happens.
+        Does NOT create an employee record for them, so on its own this is not
+        enough to get anybody in: every workspace keeps its own employees and
+        `get_current_user` refuses anyone without an active row in the schema
+        the request landed in. The workspace appears in their switcher and then
+        401s. The member list shows that gap until HR closes it by onboarding
+        them properly - or, for somebody who is never going to be employed
+        here, use `add_guest`, which writes both halves at once.
         """
         workspace = await self._require_admin_here(caller)
         me = await self._employees.get(caller.employee_id)
@@ -169,6 +178,113 @@ class WorkspaceService:
         await self._audit.append(
             actor=str(caller.employee_id),
             action="workspace.access.revoke",
+            target=f"workspace:{workspace.slug}:{address}",
+        )
+
+    async def add_guest(self, caller: CurrentUser, payload: WorkspaceGuestInvite) -> Employee:
+        """Give somebody from outside an account here without employing them.
+
+        `grant` alone is not enough and never was: it writes a membership row,
+        so the workspace appears in their switcher, but every workspace keeps
+        its OWN employees and `get_current_user` refuses anyone without an
+        active employee row in the schema the request landed in. Picking the
+        workspace then 401s, the dashboard reads that as a stale choice and
+        clears the cookie, and the person is bounced back where they started
+        with nothing said. So this writes both halves: the employee row that
+        lets them in, flagged `is_guest`, and the membership that lists it.
+
+        **The row is a guest, which is what keeps it out of the business.**
+        `_STAFF_ONLY` excludes guests from every roster that answers "who works
+        here", so this person does not enter the headcount, the attendance
+        report, the payroll run or anyone's leave figures. What they get is the
+        role, and the role is chosen here by this workspace's own admin.
+
+        Admin of THIS workspace only - deliberately not HR, who can *see* the
+        guest list but cannot widen it. Handing out access to a company's data
+        is a different act from administering its people.
+        """
+        workspace = await self._require_admin_here(caller)
+        address = normalize_email(payload.email)
+        # Insensitive: the email is typed by hand and the row may have been
+        # written with different capitalisation. An exact lookup would miss it
+        # and the create below would then hit the unique index as a 500.
+        existing = await self._employees.find_by_work_email_insensitive(address)
+        if existing is not None and not existing.is_guest:
+            # Never convert a real employee record into a guest from here. That
+            # row may carry payslips, attendance and leave produced while this
+            # workspace employed them, and flipping the flag would quietly take
+            # all of it out of the figures those records belong to - including
+            # for somebody long offboarded, whose history is exactly what the
+            # soft delete exists to keep.
+            raise ConflictError(
+                "They already have an employee record in this workspace, so they are not an "
+                "outsider here. Change their role on their profile instead."
+            )
+        role = Role(payload.role.value)
+        if existing is None:
+            guest = await self._employees.create_direct(
+                work_email=address,
+                full_name=clean_display_name(payload.name) or placeholder_name_from_email(address),
+                role=role,
+                profile={},
+            )
+            # Set after the create because `create_direct` is the shared path
+            # for a hand-entered EMPLOYEE; guest status is this method's
+            # business, not something to widen that signature for.
+            guest.is_guest = True
+        else:
+            # Re-granting an existing guest: fixes their role, and brings them
+            # back if their access was removed earlier.
+            guest = existing
+            guest.role = role
+            guest.is_active = True
+            guest.status = EmployeeStatus.ACTIVE
+        await self._session.flush()
+
+        me = await self._employees.get(caller.employee_id)
+        await self._workspaces.grant(
+            workspace.id,
+            address,
+            granted_by_email=me.work_email if me is not None else None,
+        )
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="workspace.guest.add",
+            target=f"workspace:{workspace.slug}:{address}:{role.value}",
+        )
+        return guest
+
+    async def remove_guest(self, caller: CurrentUser, email: str) -> None:
+        """Take an outsider's account here away.
+
+        Both halves again, in the order that leaves nothing half-open: the
+        employee row is deactivated first (which is what actually stops them
+        reading anything), then the membership that listed the workspace in
+        their switcher. Soft-deleted rather than deleted, like any offboard -
+        the audit log points at this row and has to keep resolving.
+
+        Refuses on a non-guest, so this can never be used as a back door to
+        deactivate a real employee: offboarding is HR's path, with its own
+        rules.
+        """
+        workspace = await self._require_admin_here(caller)
+        address = normalize_email(email)
+        me = await self._employees.get(caller.employee_id)
+        if me is not None and normalize_email(me.work_email) == address:
+            # Removing your own access to the workspace you are administering
+            # leaves it with one fewer admin and no way back in from the app.
+            raise ConflictError("You cannot remove your own access to this workspace.")
+        guest = await self._employees.find_by_work_email_insensitive(address)
+        if guest is None or not guest.is_guest or not guest.is_active:
+            raise NotFoundError()
+        guest.is_active = False
+        guest.status = EmployeeStatus.INACTIVE
+        await self._session.flush()
+        if await self._workspaces.is_member(workspace.id, address):
+            await self._workspaces.revoke(workspace.id, address)
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="workspace.guest.remove",
             target=f"workspace:{workspace.slug}:{address}",
         )
 

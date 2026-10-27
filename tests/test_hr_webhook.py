@@ -136,6 +136,40 @@ async def test_sync_claims_invited_placeholder_by_email(
     assert len(rows) == 1
 
 
+async def test_sync_refuses_to_claim_a_guest_row(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """A guest carries a synthetic `manual:` id exactly like a placeholder, and
+    is the opposite of one: it is a deliberate grant of access to somebody
+    ANOTHER workspace employs, holding admin or HR.
+
+    Claiming it would hand a privileged account to the HR feed (rule 5.5 says
+    the webhook never moves privilege) and would enrol a visitor in this
+    company's headcount and payroll run - silently, since the claim path
+    changes only the join key and says nothing.
+    """
+    guest = await _add_employee(
+        db, hr_external_id="manual:hq-admin", work_email="hq@corp.io", role=Role.ADMIN
+    )
+    guest.is_guest = True
+    await db.commit()
+
+    resp = await _post(
+        client,
+        settings,
+        _payload(hr_external_id="EMP-2002", work_email="hq@corp.io", full_name="Hq Person"),
+    )
+    assert resp.status_code == 409, resp.text
+
+    await db.refresh(guest)
+    assert guest.hr_external_id == "manual:hq-admin", "the join key must not have moved"
+    assert guest.is_guest is True
+    assert guest.role is Role.ADMIN
+    # And no second row was invented for the same address.
+    rows = (await db.scalars(select(Employee).where(Employee.work_email == "hq@corp.io"))).all()
+    assert len(rows) == 1
+
+
 async def test_sync_refuses_email_owned_by_another_hr_record(
     client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
 ) -> None:

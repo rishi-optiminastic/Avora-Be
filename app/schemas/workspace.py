@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from enum import StrEnum
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -39,6 +40,42 @@ class WorkspaceMemberRead(BaseModel):
 
 class WorkspaceAccessGrant(BaseModel):
     email: EmailStr = Field(max_length=320)
+
+
+class GuestRole(StrEnum):
+    """What someone from outside may hold in a workspace that does not employ them.
+
+    A deliberate subset of `Role`, not the whole enum. Every role left out
+    takes its scope from a position in THIS workspace's org chart - a reporting
+    line (`manager`, `executive`, `intern`), a department (`senior_manager`),
+    or an explicit grant (`viewer`, whose scope resolves to "only yourself").
+    A guest occupies none of those, so any of them would hand somebody an
+    account that can see nothing but their own empty record. `hr` and `admin`
+    are the two whose scope is the workspace itself, which is the only kind of
+    access that means anything to a visitor.
+
+    Values match `Role` exactly, so `Role(value)` converts without a mapping.
+    """
+
+    HR = "hr"
+    ADMIN = "admin"
+
+
+class WorkspaceGuestInvite(BaseModel):
+    """Give somebody an account here without employing them.
+
+    The role is chosen by THIS workspace's admin rather than carried over from
+    wherever the person comes from: roles are per-workspace, and nothing in the
+    shared address book records what anyone holds elsewhere. Granting privilege
+    inside the workspace that bears the consequences is the same rule the HR
+    webhook follows (section 5.5) and the one `transfer` follows.
+    """
+
+    email: EmailStr = Field(max_length=320)
+    # Backfilled from the identity provider on first sign-in
+    # (`refresh_display_name`), so leaving it blank costs nothing permanent.
+    name: str = Field(default="", max_length=120)
+    role: GuestRole
 
 
 class EmployeeTransfer(BaseModel):
