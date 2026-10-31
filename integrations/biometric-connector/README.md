@@ -1,5 +1,16 @@
 # Avora biometric connector
 
+> **The office PC this document describes is dead, and is not coming back.**
+> Attendance now reaches Avora over the FK bridge, where the terminal posts
+> directly to a service on the VPS with no office machine in the path.
+> See [README-fk-bridge.md](README-fk-bridge.md), which is what is actually
+> running in production.
+>
+> What follows still applies if you ever need the CSV or ZK pull path, and
+> `backfill.py` next to it remains the tool for loading a historical date range
+> on purpose.
+
+
 Pushes attendance punches from your office biometric setup into Avora, so the PMS
 tracks attendance from the **same device that already feeds Zoho**. It runs on the
 office PC (the one that talks to the device), signs each batch with HMAC, and POSTs

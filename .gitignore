@@ -44,3 +44,10 @@ integrations/biometric-connector/biometric-status.json
 integrations/biometric-connector/biometric.lock
 integrations/biometric-connector/avora_biometric.log*
 integrations/biometric-connector/avora-python-path.txt
+
+# The FK bridge's own runtime files. The spool holds real punches (employee id
+# + timestamp), so these are attendance data, not build artefacts - they stay
+# on whichever machine is running the bridge and never enter the repo.
+integrations/biometric-connector/fk-bridge-state.json
+integrations/biometric-connector/fk-bridge.log*
+integrations/biometric-connector/fk-spool.jsonl
