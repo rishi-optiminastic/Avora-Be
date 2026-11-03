@@ -74,6 +74,7 @@ from app.repositories.notification import NotificationRepository
 from app.repositories.office_location import OfficeLocationRepository
 from app.repositories.onboarding_config import OnboardingConfigRepository
 from app.repositories.org_settings import OrgSettingsRepository
+from app.repositories.out_of_office import OutOfOfficeRepository
 from app.repositories.payout_verification import PayoutVerificationRepository
 from app.repositories.payroll_adjustment import PayrollAdjustmentRepository
 from app.repositories.payroll_receipt import PayrollReceiptRepository
@@ -85,6 +86,7 @@ from app.repositories.ping import PingRepository
 from app.repositories.probation_checklist import ProbationChecklistRepository
 from app.repositories.probation_decision import ProbationDecisionRepository
 from app.repositories.quick_meet import QuickMeetRepository
+from app.repositories.recognition import RecognitionRepository
 from app.repositories.regularization import RegularizationRepository
 from app.repositories.reimbursement import ReimbursementRepository
 from app.repositories.resignation import ResignationRepository
@@ -95,6 +97,7 @@ from app.repositories.task_comment import TaskCommentRepository
 from app.repositories.work_entity import WorkEntityRepository
 from app.repositories.work_session import WorkSessionRepository
 from app.repositories.workbook import WorkbookRepository
+from app.repositories.worker_heartbeat import WorkerHeartbeatRepository
 from app.repositories.workspace import WorkspaceRepository
 from app.repositories.workspace_file import WorkspaceFileRepository
 from app.schemas.auth import AuthIdentity, CurrentDevice, CurrentUser, EnvPrincipal
@@ -144,6 +147,7 @@ from app.services.notification_service import NotificationService
 from app.services.office_location_service import OfficeLocationService
 from app.services.onboarding_service import OnboardingService
 from app.services.org_settings_service import OrgSettingsService
+from app.services.out_of_office_service import OutOfOfficeService
 from app.services.pat_service import PatService
 from app.services.payout_verification_service import PayoutVerificationService
 from app.services.payroll_adjustment_service import PayrollAdjustmentService
@@ -153,6 +157,7 @@ from app.services.ping_service import PingService
 from app.services.probation_form_panel import ProbationFormPanelService
 from app.services.probation_forms import ProbationFormLink
 from app.services.probation_service import ProbationService
+from app.services.recognition_service import RecognitionService
 from app.services.reconciliation_service import ReconciliationService
 from app.services.regularization_service import RegularizationService
 from app.services.reimbursement_service import ReimbursementService
@@ -163,6 +168,7 @@ from app.services.task_service import TaskService
 from app.services.work_entity_service import WorkEntityService
 from app.services.work_session_service import WorkSessionService
 from app.services.workbook_service import WorkbookService
+from app.services.worker_health_service import WorkerHealthService
 from app.services.workspace_file_service import WorkspaceFileService
 from app.services.workspace_service import WorkspaceService
 
@@ -557,11 +563,25 @@ def get_attendance_service(
     overrides: Annotated[AttendanceOverrideRepository, Depends(get_attendance_override_repo)],
     holidays: Annotated[HolidayRepository, Depends(get_holiday_repo)],
     leaves: Annotated[LeaveRepository, Depends(get_leave_repo)],
+    out_of_office: Annotated[OutOfOfficeRepository, Depends(get_out_of_office_repo)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
 ) -> AttendanceService:
     return AttendanceService(
-        employees, activity, sessions, policy, regularizations, overrides, holidays, leaves, audit
+        employees,
+        activity,
+        sessions,
+        policy,
+        regularizations,
+        overrides,
+        holidays,
+        leaves,
+        out_of_office,
+        audit,
     )
+
+
+def get_out_of_office_repo(db: Annotated[AsyncSession, Depends(get_db)]) -> OutOfOfficeRepository:
+    return OutOfOfficeRepository(db)
 
 
 def get_attendance_override_service(
@@ -656,6 +676,43 @@ def get_regularization_service(
     notifications: Annotated[NotificationService, Depends(get_notification_service)],
 ) -> RegularizationService:
     return RegularizationService(regularizations, employees, policy, audit, notifications)
+
+
+def get_worker_heartbeat_repo(
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> WorkerHeartbeatRepository:
+    return WorkerHeartbeatRepository(db)
+
+
+def get_worker_health_service(
+    heartbeats: Annotated[WorkerHeartbeatRepository, Depends(get_worker_heartbeat_repo)],
+) -> WorkerHealthService:
+    return WorkerHealthService(heartbeats)
+
+
+def get_recognition_repo(db: Annotated[AsyncSession, Depends(get_db)]) -> RecognitionRepository:
+    return RecognitionRepository(db)
+
+
+def get_recognition_service(
+    recognitions: Annotated[RecognitionRepository, Depends(get_recognition_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    notifications: Annotated[NotificationService, Depends(get_notification_service)],
+    email: Annotated[EmailService, Depends(get_email_service)],
+) -> RecognitionService:
+    return RecognitionService(recognitions, employees, audit, notifications, email)
+
+
+def get_out_of_office_service(
+    entries: Annotated[OutOfOfficeRepository, Depends(get_out_of_office_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    leaves: Annotated[LeaveRepository, Depends(get_leave_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    notifications: Annotated[NotificationService, Depends(get_notification_service)],
+    email: Annotated[EmailService, Depends(get_email_service)],
+) -> OutOfOfficeService:
+    return OutOfOfficeService(entries, employees, leaves, audit, notifications, email)
 
 
 def get_category_rule_service(
@@ -1169,6 +1226,9 @@ AttendanceServiceDep = Annotated[AttendanceService, Depends(get_attendance_servi
 BiometricServiceDep = Annotated[BiometricService, Depends(get_biometric_service)]
 ReconciliationServiceDep = Annotated[ReconciliationService, Depends(get_reconciliation_service)]
 RegularizationServiceDep = Annotated[RegularizationService, Depends(get_regularization_service)]
+OutOfOfficeServiceDep = Annotated[OutOfOfficeService, Depends(get_out_of_office_service)]
+RecognitionServiceDep = Annotated[RecognitionService, Depends(get_recognition_service)]
+WorkerHealthServiceDep = Annotated[WorkerHealthService, Depends(get_worker_health_service)]
 ScreenshotServiceDep = Annotated[ScreenshotService, Depends(get_screenshot_service)]
 PingServiceDep = Annotated[PingService, Depends(get_ping_service)]
 WorkEntityServiceDep = Annotated[WorkEntityService, Depends(get_work_entity_service)]

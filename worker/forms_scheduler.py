@@ -46,7 +46,7 @@ from app.services.email_service import EmailService
 from app.services.form_assignment_service import FormAssignmentService
 from app.services.notification_service import NotificationService
 from app.services.probation_forms import ProbationFormLink
-from worker.heartbeat import beat
+from worker.heartbeat import beat, record
 
 log = logging.getLogger("forms_scheduler")
 
@@ -146,6 +146,7 @@ async def _main() -> None:
             try:
                 await _tick()
                 await beat(HEARTBEAT_ENV)
+                await record("forms")
             except Exception as exc:  # keep the loop alive across transient failures
                 log.warning("tick failed: %s", type(exc).__name__)
             await asyncio.sleep(tick)

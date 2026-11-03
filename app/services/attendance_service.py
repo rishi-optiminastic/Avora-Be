@@ -34,12 +34,14 @@ from app.core.exceptions import NotFoundError, ValidationError
 from app.core.payroll import is_working_day
 from app.models.attendance_override import AttendanceOverrideStatus
 from app.models.employee import Employee
+from app.models.out_of_office import OutOfOfficePortion
 from app.repositories.activity import ActivityRepository, DailyAgg, idle_minutes
 from app.repositories.attendance_override import AttendanceOverrideRepository
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository, EmploymentPeriod, LeaverEvidence
 from app.repositories.holiday import HolidayRepository
 from app.repositories.leave import LeaveRepository
+from app.repositories.out_of_office import OutOfOfficeRepository
 from app.repositories.regularization import RegularizationRepository
 from app.repositories.work_session import DaySpan, WorkSessionRepository
 from app.schemas.attendance_report import AttendanceDayRow, AttendanceMonthSummary
@@ -56,6 +58,27 @@ _OVERRIDE_TO_STATUS: dict[AttendanceOverrideStatus, AttendanceStatus] = {
     AttendanceOverrideStatus.HALF_DAY: AttendanceStatus.HALF_DAY,
     AttendanceOverrideStatus.ABSENT: AttendanceStatus.ABSENT,
 }
+
+
+# What a day's own hours are worth, for topping up a half day spent away.
+_HOURS_CREDIT: dict[AttendanceStatus, float] = {
+    AttendanceStatus.FULL_DAY: 1.0,
+    AttendanceStatus.LATE: 1.0,
+    AttendanceStatus.PRESENT: 1.0,
+    AttendanceStatus.HALF_DAY: 0.5,
+}
+
+
+def _out_of_office_credit(portion: OutOfOfficePortion, hours_status: AttendanceStatus) -> float:
+    """What an approved out-of-office day credits as worked.
+
+    A full day away is a full day. A half day is half, PLUS whatever the office
+    part of the same day earned - otherwise someone who worked the morning and
+    collected payment all afternoon would be paid for half a day.
+    """
+    if portion is OutOfOfficePortion.FULL_DAY:
+        return 1.0
+    return min(1.0, 0.5 + _HOURS_CREDIT.get(hours_status, 0.0))
 
 
 def _aware(dt: datetime) -> datetime:
@@ -125,6 +148,7 @@ class AttendanceService:
         overrides: AttendanceOverrideRepository,
         holidays: HolidayRepository,
         leaves: LeaveRepository,
+        out_of_office: OutOfOfficeRepository,
         audit: AuditRepository,
     ) -> None:
         self._employees = employees
@@ -135,6 +159,7 @@ class AttendanceService:
         self._overrides = overrides
         self._holidays = holidays
         self._leaves = leaves
+        self._out_of_office = out_of_office
         self._audit = audit
 
     @staticmethod
@@ -323,6 +348,7 @@ class AttendanceService:
         spans = await self._sessions.day_spans(ids, start, end)
         approved = await self._regs.approved_days(ids, local_date, local_date)
         overrides = await self._overrides.for_range(ids, local_date, local_date)
+        away = await self._out_of_office.approved_days(ids, local_date, local_date)
         leave_dates = await self._approved_leave_dates(ids, local_date, local_date, spec)
         employment = await self._employment(employees, spec)
         the_day = date.fromisoformat(local_date)
@@ -372,8 +398,14 @@ class AttendanceService:
                 # Before they joined / after a leaver's last day, with nothing
                 # recorded: no row, exactly as the range and month views skip it.
                 continue
+            portion = away.get((e.id, local_date))
             if ov is not None:
+                # An explicit HR correction is the last word, over everything.
                 status = _OVERRIDE_TO_STATUS[ov]
+            elif portion is not None:
+                # Working, just not here. Shown in its own right so a manager can
+                # see who is off site rather than reading it as a normal day.
+                status = AttendanceStatus.OUT_OF_OFFICE
             elif v.status is AttendanceStatus.ABSENT and the_day in leave_dates.get(e.id, set()):
                 # No attendance, but covered by approved paid leave → On leave.
                 status = AttendanceStatus.ON_LEAVE
@@ -548,6 +580,7 @@ class AttendanceService:
         grouped = await self._grouped_days(ids, start_date, end_date, spec, clock)
         approved = await self._regs.approved_days(ids, start_date, end_date)
         overrides = await self._overrides.for_range(ids, start_date, end_date)
+        away = await self._out_of_office.approved_days(ids, start_date, end_date)
 
         # The allowance is monthly, so seed from any lates BEFORE this range and
         # then count forward in date order - a range that starts mid-month would
@@ -557,11 +590,18 @@ class AttendanceService:
         rows: list[AttendanceDayRow] = []
         for emp_id, day, acc, v in verdicts:
             ov = overrides.get((emp_id, day))
+            portion = away.get((emp_id, day))
+            if ov is not None:
+                status = _OVERRIDE_TO_STATUS[ov]
+            elif portion is not None:
+                status = AttendanceStatus.OUT_OF_OFFICE
+            else:
+                status = v.status
             rows.append(
                 AttendanceDayRow(
                     employee_id=emp_id,
                     day=day,
-                    status=_OVERRIDE_TO_STATUS[ov] if ov is not None else v.status,
+                    status=status,
                     login_at=acc.login,
                     logout_at=None if acc.is_open else acc.logout,
                     worked_minutes=acc.worked,
@@ -570,19 +610,44 @@ class AttendanceService:
                     regularized=v.regularized or ov is not None,
                     clock_in_source=acc.in_source,
                     clock_out_source=None if acc.is_open else acc.out_source,
+                    out_of_office_credit=(
+                        0.0 if portion is None else _out_of_office_credit(portion, v.status)
+                    ),
                 )
             )
-        # Overrides for days with no session at all (e.g. an absent day forced to
-        # full/half) still need a row so the day counts in views + payroll.
+        # A full day at the warehouse leaves no session behind at all, so the
+        # day needs a row of its own or it would simply not appear - the same
+        # reason override-only days are synthesized just below.
         id_set = set(ids)
-        for (emp_id, day), status in overrides.items():
+        for (emp_id, day), portion in away.items():
+            if (emp_id, day) in grouped or emp_id not in id_set:
+                continue
+            if (emp_id, day) in overrides:
+                continue  # an explicit correction already speaks for this day
+            rows.append(
+                AttendanceDayRow(
+                    employee_id=emp_id,
+                    day=day,
+                    status=AttendanceStatus.OUT_OF_OFFICE,
+                    login_at=None,
+                    logout_at=None,
+                    worked_minutes=0,
+                    late_login=False,
+                    regularizable=False,
+                    regularized=False,
+                    clock_in_source=None,
+                    clock_out_source=None,
+                    out_of_office_credit=_out_of_office_credit(portion, AttendanceStatus.ABSENT),
+                )
+            )
+        for (emp_id, day), forced in overrides.items():
             if (emp_id, day) in grouped or emp_id not in id_set:
                 continue
             rows.append(
                 AttendanceDayRow(
                     employee_id=emp_id,
                     day=day,
-                    status=_OVERRIDE_TO_STATUS[status],
+                    status=_OVERRIDE_TO_STATUS[forced],
                     login_at=None,
                     logout_at=None,
                     worked_minutes=0,
@@ -684,6 +749,8 @@ class AttendanceService:
                 s.absent_days += 1
             elif r.status is AttendanceStatus.ON_LEAVE:
                 s.leave_days += 1
+            elif r.status is AttendanceStatus.OUT_OF_OFFICE:
+                s.out_of_office_days += r.out_of_office_credit
             if r.regularized:
                 s.regularized_days += 1
         for employee_id, s in summary.items():
@@ -886,8 +953,9 @@ def _summary_row(person: Employee, s: AttendanceMonthSummary) -> AttendanceSumma
         absent_days=s.absent_days,
         leave_days=s.leave_days,
         regularized_days=s.regularized_days,
-        # Present is what payroll counts: worked days, however late.
-        present_days=s.full_days + s.half_days + s.late_days,
+        # Present is what payroll counts: worked days, however late - plus days
+        # worked away from the office, which carry no session to count.
+        present_days=s.full_days + s.half_days + s.late_days + s.out_of_office_days,
         worked_hours=round(s.worked_minutes / 60, 2),
         avg_check_in=_clock_minute(s.avg_check_in_minutes),
         avg_check_out=_clock_minute(s.avg_check_out_minutes),
@@ -918,6 +986,7 @@ _ZERO = {
     "late_days": 0,
     "absent_days": 0,
     "leave_days": 0,
+    "out_of_office_days": 0.0,
     "regularized_days": 0,
     "worked_minutes": 0,
 }

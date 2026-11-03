@@ -356,6 +356,77 @@ def leave_request_email(
     )
 
 
+def out_of_office_approved_email(
+    *,
+    requester_name: str,
+    approver_name: str,
+    day_label: str,
+    location: str,
+    reason: str,
+    out_of_office_url: str,
+) -> tuple[str, str]:
+    """Render the (subject, html) confirming an approved out-of-office day.
+
+    Sent to the person who asked, and copied to the HR mailbox: this credits a
+    working day that no biometric punch supports, so whoever runs payroll should
+    see it without having to go looking for it.
+    """
+    subject = f"Out of office approved: {requester_name} - {day_label}"
+    content = f"""\
+<div style="font-size:11px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:{_MUTED};">
+  Out of office
+</div>
+<h1 style="margin:8px 0 16px;font-family:{_SERIF};font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
+  Approved by {escape(approver_name)}
+</h1>
+<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:{_INK};">
+  Hi {escape(requester_name)}, your time working away from the office on
+  {_chip(escape(day_label))} at {_chip(escape(location))} has been approved, and
+  now counts as worked.
+</p>
+{_note_block(escape(reason))}
+<p style="margin:0 0 4px;">{_button("Open out of office", out_of_office_url)}</p>"""
+    return subject, _layout(
+        preheader=f"{requester_name} was approved to work from {location} ({day_label}).",
+        content_html=content,
+        footer=_ACTIVITY_FOOTER,
+    )
+
+
+def recognition_awarded_email(
+    *,
+    recipient_name: str,
+    awarded_by_name: str,
+    badge_label: str,
+    note: str,
+    recognition_url: str,
+) -> tuple[str, str]:
+    """Render the (subject, html) telling someone they were recognised.
+
+    Sent to the recipient alone. The whole company sees the feed, but mailing
+    everyone on every badge - ten kinds, weekly - would train people to ignore
+    exactly the message that is meant to feel good to receive.
+    """
+    subject = f"You received {badge_label}"
+    content = f"""\
+<div style="font-size:11px;font-weight:600;letter-spacing:0.14em;text-transform:uppercase;color:{_MUTED};">
+  Recognition
+</div>
+<h1 style="margin:8px 0 16px;font-family:{_SERIF};font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
+  {escape(badge_label)}
+</h1>
+<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:{_INK};">
+  {escape(recipient_name)}, {escape(awarded_by_name)} recognised your work.
+</p>
+{_note_block(escape(note))}
+<p style="margin:0 0 4px;">{_button("See it on Avora", recognition_url)}</p>"""
+    return subject, _layout(
+        preheader=f"{awarded_by_name} gave you {badge_label}.",
+        content_html=content,
+        footer=_ACTIVITY_FOOTER,
+    )
+
+
 def task_escalated_email(
     *,
     assignee_name: str,

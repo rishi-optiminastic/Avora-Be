@@ -54,11 +54,25 @@ _s3: Any = None
 
 
 def _heartbeat(last_beat: float) -> float:
-    """Best-effort liveness ping, throttled to HEARTBEAT_INTERVAL. Returns the new
-    last-beat time. Never raises — monitoring must not take the worker down."""
-    if not HEARTBEAT_URL:
-        return last_beat
+    """Best-effort liveness, throttled to HEARTBEAT_INTERVAL. Returns the new
+    last-beat time. Never raises — monitoring must not take the worker down.
+
+    The database row is written even when HEARTBEAT_URL is unset. That is the
+    whole point: an env var nobody configured is indistinguishable from a healthy
+    worker, which is how a dead scheduler went unnoticed for seven weeks.
+    """
     now = time.monotonic()
+    if now - last_beat >= HEARTBEAT_INTERVAL:
+        try:
+            import asyncio
+
+            from worker.heartbeat import record
+
+            asyncio.run(record("ocr"))
+        except Exception as exc:  # never take the worker down over monitoring
+            log.warning("heartbeat record failed: %s", exc)
+    if not HEARTBEAT_URL:
+        return now if now - last_beat >= HEARTBEAT_INTERVAL else last_beat
     if now - last_beat < HEARTBEAT_INTERVAL:
         return last_beat
     try:

@@ -42,7 +42,7 @@ from app.services.circle_details_sync import CircleDetailsSync
 from app.services.circle_document_sync import CircleDocumentSync, discard_stored
 from app.services.circle_history_sync import CircleHistorySync
 from app.services.circle_profile_sync import CircleProfileSync
-from worker.heartbeat import beat
+from worker.heartbeat import beat, record
 
 log = logging.getLogger("circle_documents_scheduler")
 
@@ -186,6 +186,7 @@ async def _main() -> None:
                     if copied:
                         log.info("copied %d document(s) from Circle", copied)
                 await beat(HEARTBEAT_ENV)
+                await record("circle-documents")
             except Exception as exc:  # keep the loop alive across transient failures
                 # Type only: driver errors can echo bound values (work emails).
                 log.warning("tick failed: %s", type(exc).__name__)

@@ -41,7 +41,7 @@ from app.repositories.notification import NotificationRepository
 from app.repositories.task import TaskRepository
 from app.services.notification_service import NotificationService
 from app.services.task_escalation_service import TaskEscalationService
-from worker.heartbeat import beat
+from worker.heartbeat import beat, record
 
 log = logging.getLogger("task_escalation_scheduler")
 
@@ -98,7 +98,8 @@ async def _main() -> None:
         while True:
             try:
                 await _tick()
-                await beat(HEARTBEAT_ENV)  # tick succeeded → report liveness
+                await beat(HEARTBEAT_ENV)
+                await record("task-escalation")  # tick succeeded → report liveness
             except Exception as exc:  # keep the loop alive across transient failures
                 # Class name only - an exception can carry row data (§5.6).
                 log.warning("tick failed: %s", type(exc).__name__)

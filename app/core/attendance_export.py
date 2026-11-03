@@ -36,7 +36,8 @@ class AttendanceSummaryRow:
     absent_days: int
     leave_days: int
     regularized_days: int
-    present_days: int
+    # Float: a half day spent out of the office credits half a day.
+    present_days: float
     worked_hours: float
     # Already formatted HH:MM (or "-") by the service, which owns the org
     # timezone. A clock position is not a duration, so it is not a number here.

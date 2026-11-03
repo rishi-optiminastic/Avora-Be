@@ -51,3 +51,5 @@ integrations/biometric-connector/avora-python-path.txt
 integrations/biometric-connector/fk-bridge-state.json
 integrations/biometric-connector/fk-bridge.log*
 integrations/biometric-connector/fk-spool.jsonl
+integrations/biometric-connector/fk-bridge-seen
+integrations/biometric-connector/fk-watchdog-state.json

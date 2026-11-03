@@ -232,3 +232,48 @@ async def test_tax_field_overrides_replace_deductions(
     line = await _report_line(client, settings, seed)
     assert line["prorated"]["professional_tax_minor"] == 300_00
     assert line["prorated"]["income_tax_minor"] == 1_500_00
+
+
+async def test_listing_can_be_narrowed_to_one_employee(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """`employee_id` was silently dropped before this existed.
+
+    FastAPI ignores unknown query params, so a caller asking for one person got
+    the whole company's salary adjustments back with no error and no way to tell
+    - which is exactly how you end up reading the wrong person's overrides and
+    concluding their pay is broken.
+    """
+    headers = auth_headers(settings, seed.admin)
+    for who, label in ((seed.report, "Report bonus"), (seed.outsider, "Outsider bonus")):
+        created = await client.post(
+            "/api/v1/payroll/adjustments",
+            json=_adj(employee_id=str(who.id), label=label),
+            headers=headers,
+        )
+        assert created.status_code == 201, created.text
+
+    everyone = await client.get(f"/api/v1/payroll/adjustments?month={_MONTH}", headers=headers)
+    assert len({r["employee_id"] for r in everyone.json()}) == 2
+
+    just_one = await client.get(
+        f"/api/v1/payroll/adjustments?month={_MONTH}&employee_id={seed.report.id}",
+        headers=headers,
+    )
+    assert just_one.status_code == 200
+    returned = just_one.json()
+    assert returned, "the filter must not empty the list"
+    assert {r["employee_id"] for r in returned} == {str(seed.report.id)}
+    assert [r["label"] for r in returned] == ["Report bonus"]
+
+
+async def test_the_employee_filter_still_requires_payroll_rights(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """Narrowing to yourself must not become a way in for someone with no
+    payroll access - salary adjustments are not self-service."""
+    resp = await client.get(
+        f"/api/v1/payroll/adjustments?month={_MONTH}&employee_id={seed.report.id}",
+        headers=auth_headers(settings, seed.report),
+    )
+    assert resp.status_code == 403

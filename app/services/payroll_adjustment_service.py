@@ -36,11 +36,11 @@ class PayrollAdjustmentService:
         self._audit = audit
 
     async def list_for_period(
-        self, caller: CurrentUser, period_month: str
+        self, caller: CurrentUser, period_month: str, employee_id: uuid.UUID | None = None
     ) -> Sequence[PayrollAdjustment]:
         if not _can_manage(caller):
             raise AuthorizationError()
-        return await self._adjustments.list_for_period(period_month)
+        return await self._adjustments.list_for_period(period_month, employee_id)
 
     async def create(
         self, caller: CurrentUser, payload: PayrollAdjustmentCreate

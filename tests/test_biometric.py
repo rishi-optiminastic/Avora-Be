@@ -22,6 +22,12 @@ def _signed(settings: Settings, body: dict[str, object]) -> tuple[bytes, dict[st
     return raw, {"X-Biometric-Signature": sig, "Content-Type": "application/json"}
 
 
+def _aware(value: object) -> datetime:
+    """SQLite hands back naive datetimes; compare them as the UTC they are."""
+    assert isinstance(value, datetime)
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
+
+
 def _batch(external_id: str) -> dict[str, object]:
     return {
         "punches": [
@@ -266,3 +272,77 @@ async def test_reconciliation_flags_punch_without_activity(
 async def test_reconciliation_requires_auth(client: AsyncClient, seed: _Seed) -> None:
     resp = await client.get("/api/v1/attendance/reconciliation?date=2026-06-15")
     assert resp.status_code == 401
+
+
+async def test_auto_checkout_in_a_later_batch_closes_the_day(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """A connector that sends no `direction` still gets what the schema promises:
+    earliest punch of the day is the clock-in, latest is the clock-out - even when
+    the two arrive in separate batches.
+
+    This is the catch-up shape. After an outage the bridge re-reads the device and
+    pushes the punches it missed, so a day's check-out routinely arrives without
+    its check-in. That batch used to be matched, counted as an upserted
+    employee-day, and then dropped on the floor, leaving the day forever open.
+    """
+    seed.report.biometric_id = "1042"
+    await db.commit()
+    rid = seed.report.id
+
+    async def _clock_out() -> object:
+        db.expire_all()  # avoid the identity-map cache; read the DB value
+        return await db.scalar(
+            select(WorkSession.clock_out_at).where(
+                WorkSession.employee_id == rid, WorkSession.source == "biometric"
+            )
+        )
+
+    morning = {"punches": [{"external_id": "1042", "punched_at": "2026-06-15T09:05:00+05:30"}]}
+    raw, headers = _signed(settings, morning)
+    assert (
+        await client.post("/api/v1/attendance/biometric", content=raw, headers=headers)
+    ).status_code == 200
+    assert await _clock_out() is None  # one punch so far - still inside
+
+    evening = {"punches": [{"external_id": "1042", "punched_at": "2026-06-15T18:10:00+05:30"}]}
+    raw2, headers2 = _signed(settings, evening)
+    assert (
+        await client.post("/api/v1/attendance/biometric", content=raw2, headers=headers2)
+    ).status_code == 200
+
+    closed = await _clock_out()
+    assert closed is not None
+    assert _aware(closed) == datetime(2026, 6, 15, 12, 40, tzinfo=UTC)  # 18:10 IST
+
+    # Still one session, and the check-in is untouched by the second batch.
+    count = await db.scalar(
+        select(func.count())
+        .select_from(WorkSession)
+        .where(WorkSession.employee_id == rid, WorkSession.source == "biometric")
+    )
+    assert count == 1
+
+
+async def test_auto_punch_before_the_checkin_does_not_close_the_day(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """Out-of-order delivery must not invent an exit. A punch EARLIER than the
+    stored check-in moves the check-in back; it never becomes a clock-out."""
+    seed.report.biometric_id = "1042"
+    await db.commit()
+    rid = seed.report.id
+
+    for at in ("2026-06-15T09:05:00+05:30", "2026-06-15T08:40:00+05:30"):
+        raw, headers = _signed(settings, {"punches": [{"external_id": "1042", "punched_at": at}]})
+        assert (
+            await client.post("/api/v1/attendance/biometric", content=raw, headers=headers)
+        ).status_code == 200
+
+    db.expire_all()
+    row = await db.scalar(
+        select(WorkSession).where(WorkSession.employee_id == rid, WorkSession.source == "biometric")
+    )
+    assert row is not None
+    assert row.clock_out_at is None  # still open
+    assert _aware(row.clock_in_at) == datetime(2026, 6, 15, 3, 10, tzinfo=UTC)  # 08:40 IST

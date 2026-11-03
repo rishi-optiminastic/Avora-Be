@@ -1272,7 +1272,16 @@ class PayrollService:
 
 def _present_days(summary: AttendanceMonthSummary | None) -> float:
     """Days worked this month. Regularized days are already FULL_DAY, so they are
-    not added again; half days count as 0.5."""
+    not added again; half days count as 0.5.
+
+    Out-of-office days are added too. They are worked days that leave no session
+    behind - nobody punches at the warehouse - so without this they would be paid
+    as absence, which is the whole reason the feature exists. The value is already
+    fractional (a half day away is 0.5) and each such day is counted once, since
+    attendance gives it its own status rather than also calling it full or half.
+    """
     if summary is None:
         return 0.0
-    return summary.full_days + summary.late_days + 0.5 * summary.half_days
+    return (
+        summary.full_days + summary.late_days + 0.5 * summary.half_days + summary.out_of_office_days
+    )

@@ -50,6 +50,7 @@ from app.models.leave_tier_quota import LeaveTierQuota
 from app.models.notification import Notification, NotificationKind, NotificationLevel
 from app.models.onboarding_config import OnboardingConfig
 from app.models.org_settings import OrgSettings
+from app.models.out_of_office import OutOfOffice, OutOfOfficePortion, OutOfOfficeStatus
 from app.models.payout_verification import (
     PayoutMismatch,
     PayoutMismatchKind,
@@ -72,6 +73,12 @@ from app.models.ping import Ping
 from app.models.probation_checklist import ProbationChecklistItem, ProbationStepStatus
 from app.models.probation_decision import ProbationDecision, ProbationOutcome
 from app.models.quick_meet_default import QuickMeetDefault
+from app.models.recognition import (
+    Recognition,
+    RecognitionBadge,
+    RecognitionCadence,
+    RecognitionComment,
+)
 from app.models.regularization import Regularization, RegularizationStatus
 from app.models.reimbursement import (
     Reimbursement,
@@ -87,6 +94,7 @@ from app.models.task_comment import TaskComment
 from app.models.work_entity import WorkEntity
 from app.models.work_session import WorkSession
 from app.models.workbook import Workbook, WorkbookAccess, WorkbookMember, WorkbookSharing
+from app.models.worker_heartbeat import WorkerHeartbeat
 from app.models.workspace import Workspace, WorkspaceMember, WorkspaceStatus
 from app.models.workspace_file import (
     WorkspaceFile,
@@ -160,6 +168,9 @@ __all__ = [
     "OcrStatus",
     "OnboardingConfig",
     "OrgSettings",
+    "OutOfOffice",
+    "OutOfOfficePortion",
+    "OutOfOfficeStatus",
     "PayCycle",
     "PayPeriod",
     "PayoutMismatch",
@@ -185,6 +196,10 @@ __all__ = [
     "ProbationOutcome",
     "ProbationStepStatus",
     "QuickMeetDefault",
+    "Recognition",
+    "RecognitionBadge",
+    "RecognitionCadence",
+    "RecognitionComment",
     "Regularization",
     "RegularizationStatus",
     "Reimbursement",
@@ -210,6 +225,7 @@ __all__ = [
     "WorkbookAccess",
     "WorkbookMember",
     "WorkbookSharing",
+    "WorkerHeartbeat",
     "Workspace",
     "WorkspaceFile",
     "WorkspaceFileCategory",

@@ -36,7 +36,7 @@ from app.repositories.holiday import HolidayRepository
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.celebration_service import CelebrationService
 from app.services.email_service import EmailService
-from worker.heartbeat import beat
+from worker.heartbeat import beat, record
 
 log = logging.getLogger("celebrations_scheduler")
 
@@ -88,6 +88,7 @@ async def _main() -> None:
             try:
                 await _tick()
                 await beat(HEARTBEAT_ENV)
+                await record("celebrations")
             except Exception as exc:  # keep the loop alive across transient failures
                 log.warning("tick failed: %s", exc)
             await asyncio.sleep(TICK_SECONDS)

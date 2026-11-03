@@ -32,3 +32,26 @@ async def beat(env_var: str) -> None:
     if not url:
         return
     await asyncio.to_thread(_ping, url)
+
+
+async def record(name: str) -> None:
+    """Write this worker's liveness to the database.
+
+    Opens its own short session on purpose: a monitoring write must never join -
+    or roll back with - the tick's own transaction, and a worker whose tick is
+    failing is exactly the one whose liveness still needs recording.
+
+    Unlike `beat`, this is not opt-in. The URL ping only fires when someone
+    remembered to set an env var, and an env var nobody set looks identical to a
+    healthy worker - which is how the celebrations scheduler stayed dead for
+    seven weeks. A missing row here is unambiguous.
+    """
+    try:
+        from app.db.session import SessionFactory
+        from app.repositories.worker_heartbeat import WorkerHeartbeatRepository
+
+        async with SessionFactory() as session:
+            await WorkerHeartbeatRepository(session).beat(name)
+            await session.commit()
+    except Exception as exc:  # monitoring must never take a worker down
+        log.warning("heartbeat record failed for %s: %s", name, exc)

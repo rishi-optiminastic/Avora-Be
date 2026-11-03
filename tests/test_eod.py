@@ -29,6 +29,7 @@ from app.repositories.eod_settings import EodSettingsRepository
 from app.repositories.holiday import HolidayRepository
 from app.repositories.leave import LeaveRepository
 from app.repositories.notification import NotificationRepository
+from app.repositories.out_of_office import OutOfOfficeRepository
 from app.repositories.regularization import RegularizationRepository
 from app.repositories.screenshot import ScreenshotRepository
 from app.repositories.task import TaskRepository
@@ -114,6 +115,7 @@ def _build_service(
         AttendanceOverrideRepository(db),
         HolidayRepository(db),
         LeaveRepository(db),
+        OutOfOfficeRepository(db),
         AuditRepository(db),
     )
     return EodService(
@@ -1017,6 +1019,7 @@ async def test_working_dates_is_safe_at_the_end_of_the_calendar(
         AttendanceOverrideRepository(db),
         HolidayRepository(db),
         LeaveRepository(db),
+        OutOfOfficeRepository(db),
         audit,
     )
     last = date.max

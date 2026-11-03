@@ -48,12 +48,38 @@ HERE = Path(__file__).resolve().parent
 CONFIG_FILE = HERE / "avora-config.json"
 SPOOL = HERE / "fk-spool.jsonl"  # punches Avora has not accepted yet
 STATE = HERE / "fk-bridge-state.json"  # newest punch forwarded, for catch-up
+SEEN = HERE / "fk-bridge-seen"  # mtime = last contact from the terminal
 LOG = HERE / "fk-bridge.log"
+SEEN_INTERVAL = 60  # seconds between touches; the device polls far faster
 
 DEFAULT_API = "https://api.avora.optiminastic.com"
 RECORD = 32
 CATCHUP_SECONDS = 6 * 60 * 60
 MAX_BATCH = 500
+
+# The device stamps every punch with its reader direction, in the stored log
+# (bytes 28..31) and in the realtime push (`io_mode`). Avora needs it: a punch it
+# cannot prove is an exit leaves the day open, so dropping this flag silently
+# lost every check-out that did not share a batch with that day's check-in.
+# Breaks and overtime are still entries and exits - only the LAST punch of a day
+# decides whether it closed, so mapping them onto in/out keeps that true.
+IO_MODE_DIRECTION = {
+    16777216: "in",
+    33554432: "out",
+    50331648: "in",  # break-in
+    67108864: "out",  # break-out
+    83886080: "in",  # overtime-in
+    100663296: "out",  # overtime-out
+}
+
+
+def direction_of(io_mode: object) -> str:
+    """Avora's `direction`. Unknown readers fall back to "auto", which lets the
+    server apply its own earliest/latest heuristic rather than trust a guess."""
+    try:
+        return IO_MODE_DIRECTION.get(int(io_mode), "auto")  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "auto"
 
 
 def config(key: str, fallback: str = "") -> str:
@@ -142,6 +168,23 @@ def write_spool(punches: list[dict[str, str]]) -> None:
     SPOOL.write_text("".join(json.dumps(p) + "\n" for p in punches), encoding="utf-8")
 
 
+def mark_seen() -> None:
+    """Record that the terminal is still talking to us.
+
+    Silence is the failure nobody notices: when the terminal lost the bridge on
+    30 October it was a day before anyone spotted it, and the punch timestamps
+    cannot tell you - a quiet afternoon looks exactly like a severed link. The
+    device polls every few seconds, so an mtime more than a few minutes old is
+    unambiguous. fk_watchdog.py reads it; nothing here depends on it.
+    """
+    try:
+        if SEEN.exists() and time.time() - SEEN.stat().st_mtime < SEEN_INTERVAL:
+            return
+        SEEN.touch()
+    except OSError:
+        pass  # never let bookkeeping break an acknowledgement
+
+
 def remember_newest(punches: list[dict[str, str]]) -> None:
     newest = max((p["punched_at"] for p in punches), default="")
     if newest > config_state():
@@ -164,7 +207,8 @@ def decode_log(blob: bytes, count: int) -> list[dict[str, str]]:
     """Fixed 32-byte records. Layout worked out against the device and checked
     against punches it had separately sent as JSON - see decode notes in the
     repo. byte 4..19 user id, byte 23 seconds, byte 24..27 packs
-    minute/hour/day/month and a 1900-based year."""
+    minute/hour/day/month and a 1900-based year, byte 28..31 the reader
+    direction."""
     punches: list[dict[str, str]] = []
     for index in range(count):
         record = blob[index * RECORD : index * RECORD + RECORD]
@@ -185,7 +229,14 @@ def decode_log(blob: bytes, count: int) -> list[dict[str, str]]:
             )
         except ValueError:
             continue
-        punches.append({"external_id": user, "punched_at": when.isoformat()})
+        io_mode = struct.unpack("<I", record[28:32])[0]
+        punches.append(
+            {
+                "external_id": user,
+                "punched_at": when.isoformat(),
+                "direction": direction_of(io_mode),
+            }
+        )
     return punches
 
 
@@ -258,7 +309,11 @@ def punch_from_push(body: bytes) -> dict[str, str] | None:
     if len(raw) != 14 or not raw.isdigit() or "user_id" not in record:
         return None
     when = datetime.strptime(raw, "%Y%m%d%H%M%S")
-    return {"external_id": str(record["user_id"]), "punched_at": when.isoformat()}
+    return {
+        "external_id": str(record["user_id"]),
+        "punched_at": when.isoformat(),
+        "direction": direction_of(record.get("io_mode")),
+    }
 
 
 def make_handler(bridge: Bridge) -> type[BaseHTTPRequestHandler]:
@@ -292,6 +347,8 @@ def make_handler(bridge: Bridge) -> type[BaseHTTPRequestHandler]:
                 log(f"ignored a push from unknown dev_id {device!r} ({self.client_address[0]})")
                 self._ok()
                 return
+
+            mark_seen()
 
             if code == "receive_cmd":
                 if bridge.due_for_catchup():

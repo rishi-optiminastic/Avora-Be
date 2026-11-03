@@ -134,6 +134,15 @@ services:
     <<: *app-image
     command: ["python", "-m", "worker.forms_scheduler"]
 
+  # Birthday, work-anniversary and festival greetings, once per office day.
+  # It was MISSING from this file: a one-off container ran it, was killed, and
+  # nothing recreated it - so no celebration email went out for seven weeks and
+  # nothing said so. Declared here it gets `restart: unless-stopped` with the
+  # rest, and `app/core/workers.py` now asserts it should be alive.
+  scheduler-celebrations:
+    <<: *app-image
+    command: ["python", "-m", "worker.celebrations_scheduler"]
+
   # Standalone slim image (Tesseract). Talks to Postgres + S3 directly; no app
   # code, so it only needs db (not migrate). Reads DATABASE_URL + AWS_* from env.
   worker-ocr:

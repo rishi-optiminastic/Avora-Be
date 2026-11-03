@@ -89,6 +89,7 @@ class BiometricService:
                 clock_in_at=window.first,
                 clock_out_at=self._clock_out(window),
                 last_at=window.last,
+                last_dir=window.last_dir,
             )
 
         await self._audit.append(

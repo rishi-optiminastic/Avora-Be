@@ -16,10 +16,12 @@ from app.core.deps import (
     AttendanceServiceDep,
     CurrentUserDep,
     OfficeLocationServiceDep,
+    OutOfOfficeServiceDep,
     ReconciliationServiceDep,
     RegularizationServiceDep,
     WorkSessionServiceDep,
 )
+from app.models.out_of_office import OutOfOfficeStatus
 from app.models.regularization import RegularizationStatus
 from app.schemas.attendance_policy import AttendancePolicyRead, AttendancePolicyUpdate
 from app.schemas.attendance_report import AttendanceDayRow, AttendanceMonthSummary
@@ -28,6 +30,11 @@ from app.schemas.office_location import (
     ClockInRequest,
     OfficeLocationCreate,
     OfficeLocationRead,
+)
+from app.schemas.out_of_office import (
+    OutOfOfficeCreate,
+    OutOfOfficeRead,
+    OutOfOfficeReview,
 )
 from app.schemas.reconciliation import ReconciliationReport
 from app.schemas.regularization import (
@@ -283,3 +290,53 @@ async def review_regularization(
 ) -> RegularizationRead:
     """Approve/reject a regularization (direct manager or HR, scoped, not your own)."""
     return RegularizationRead.model_validate(await service.review(caller, reg_id, payload))
+
+
+# --------------------------------------------------------------------------- #
+# Out of office (request: self · review: manager/HR)
+# --------------------------------------------------------------------------- #
+@router.post("/out-of-office", response_model=OutOfOfficeRead, status_code=status.HTTP_201_CREATED)
+async def request_out_of_office(
+    payload: OutOfOfficeCreate,
+    caller: CurrentUserDep,
+    service: OutOfOfficeServiceDep,
+) -> OutOfOfficeRead:
+    """Claim days worked away from the office (counts as worked once approved)."""
+    return OutOfOfficeRead.model_validate(await service.request(caller, payload))
+
+
+@router.get("/out-of-office", response_model=list[OutOfOfficeRead])
+async def list_out_of_office(
+    caller: CurrentUserDep,
+    service: OutOfOfficeServiceDep,
+    month: Annotated[str | None, Query(pattern=_MONTH)] = None,
+    entry_status: Annotated[OutOfOfficeStatus | None, Query(alias="status")] = None,
+) -> list[OutOfOfficeRead]:
+    """Out-of-office entries in the caller's scope (own; managers see reports')."""
+    rows = await service.list_for_caller(caller, month=month, status=entry_status)
+    decidable = await service.decidable_ids(caller, rows)
+    return [
+        OutOfOfficeRead.model_validate(r).model_copy(update={"can_decide": r.id in decidable})
+        for r in rows
+    ]
+
+
+@router.post("/out-of-office/{entry_id}/review", response_model=OutOfOfficeRead)
+async def review_out_of_office(
+    entry_id: uuid.UUID,
+    payload: OutOfOfficeReview,
+    caller: CurrentUserDep,
+    service: OutOfOfficeServiceDep,
+) -> OutOfOfficeRead:
+    """Approve/reject an out-of-office claim (direct manager or HR, not your own)."""
+    return OutOfOfficeRead.model_validate(await service.review(caller, entry_id, payload))
+
+
+@router.post("/out-of-office/{entry_id}/cancel", response_model=OutOfOfficeRead)
+async def cancel_out_of_office(
+    entry_id: uuid.UUID,
+    caller: CurrentUserDep,
+    service: OutOfOfficeServiceDep,
+) -> OutOfOfficeRead:
+    """Withdraw your own request while it is still pending (404 if it isn't yours)."""
+    return OutOfOfficeRead.model_validate(await service.cancel(caller, entry_id))

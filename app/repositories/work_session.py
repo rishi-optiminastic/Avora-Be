@@ -112,6 +112,7 @@ class WorkSessionRepository:
         clock_in_at: datetime,
         clock_out_at: datetime | None,
         last_at: datetime,
+        last_dir: str = "auto",
     ) -> tuple[WorkSession, bool]:
         """Create or merge the ONE biometric session for an employee on a local
         day (`source="biometric"`). The FIRST check-in of the day is authoritative:
@@ -119,7 +120,16 @@ class WorkSessionRepository:
         a later in-punch never resurrects a closed day — a second check-in on the
         same day is ignored (business rule). `clock_out_at` is the computed
         clock-out (None ⇒ the latest punch is an "in", day still open); out-punches
-        still extend it. `last_at` is unused here now, kept for the call signature.
+        still extend it.
+
+        `last_at`/`last_dir` carry the batch's newest punch so an undeclared
+        ("auto") connector gets the behaviour its schema promises: earliest punch
+        of the day is the clock-in, latest is the clock-out. The service can only
+        apply that inside one batch - it cannot see the stored session - so a
+        check-out arriving in a later batch than its own check-in used to be
+        matched, counted and then silently dropped. That is every catch-up after
+        an outage, which is exactly when the data matters most.
+
         Returns (session, created). Re-pushing the same punches is idempotent."""
         existing = await self._session.scalar(
             select(WorkSession)
@@ -150,10 +160,17 @@ class WorkSessionRepository:
         if clock_in_at < _aware(existing.clock_in_at):
             existing.clock_in_at = clock_in_at
         existing_out = _aware(existing.clock_out_at) if existing.clock_out_at else None
-        if clock_out_at is not None:
+        closes_at = clock_out_at
+        if closes_at is None and last_dir == "auto" and last_at > _aware(existing.clock_in_at):
+            # An undeclared punch later than the day's check-in is an exit: the
+            # only other reading is a duplicate check-in, and a real out-punch
+            # later in the day extends the clock-out anyway, so the day still
+            # ends at the right time either way.
+            closes_at = last_at
+        if closes_at is not None:
             # An out-punch — extend (or set) the clock-out to the latest one.
-            if existing_out is None or clock_out_at > existing_out:
-                existing.clock_out_at = clock_out_at
+            if existing_out is None or closes_at > existing_out:
+                existing.clock_out_at = closes_at
                 existing.clock_out_source = "biometric"
         await self._session.flush()
         return existing, False

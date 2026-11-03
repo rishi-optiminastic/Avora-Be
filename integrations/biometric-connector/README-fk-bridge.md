@@ -57,6 +57,25 @@ Three independent layers, in order of how quickly they act.
 The terminal stores years of history, so the catch-up is also the repair tool:
 if the bridge is down for a day, the next catch-up fills the day in by itself.
 
+### Every punch must carry a direction
+
+Avora decides a day is closed from the **last punch's `direction`**.
+Send a punch without one and it arrives as `"auto"`, which the server can only
+resolve when that batch also holds the day's check-in - otherwise it cannot tell
+an exit from a repeated entry, leaves the day open and discards the punch.
+It still reports the punch as matched, so the flush log looks healthy.
+
+The device knows perfectly well: `io_mode` is in the realtime push and in bytes
+28..31 of each stored record.
+The bridge dropped it until 31 October 2026, and because live punches are
+delivered one at a time, that silently lost **every** check-out - twenty of them
+on 30 October alone, all showing as "No logout".
+This was read for months as the hardware being unreliable.
+It never was.
+
+Map breaks and overtime onto `in`/`out`: only a day's last punch decides whether
+it closed, so a break-out that ends the day *is* the exit.
+
 ### First run is deliberately quiet
 
 On a machine with no `fk-bridge-state.json`, the first log dump only records
@@ -76,6 +95,9 @@ On the VPS, `65.21.186.55`:
 | Launcher | `/opt/avora/fk-bridge/run.sh` |
 | Service | `/etc/systemd/system/avora-fk-bridge.service` |
 | Spool, state, log | `/opt/avora/fk-bridge/fk-{spool.jsonl,bridge-state.json,bridge.log}` |
+| Watchdog | `/opt/avora/fk-bridge/fk_watchdog.py`, `run-watchdog.sh` |
+| Watchdog timer | `/etc/systemd/system/avora-fk-watchdog.{service,timer}` |
+| Heartbeat, watchdog state | `/opt/avora/fk-bridge/fk-bridge-seen`, `fk-watchdog-state.json` |
 
 The service is enabled at boot, has `Restart=always`, runs with no capabilities
 and a read-only filesystem apart from its own directory, and logs in
@@ -93,6 +115,42 @@ Two consequences:
 - Rotating the secret in Coolify takes effect on `systemctl restart avora-fk-bridge`.
 - The bridge needs no capability to read the Coolify directory, which a process
   on a public port should not have.
+
+## The watchdog: silence is the real failure
+
+Nothing above protects against the link simply going quiet, and that is the
+failure that actually happens.
+When the terminal lost the bridge on 30 October 2026 the board fell back to
+laptop-agent times - plausible-looking, and not the formal record - and it was a
+day before anyone noticed.
+The same silence is why Zoho has a permanent 26-29 October gap.
+
+Punch timestamps cannot detect it: a quiet afternoon and a severed cable look
+identical.
+So `fk_watchdog.py` watches **contact**, not punches.
+The bridge touches `fk-bridge-seen` on every request from the terminal (at most
+once a minute), the timer checks it every ten minutes, and anything over twenty
+minutes stale is unambiguous because the terminal polls every few seconds.
+
+- It mails through SMTP **directly**, using the backend's own credentials via
+  the same `LoadCredential` trick. It must not depend on Avora being up, since
+  Avora being down is one of the things it reports.
+- It only complains inside office hours on a working day (Mon-Sat, 08:00-20:00
+  IST). The terminal may legitimately be off overnight, and Sunday is not a
+  fault.
+- One mail per outage, a reminder every twelve hours while it persists, and a
+  mail when contact returns.
+- The first run after an install only observes. A watchdog that has never seen
+  the device cannot tell "broken" from "started thirty seconds ago".
+
+Change the recipient in the unit (`Environment=ALERT_EMAIL=`), then
+`systemctl daemon-reload`.
+
+```bash
+systemctl list-timers avora-fk-watchdog.timer   # when it next runs
+systemctl start avora-fk-watchdog.service       # check right now
+journalctl -u avora-fk-watchdog -n 20           # what it decided
+```
 
 ## Operating it
 
@@ -133,11 +191,16 @@ On the device, `Menu -> Comm -> Network` (labels vary by firmware):
   Set that person's Biometric ID in Avora, then re-run `backfill.py` for the
   affected dates.
   It is idempotent.
-- **The office IP is probably dynamic.**
-  The firewall rule names `103.167.176.56`.
-  If the office IP changes, the terminal is silently refused and punches sit in
-  its memory until the rule is updated, at which point the catch-up recovers
-  them.
-  Worth checking the rule first whenever punches stop arriving.
+- **The office IP is dynamic, and this is the most likely way it breaks.**
+  It moved from `103.167.176.56` to `.59` within a day, which is why the rule
+  now covers the ISP block `103.167.176.56/29` rather than one address.
+  A move outside that block still means the terminal is silently refused and
+  punches sit in its memory until the rule is updated, at which point the
+  catch-up recovers them.
+  The watchdog now turns that from silent into an email, but check the rule
+  first whenever punches stop arriving.
+- **The firewall rule is still the only authentication**, with `dev_id` as the
+  one other thing an impostor would have to know.
+  Widening it beyond the office block trades that away.
 - **Three active employees have no Biometric ID at all**, so they can never be
   matched.

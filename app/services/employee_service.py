@@ -308,6 +308,7 @@ class EmployeeService:
         if manager_id is not None and await self._employees.get(manager_id) is None:
             raise ValidationError("Manager not found.")
         _clean_profile_fields(fields)
+        await self._assert_biometric_id_free(fields, None)
 
         employee = await self._employees.create_direct(
             work_email=work_email, full_name=full_name, role=payload.role, profile=fields
@@ -337,6 +338,7 @@ class EmployeeService:
             if await self._employees.get(manager_id) is None:
                 raise ValidationError("Manager not found.")
         _clean_profile_fields(fields)
+        await self._assert_biometric_id_free(fields, target_id)
         if "location" in fields:
             refuse_circle_owned_changes(
                 employee,
@@ -351,6 +353,29 @@ class EmployeeService:
             target=f"employee:{target_id}",
         )
         return employee
+
+    async def _assert_biometric_id_free(
+        self, fields: dict[str, object], target_id: uuid.UUID | None
+    ) -> None:
+        """Refuse a device id another active employee already holds.
+
+        `uq_employees_active_biometric_id` enforces this in Postgres, but an
+        IntegrityError surfaces as a dead 500/503 with nothing on screen - the
+        editor just appears to do nothing, which is indistinguishable from "HR is
+        not allowed to change this". Checking first turns it into a 409 that names
+        the person holding the id, which is also the clue the operator needs: two
+        people with swapped ids have to be moved one at a time.
+        """
+        value = fields.get("biometric_id")
+        if not isinstance(value, str) or not value:
+            return
+        holder = await self._employees.get_by_biometric_id(value)
+        if holder is None or holder.id == target_id or not holder.is_active:
+            return
+        raise ConflictError(
+            f"Biometric ID {value} is already assigned to {holder.full_name}. "
+            "Clear it there first, then set it here."
+        )
 
     async def set_avatar_for(
         self, caller: CurrentUser, target_id: uuid.UUID, data: bytes, content_type: str

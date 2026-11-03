@@ -234,3 +234,70 @@ async def test_invitation_revoke(
     assert ok.json()["status"] == "revoked"
     # Revoking again is a conflict (no longer pending).
     assert (await client.post(url, headers=auth_headers(settings, seed.admin))).status_code == 409
+
+
+async def test_biometric_id_taken_by_another_active_employee_is_a_409(
+    client: AsyncClient, db: AsyncSession, seed: _Seed, settings: Settings
+) -> None:
+    """A device id already in use must come back as a named 409, not a crash.
+
+    `uq_employees_active_biometric_id` enforces uniqueness in Postgres, so
+    without this check the write reached the database and died there - a 500 (a
+    503 through the proxy) with an empty body. The editor caught that and showed
+    its generic "only admins/HR can manage users" line, so a duplicate id looked
+    for months like HR lacking permission. Two people whose ids are swapped can
+    only be fixed one at a time, and the message has to say so.
+    """
+    hr = await _add_hr(db)
+    seed.report.biometric_id = "172"
+    await db.commit()
+
+    resp = await client.patch(
+        f"/api/v1/employees/{seed.outsider.id}",
+        json={"full_name": seed.outsider.full_name, "biometric_id": "172"},
+        headers=auth_headers(settings, hr),
+    )
+    assert resp.status_code == 409
+    # The holder is named, because that is the only way to know what to clear.
+    assert seed.report.full_name in resp.json()["error"]["message"]
+
+    # The other person's id is untouched by the refusal.
+    await db.refresh(seed.outsider)
+    assert seed.outsider.biometric_id != "172"
+
+
+async def test_biometric_id_can_be_set_to_your_own_current_value(
+    client: AsyncClient, db: AsyncSession, seed: _Seed, settings: Settings
+) -> None:
+    """Re-saving the form without touching the id must not refuse itself - the
+    holder of the id IS the person being edited."""
+    hr = await _add_hr(db)
+    seed.report.biometric_id = "172"
+    await db.commit()
+
+    resp = await client.patch(
+        f"/api/v1/employees/{seed.report.id}",
+        json={"full_name": "Remy R", "biometric_id": "172"},
+        headers=auth_headers(settings, hr),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["biometric_id"] == "172"
+
+
+async def test_biometric_id_freed_by_an_inactive_employee_is_reusable(
+    client: AsyncClient, db: AsyncSession, seed: _Seed, settings: Settings
+) -> None:
+    """Offboarding keeps the row (rule 8), and the unique index is partial on
+    `is_active` for exactly that reason - a leaver must not hold an id hostage."""
+    hr = await _add_hr(db)
+    seed.report.biometric_id = "172"
+    seed.report.is_active = False
+    await db.commit()
+
+    resp = await client.patch(
+        f"/api/v1/employees/{seed.outsider.id}",
+        json={"full_name": seed.outsider.full_name, "biometric_id": "172"},
+        headers=auth_headers(settings, hr),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["biometric_id"] == "172"

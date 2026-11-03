@@ -35,6 +35,7 @@ class AttendanceStatus(StrEnum):
     LATE = "late"  # arrived in the regularization window, not yet regularized
     ABSENT = "absent"
     ON_LEAVE = "on_leave"  # a working day covered by approved paid leave
+    OUT_OF_OFFICE = "out_of_office"  # worked, but away from the office (approved)
     PRESENT = "present"  # on time / regularized, day still in progress (also legacy fallback)
 
 

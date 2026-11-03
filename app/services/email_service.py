@@ -29,9 +29,11 @@ from app.services.email_templates import (
     invite_email,
     leave_decision_email,
     leave_request_email,
+    out_of_office_approved_email,
     payslip_email,
     probation_confirmation_email,
     probation_extension_email,
+    recognition_awarded_email,
     resignation_decision_email,
     resignation_submitted_email,
     task_assigned_email,
@@ -379,6 +381,53 @@ class EmailService:
             leave_url=self._absolute(link_path),
         )
         await self.send(to=to, subject=subject, html=html, copy_hr=True)
+
+    async def send_out_of_office_approved(
+        self,
+        *,
+        to: str,
+        requester_name: str,
+        approver_name: str,
+        day_label: str,
+        location: str,
+        reason: str,
+        link_path: str,
+    ) -> None:
+        """Confirm an approved out-of-office day, with HR on BCC.
+
+        HR is copied because approval pays a working day that no office punch
+        supports - the one case where attendance is credited on a manager's word.
+        """
+        subject, html = out_of_office_approved_email(
+            requester_name=requester_name,
+            approver_name=approver_name,
+            day_label=day_label,
+            location=location,
+            reason=reason,
+            out_of_office_url=self._absolute(link_path),
+        )
+        await self.send(to=to, subject=subject, html=html, copy_hr=True)
+
+    async def send_recognition_awarded(
+        self,
+        *,
+        to: str,
+        recipient_name: str,
+        awarded_by_name: str,
+        badge_label: str,
+        note: str,
+        link_path: str,
+    ) -> None:
+        """Tell someone they were recognised. Not copied to HR: this is a note
+        between a manager and their report, and the feed is already org-wide."""
+        subject, html = recognition_awarded_email(
+            recipient_name=recipient_name,
+            awarded_by_name=awarded_by_name,
+            badge_label=badge_label,
+            note=note,
+            recognition_url=self._absolute(link_path),
+        )
+        await self.send(to=to, subject=subject, html=html)
 
     async def send_task_escalated(
         self,

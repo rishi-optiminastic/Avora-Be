@@ -33,7 +33,7 @@ from app.repositories.work_session import WorkSessionRepository
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.auto_checkout_service import AutoCheckoutService
 from app.services.email_service import EmailService
-from worker.heartbeat import beat
+from worker.heartbeat import beat, record
 
 log = logging.getLogger("auto_checkout_scheduler")
 
@@ -80,7 +80,8 @@ async def _main() -> None:
         while True:
             try:
                 await _tick()
-                await beat(HEARTBEAT_ENV)  # tick succeeded → report liveness
+                await beat(HEARTBEAT_ENV)
+                await record("autocheckout")  # tick succeeded → report liveness
             except Exception as exc:  # keep the loop alive across transient failures
                 log.warning("tick failed: %s", exc)
             await asyncio.sleep(TICK_SECONDS)

@@ -33,6 +33,7 @@ from app.repositories.employee import EmployeeRepository
 from app.repositories.holiday import HolidayRepository
 from app.repositories.leave import LeaveRepository
 from app.repositories.org_settings import OrgSettingsRepository
+from app.repositories.out_of_office import OutOfOfficeRepository
 from app.repositories.payroll_adjustment import PayrollAdjustmentRepository
 from app.repositories.payroll_run import PayrollRunRepository
 from app.repositories.payroll_settings import PayrollSettingsRepository
@@ -44,7 +45,7 @@ from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.attendance_service import AttendanceService
 from app.services.email_service import EmailService
 from app.services.payroll_service import PayrollService
-from worker.heartbeat import beat
+from worker.heartbeat import beat, record
 
 log = logging.getLogger("payroll_scheduler")
 
@@ -67,6 +68,7 @@ def _build_service(session: AsyncSession) -> PayrollService:
         AttendanceOverrideRepository(session),
         HolidayRepository(session),
         LeaveRepository(session),
+        OutOfOfficeRepository(session),
         AuditRepository(session),
     )
     return PayrollService(
@@ -125,7 +127,8 @@ async def _main() -> None:
         while True:
             try:
                 await _tick()
-                await beat(HEARTBEAT_ENV)  # tick succeeded → report liveness
+                await beat(HEARTBEAT_ENV)
+                await record("payroll")  # tick succeeded → report liveness
             except Exception as exc:  # keep the loop alive across transient failures
                 log.warning("tick failed: %s", exc)
             await asyncio.sleep(TICK_SECONDS)

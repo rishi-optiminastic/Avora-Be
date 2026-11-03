@@ -23,8 +23,19 @@ async def list_payroll_adjustments(
     caller: CurrentUserDep,
     service: PayrollAdjustmentServiceDep,
     month: Annotated[str, Query(pattern=r"^\d{4}-(0[1-9]|1[0-2])$")],
+    employee_id: Annotated[
+        uuid.UUID | None,
+        Query(description="Only this employee's adjustments; omit for the whole month"),
+    ] = None,
 ) -> list[PayrollAdjustmentRead]:
-    rows = await service.list_for_period(caller, month)
+    """Adjustments for a payroll month (HR/admin/payroll-manager).
+
+    `employee_id` narrows it to one person. Before this existed the parameter was
+    silently dropped - FastAPI ignores unknown query params - so a caller asking
+    for one employee got the whole company's salary adjustments back and had no
+    way to tell.
+    """
+    rows = await service.list_for_period(caller, month, employee_id)
     return [PayrollAdjustmentRead.model_validate(r) for r in rows]
 
 

@@ -43,6 +43,7 @@ from app.repositories.eod_settings import EodSettingsRepository
 from app.repositories.holiday import HolidayRepository
 from app.repositories.leave import LeaveRepository
 from app.repositories.notification import NotificationRepository
+from app.repositories.out_of_office import OutOfOfficeRepository
 from app.repositories.regularization import RegularizationRepository
 from app.repositories.screenshot import ScreenshotRepository
 from app.repositories.task import TaskRepository
@@ -54,7 +55,7 @@ from app.services.eod_service import EodService
 from app.services.eod_settings_service import EodSettingsService
 from app.services.llm_service import LlmService
 from app.services.notification_service import NotificationService
-from worker.heartbeat import beat
+from worker.heartbeat import beat, record
 
 log = logging.getLogger("eod_scheduler")
 
@@ -79,6 +80,7 @@ def _build_service(session: AsyncSession) -> EodService:
         AttendanceOverrideRepository(session),
         HolidayRepository(session),
         LeaveRepository(session),
+        OutOfOfficeRepository(session),
         AuditRepository(session),
     )
     return EodService(
@@ -133,7 +135,8 @@ async def _main() -> None:
         while True:
             try:
                 await _tick()
-                await beat(HEARTBEAT_ENV)  # tick succeeded → report liveness
+                await beat(HEARTBEAT_ENV)
+                await record("eod")  # tick succeeded → report liveness
             except Exception as exc:  # keep the loop alive across transient failures
                 log.warning("tick failed: %s", exc)
             await asyncio.sleep(TICK_SECONDS)

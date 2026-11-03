@@ -72,12 +72,13 @@ class PayrollAdjustmentRepository:
         await self._session.delete(row)
         return True
 
-    async def list_for_period(self, period_month: str) -> Sequence[PayrollAdjustment]:
-        rows = await self._session.execute(
-            select(PayrollAdjustment)
-            .where(PayrollAdjustment.period_month == period_month)
-            .order_by(PayrollAdjustment.created_at.desc())
-        )
+    async def list_for_period(
+        self, period_month: str, employee_id: uuid.UUID | None = None
+    ) -> Sequence[PayrollAdjustment]:
+        stmt = select(PayrollAdjustment).where(PayrollAdjustment.period_month == period_month)
+        if employee_id is not None:
+            stmt = stmt.where(PayrollAdjustment.employee_id == employee_id)
+        rows = await self._session.execute(stmt.order_by(PayrollAdjustment.created_at.desc()))
         return rows.scalars().all()
 
     async def for_month(

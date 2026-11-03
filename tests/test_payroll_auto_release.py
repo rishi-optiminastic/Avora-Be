@@ -23,6 +23,7 @@ from app.repositories.employee import EmployeeRepository
 from app.repositories.holiday import HolidayRepository
 from app.repositories.leave import LeaveRepository
 from app.repositories.org_settings import OrgSettingsRepository
+from app.repositories.out_of_office import OutOfOfficeRepository
 from app.repositories.payroll_adjustment import PayrollAdjustmentRepository
 from app.repositories.payroll_run import PayrollRunRepository
 from app.repositories.payroll_settings import PayrollSettingsRepository
@@ -79,6 +80,7 @@ def _service(db: AsyncSession, settings: Settings) -> PayrollService:
         AttendanceOverrideRepository(db),
         HolidayRepository(db),
         LeaveRepository(db),
+        OutOfOfficeRepository(db),
         AuditRepository(db),
     )
     return PayrollService(
