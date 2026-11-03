@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 revision = "d5f7b9c1e3a4"
 down_revision = "c3e5a7b9d1f2"
@@ -29,9 +30,12 @@ _STATUS = sa.Enum("PENDING", "APPROVED", "REJECTED", "CANCELLED", name="outofoff
 
 def upgrade() -> None:
     bind = op.get_bind()
-    # Create the enums up front and tell create_table not to re-create them:
-    # with several workspace schemas on one database, letting the column
-    # definition emit its own CREATE TYPE races itself inside one transaction.
+    # Create the enums up front, then reference them by NAME with
+    # create_type=False so create_table does not emit its own CREATE TYPE.
+    # `sa.Enum.copy()` keeps create_type=True, so the column re-created a type
+    # that already existed two lines above and the whole migration aborted with
+    # `DuplicateObjectError: type "outofofficeportion" already exists`. The
+    # SQLite test suite has no enum types, so only Postgres ever sees this.
     _PORTION.create(bind, checkfirst=True)
     _STATUS.create(bind, checkfirst=True)
 
@@ -50,7 +54,7 @@ def upgrade() -> None:
         sa.Column("end_day", sa.String(length=10), nullable=False),
         sa.Column(
             "portion",
-            _PORTION.copy(),  # type: ignore[attr-defined]
+            postgresql.ENUM(name="outofofficeportion", create_type=False),
             nullable=False,
             server_default="FULL_DAY",
         ),
@@ -58,7 +62,7 @@ def upgrade() -> None:
         sa.Column("reason", sa.String(length=500), nullable=False),
         sa.Column(
             "status",
-            _STATUS.copy(),  # type: ignore[attr-defined]
+            postgresql.ENUM(name="outofofficestatus", create_type=False),
             nullable=False,
             server_default="PENDING",
         ),

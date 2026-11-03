@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 revision = "e6a8c2d4f6b8"
 down_revision = "d5f7b9c1e3a4"
@@ -35,9 +36,11 @@ _BADGE = sa.Enum(
 
 
 def upgrade() -> None:
-    # Created up front so the column definition does not emit its own CREATE
-    # TYPE: with several workspace schemas on one database, that races itself
-    # inside a single transaction.
+    # Created up front, then referenced BY NAME with create_type=False so the
+    # column does not emit a second CREATE TYPE for a type that already exists.
+    # Passing a copy of the sa.Enum keeps create_type=True and aborts the whole
+    # migration on Postgres; the SQLite test suite has no enum types, so only
+    # a real deploy ever sees it.
     _BADGE.create(op.get_bind(), checkfirst=True)
 
     op.create_table(
@@ -57,7 +60,11 @@ def upgrade() -> None:
             sa.ForeignKey("employees.id", ondelete="SET NULL"),
             nullable=True,
         ),
-        sa.Column("badge", _BADGE.copy(), nullable=False),  # type: ignore[attr-defined]
+        sa.Column(
+            "badge",
+            postgresql.ENUM(name="recognitionbadge", create_type=False),
+            nullable=False,
+        ),
         sa.Column("note", sa.String(length=1000), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
