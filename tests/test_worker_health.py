@@ -58,14 +58,52 @@ def test_every_declared_worker_module_exists() -> None:
 
 def test_every_declared_worker_records_its_own_name() -> None:
     """A worker that records the wrong name reports as never-seen forever, which
-    is a false alarm that trains people to ignore the real one."""
+    is a false alarm that trains people to ignore the real one.
+
+    Two spellings count, because the OCR worker cannot use the shared helper
+    (see `test_ocr_worker_does_not_import_the_worker_package`): the schedulers
+    call `record("name")`, and the OCR worker declares `WORKER_NAME = "name"`
+    and writes the row itself.
+    """
     worker_dir = REPO_ROOT / "worker"
     recorded = set()
     for path in worker_dir.glob("*.py"):
-        recorded.update(re.findall(r'record\("([a-z-]+)"\)', path.read_text()))
+        text = path.read_text()
+        recorded.update(re.findall(r'record\("([a-z-]+)"\)', text))
+        recorded.update(re.findall(r'^WORKER_NAME = "([a-z-]+)"', text, re.MULTILINE))
     declared = {spec.name for spec in EXPECTED_WORKERS}
     assert declared - recorded == set(), f"declared but never recorded: {declared - recorded}"
     assert recorded - declared == set(), f"recorded but not declared: {recorded - declared}"
+
+
+def test_ocr_worker_does_not_import_the_worker_package() -> None:
+    """The OCR image bundles `ocr_worker.py` and nothing else.
+
+    `worker/Dockerfile` copies that one file - no `worker` package, no `app`, no
+    SQLAlchemy. So any `from worker...` / `from app...` import raises
+    ModuleNotFoundError at runtime. It did: the heartbeat called
+    `worker.heartbeat.record`, every beat failed, the error was swallowed as a
+    warning, and the Status page said NEVER RUN for a worker that was reading
+    screenshots the whole time. Exactly the blindness `EXPECTED_WORKERS` exists
+    to prevent, reproduced inside the liveness mechanism itself.
+    """
+    source = (REPO_ROOT / "worker" / "ocr_worker.py").read_text()
+    offenders = re.findall(r"^\s*(?:from|import)\s+(worker|app)\b", source, re.MULTILINE)
+    assert not offenders, (
+        f"ocr_worker.py imports {sorted(set(offenders))}, which the OCR image does not contain"
+    )
+
+
+def test_ocr_worker_dockerfile_copies_every_file_it_needs() -> None:
+    """The pairing above only holds while the image stays a single file. If the
+    Dockerfile starts copying the package in, the import rule can be relaxed -
+    but it must be a decision, not a drift."""
+    dockerfile = (REPO_ROOT / "worker" / "Dockerfile").read_text()
+    copied = re.findall(r"^COPY\s+(\S+)", dockerfile, re.MULTILINE)
+    assert "ocr_worker.py" in copied
+    assert not any(c.rstrip("/") in {"worker", "app", "."} for c in copied), (
+        "the OCR image now bundles more than ocr_worker.py - revisit the import guard"
+    )
 
 
 def test_worker_names_are_unique() -> None:

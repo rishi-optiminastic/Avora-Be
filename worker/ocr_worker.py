@@ -47,13 +47,40 @@ _LANCZOS = getattr(Image, "Resampling", Image).LANCZOS
 # Liveness heartbeat — this loop spins every ~2s, so throttle the ping. Self-
 # contained (the OCR image bundles only this file), so it's inlined, not shared
 # with worker/heartbeat.py. Pinged only on a healthy cycle, so a DB outage alerts.
+# The name this worker reports under. Must match its `WorkerSpec` in
+# `app/core/workers.py`, which `test_every_declared_worker_records_its_own_name`
+# pins - a worker recording the wrong name reads as never-seen forever.
+WORKER_NAME = "ocr"
 HEARTBEAT_URL = os.getenv("HEARTBEAT_URL_OCR", "").strip()
 HEARTBEAT_INTERVAL = float(os.getenv("HEARTBEAT_INTERVAL_SECONDS", "60"))
 
 _s3: Any = None
 
 
-def _heartbeat(last_beat: float) -> float:
+def _record_beat(conn: psycopg2.extensions.connection) -> None:
+    """Upsert this worker's liveness row, over the connection we already hold.
+
+    Written with psycopg2 rather than `worker.heartbeat.record` because this
+    image bundles `ocr_worker.py` and nothing else - no `worker` package, no
+    SQLAlchemy, no asyncpg. The previous version imported `worker.heartbeat`
+    anyway, so every single beat raised `ModuleNotFoundError`, was swallowed by
+    the catch below, and the Status page read NEVER RUN for a worker that was
+    processing screenshots all along. That is the exact failure the liveness
+    list exists to make impossible, reproduced inside the mechanism itself.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO worker_heartbeats (name, last_beat_at, created_at, updated_at)
+            VALUES (%s, now(), now(), now())
+            ON CONFLICT (name) DO UPDATE
+               SET last_beat_at = now(), updated_at = now()
+            """,
+            (WORKER_NAME,),
+        )
+
+
+def _heartbeat(conn: psycopg2.extensions.connection, last_beat: float) -> float:
     """Best-effort liveness, throttled to HEARTBEAT_INTERVAL. Returns the new
     last-beat time. Never raises — monitoring must not take the worker down.
 
@@ -64,11 +91,7 @@ def _heartbeat(last_beat: float) -> float:
     now = time.monotonic()
     if now - last_beat >= HEARTBEAT_INTERVAL:
         try:
-            import asyncio
-
-            from worker.heartbeat import record
-
-            asyncio.run(record("ocr"))
+            _record_beat(conn)
         except Exception as exc:  # never take the worker down over monitoring
             log.warning("heartbeat record failed: %s", exc)
     if not HEARTBEAT_URL:
@@ -216,7 +239,7 @@ def main() -> None:
                 log.info("processed %d screenshot(s)", processed)
             else:
                 time.sleep(IDLE_SLEEP)
-            last_beat = _heartbeat(last_beat)  # healthy cycle → report liveness
+            last_beat = _heartbeat(conn, last_beat)  # healthy cycle → report liveness
         except psycopg2.Error as exc:
             log.warning("db error, reconnecting: %s", exc)
             conn = None
