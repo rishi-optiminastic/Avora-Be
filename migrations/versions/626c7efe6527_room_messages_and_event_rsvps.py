@@ -17,6 +17,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects import postgresql
 
 revision: str = "626c7efe6527"
 down_revision: str | None = "f7b9d1e3a5c7"
@@ -24,21 +25,28 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 # The DB enum stores the UPPERCASE member names, matching every other enum here.
-_TOPIC_KIND = sa.Enum("CELEBRATION", "EVENT", "GENERAL", name="roomtopickind")
+_VALUES = ("CELEBRATION", "EVENT", "GENERAL")
+
+# `create_type=False` is the whole point of this pair. A bare `sa.Enum` column
+# makes `op.create_table` emit its own CREATE TYPE through SQLAlchemy's
+# `_on_table_create` hook - with checkfirst OFF - so the type gets created
+# twice in one transaction and the migration dies on DuplicateObjectError.
+# The type is created once, explicitly, below.
+_TOPIC_KIND_COLUMN = postgresql.ENUM(*_VALUES, name="roomtopickind", create_type=False)
+_TOPIC_KIND_TYPE = postgresql.ENUM(*_VALUES, name="roomtopickind")
 
 
 def upgrade() -> None:
     bind = op.get_bind()
-    # Created explicitly so a re-run after a partial failure does not die on an
-    # existing type; create_table would otherwise try to create it again.
-    _TOPIC_KIND.create(bind, checkfirst=True)
+    # Created explicitly, once, and tolerant of a re-run after a partial failure.
+    _TOPIC_KIND_TYPE.create(bind, checkfirst=True)
 
     op.create_table(
         "room_messages",
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("author_id", sa.Uuid(), nullable=True),
         sa.Column("body", sa.Text(), nullable=False),
-        sa.Column("topic_kind", _TOPIC_KIND, nullable=False),
+        sa.Column("topic_kind", _TOPIC_KIND_COLUMN, nullable=False),
         sa.Column("topic_key", sa.String(length=128), nullable=False),
         sa.Column("pinned_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("pinned_by", sa.Uuid(), nullable=True),
@@ -131,4 +139,4 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_room_messages_topic_key"), table_name="room_messages")
     op.drop_index(op.f("ix_room_messages_author_id"), table_name="room_messages")
     op.drop_table("room_messages")
-    _TOPIC_KIND.drop(op.get_bind(), checkfirst=True)
+    _TOPIC_KIND_TYPE.drop(op.get_bind(), checkfirst=True)

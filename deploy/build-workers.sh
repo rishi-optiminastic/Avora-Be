@@ -53,6 +53,11 @@ SCHEDULERS=(
   "task-escalation:worker.task_escalation_scheduler"
   "circle-documents:worker.circle_documents_scheduler"
   "forms:worker.forms_scheduler"
+  # Missing until 5 Nov 2026. `celebrations` is in EXPECTED_WORKERS and in the
+  # compose stack, so Avora expects it to be live - but this script could not
+  # refresh it, which is how the one worker that already died unnoticed for
+  # seven weeks stayed the hardest one to redeploy.
+  "celebrations:worker.celebrations_scheduler"
 )
 
 BASE_IMAGE="avora-worker-base:build"
@@ -98,7 +103,8 @@ echo "    ${OCR_TARGET} -> $(docker inspect "$OCR_TARGET" --format '{{json .Conf
 
 echo
 echo "==> Pushing"
-for name in eod payroll autocheckout task-escalation circle-documents forms ocr; do
+# Derived from SCHEDULERS so a worker added above can never be left unpushed.
+for name in "${SCHEDULERS[@]/:*/}" ocr; do
   target="${REGISTRY}/avora-worker-${name}:latest"
   docker push "$target" | tail -1
 done
