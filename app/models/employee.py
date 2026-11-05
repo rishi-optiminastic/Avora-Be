@@ -39,6 +39,19 @@ class Role(StrEnum):
     VIEWER = "viewer"
 
 
+# Roles that carry no privilege beyond the person's own record. HR may move these
+# accounts around (email change, deactivation); anything above them is changed
+# inside Avora by an admin (rule 5.3). This used to be a single `is not
+# Role.EMPLOYEE` check - when EMPLOYEE became INTERN and everyone who held it
+# became EXECUTIVE, that check would have reclassified the entire company as
+# privileged and started rejecting ordinary HR offboards.
+#
+# Lives here, beside `Role`, because both `HRService` (refusing the webhook) and
+# `EmployeeService` (allowing an admin) draw the same line, and a constant owned
+# by one service and imported by the other is a layering accident waiting to drift.
+UNPRIVILEGED_ROLES = (Role.INTERN, Role.EXECUTIVE)
+
+
 class EmployeeStatus(StrEnum):
     ACTIVE = "active"
     INACTIVE = "inactive"  # soft-deleted on offboard; never hard-deleted

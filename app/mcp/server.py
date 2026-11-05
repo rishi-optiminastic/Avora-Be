@@ -32,6 +32,7 @@ from app.models.employee import Employee
 from app.models.task import Task
 from app.repositories.assignment_grant import AssignmentGrantRepository
 from app.repositories.audit import AuditRepository
+from app.repositories.auth_identity import AuthIdentityRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.notification import NotificationRepository
 from app.repositories.personal_access_token import PersonalAccessTokenRepository
@@ -131,6 +132,7 @@ def _employee_service(session: AsyncSession) -> EmployeeService:
         PingRepository(session),
         AuditRepository(session),
         settings,
+        AuthIdentityRepository(session),
     )
 
 

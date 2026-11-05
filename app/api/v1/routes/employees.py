@@ -35,6 +35,7 @@ from app.schemas.employee import (
     EmployeeStatusUpdate,
     PayrollManagerUpdate,
     SelfProfileUpdate,
+    WorkEmailUpdate,
 )
 from app.schemas.office_location import LocationExemptUpdate
 from app.services.employee_service import MAX_AVATAR_BYTES
@@ -254,6 +255,30 @@ async def admin_update_employee(
     body are written (PATCH). Role is NOT settable here — use the role endpoint;
     email/hr_external_id are identity keys and never editable."""
     employee = await service.admin_update_profile(manager, employee_id, payload)
+    return EmployeeRead.model_validate(employee)
+
+
+@router.patch("/{employee_id}/work-email", response_model=EmployeeRead)
+async def change_employee_work_email(
+    employee_id: uuid.UUID,
+    payload: WorkEmailUpdate,
+    manager: AdminOrHrDep,
+    service: EmployeeServiceDep,
+) -> EmployeeRead:
+    """Admin/HR move an employee to a new work address.
+
+    Separate from the profile PATCH because the work email is the identity key:
+    it changes what the person signs in with, so the roster row and the Better
+    Auth row move together in one transaction and both addresses are recorded in
+    the audit log. Their password is unaffected.
+
+    HR may do this for an intern or executive. On a privileged account - admin,
+    HR, manager, senior manager, viewer, or any payroll-manager grant holder -
+    it is a privilege transfer and admin-only (rule 5.3).
+
+    409 when another employee already holds the address, naming them.
+    """
+    employee = await service.admin_change_work_email(manager, employee_id, payload)
     return EmployeeRead.model_validate(employee)
 
 

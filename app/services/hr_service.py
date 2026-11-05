@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from app.core.exceptions import ConflictError, ValidationError
 from app.core.logging import get_logger
-from app.models.employee import Employee, EmployeeStatus, Role
+from app.models.employee import UNPRIVILEGED_ROLES, Employee, EmployeeStatus
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import (
     SYNTHETIC_EXTERNAL_ID_PREFIXES,
@@ -25,14 +25,6 @@ from app.repositories.employee import (
 from app.schemas.employee import HREmployeeUpsert
 
 logger = get_logger("app.hr")
-
-# Roles that carry no privilege beyond the person's own record. HR may move these
-# accounts around (email change, deactivation); anything above them is changed
-# inside Avora by an admin (rule 5.5). This used to be a single `is not
-# Role.EMPLOYEE` check - when EMPLOYEE became INTERN and everyone who held it
-# became EXECUTIVE, that check would have reclassified the entire company as
-# privileged and started rejecting ordinary HR offboards.
-UNPRIVILEGED_ROLES = (Role.INTERN, Role.EXECUTIVE)
 
 
 class HRService:

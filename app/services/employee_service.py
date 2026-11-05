@@ -22,14 +22,20 @@ from app.core.exceptions import (
     ValidationError,
 )
 from app.core.logging import get_logger
-from app.models.employee import Employee, Role, TrackingMode
+from app.models.employee import UNPRIVILEGED_ROLES, Employee, Role, TrackingMode
 from app.models.ping import PingKind
 from app.repositories.assignment_grant import AssignmentGrantRepository
 from app.repositories.audit import AuditRepository
+from app.repositories.auth_identity import AuthIdentityRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.ping import PingRepository
 from app.schemas.auth import CurrentUser
-from app.schemas.employee import AdminProfileUpdate, EmployeeCreate, SelfProfileUpdate
+from app.schemas.employee import (
+    AdminProfileUpdate,
+    EmployeeCreate,
+    SelfProfileUpdate,
+    WorkEmailUpdate,
+)
 from app.services.circle_ownership import refuse_circle_owned_changes
 
 logger = get_logger("app.employee")
@@ -62,12 +68,14 @@ class EmployeeService:
         pings: PingRepository,
         audit: AuditRepository,
         settings: Settings,
+        auth_identities: AuthIdentityRepository,
     ) -> None:
         self._employees = employees
         self._grants = grants
         self._pings = pings
         self._audit = audit
         self._settings = settings
+        self._auth_identities = auth_identities
 
     async def get_for_caller(self, caller: CurrentUser, target_id: uuid.UUID) -> Employee:
         # Prefer 404 over 403 so we don't reveal existence to an out-of-scope
@@ -353,6 +361,84 @@ class EmployeeService:
             target=f"employee:{target_id}",
         )
         return employee
+
+    async def admin_change_work_email(
+        self, caller: CurrentUser, target_id: uuid.UUID, payload: WorkEmailUpdate
+    ) -> Employee:
+        """Move an employee to a new work address, roster and sign-in together.
+
+        Two rows have to change or the person is locked out: `work_email` is
+        what Avora authorises on, `auth_user.email` is what they type to sign
+        in. Both happen in the request's one transaction, so a failure on
+        either leaves the old address intact rather than half-moved.
+
+        Their password is untouched. `auth_account` keys the credential on the
+        Better Auth user id, not the address, so nobody needs a reset.
+
+        The accepted `invitations` row is deliberately left alone: it records
+        the invite that was actually sent, and the sign-in gate only consults
+        that table while an invite is still PENDING.
+        """
+        self._require_user_manager(caller)
+        employee = await self._employees.get(target_id)
+        if employee is None:
+            raise NotFoundError()
+
+        new_email = payload.work_email.strip().lower()
+        old_email = employee.work_email
+        if old_email.lower() == new_email:
+            # Idempotent: re-sending the address someone already has is not an
+            # error, and must not write a misleading "changed" audit row.
+            return employee
+
+        holder = await self._employees.find_by_work_email_insensitive(new_email)
+        if holder is not None and holder.id != target_id:
+            # Named, not generic: an operator swapping two people's addresses
+            # has to move them one at a time, and needs to know who is in the way.
+            raise ConflictError(f"{holder.full_name} already uses that work email.")
+
+        self._guard_privileged_email_change(caller, employee)
+
+        await self._employees.set_work_email(employee, new_email)
+
+        auth_id = await self._auth_identities.find_id_by_email(old_email)
+        if auth_id is not None:
+            await self._auth_identities.set_email(user_id=auth_id, new_email=new_email)
+        # No identity row means they were invited and never signed up. The
+        # roster moves anyway; their first sign-in creates the account under
+        # the new address, which the invite-only gate admits on this row.
+
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="employee.work_email_change",
+            # Both addresses in the target, because AuditLog records only
+            # actor/action/target - without them the row says somebody changed
+            # an email and not what it was, which answers no question later.
+            target=f"employee:{target_id}:{old_email}->{new_email}",
+        )
+        logger.info(
+            "work_email_changed",
+            extra={"employee_id": str(target_id), "actor": str(caller.employee_id)},
+        )
+        return employee
+
+    @staticmethod
+    def _guard_privileged_email_change(caller: CurrentUser, employee: Employee) -> None:
+        """Only a full admin may move a privileged account's address.
+
+        An email change hands the account, and the role it carries, to whoever
+        controls the new address. For an intern or executive that is ordinary HR
+        work. On an admin, HR, manager or payroll-manager account it is a
+        privilege transfer, which rule 5.3 keeps with admins - the same line
+        `hr_service._guard_email_change` draws when it refuses the HR webhook
+        and says the change "must be made in Avora by an admin".
+        """
+        if caller.role is Role.ADMIN:
+            return
+        if employee.role not in UNPRIVILEGED_ROLES or employee.payroll_manager:
+            raise AuthorizationError(
+                "Changing the work email on a privileged account is admin-only."
+            )
 
     async def _assert_biometric_id_free(
         self, fields: dict[str, object], target_id: uuid.UUID | None

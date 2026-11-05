@@ -928,3 +928,40 @@ async def test_a_reporting_cycle_does_not_hang_the_scope_query(
     resp = await client.get("/api/v1/tasks", headers=auth_headers(settings, seed.manager))
 
     assert resp.status_code == 200
+
+
+async def test_bulk_create_carries_every_field_including_status(
+    client: AsyncClient, db: AsyncSession, seed: _Seed, settings: Settings
+) -> None:
+    """The bulk flow is the board's import path, so a row that names a project,
+    a due date or a status has to arrive with them. `status` in particular was
+    accepted by the schema and dropped by the repository, which is worse than
+    rejecting it: the caller sees 201 and the wrong row."""
+    resp = await client.post(
+        "/api/v1/tasks/bulk",
+        json={
+            "tasks": [
+                {
+                    "title": "Already underway",
+                    "assignee_id": str(seed.report.id),
+                    "status": "in_progress",
+                    "priority": "high",
+                    "project": "Screen Studio",
+                    "description": "Carried over from the meeting",
+                    "due_date": "2026-12-01T00:00:00Z",
+                },
+                {"title": "Not started", "assignee_id": str(seed.report.id)},
+            ]
+        },
+        headers=auth_headers(settings, seed.manager),
+    )
+    assert resp.status_code == 201
+    first, second = resp.json()
+
+    assert first["status"] == "in_progress"
+    assert first["priority"] == "high"
+    assert first["project"] == "Screen Studio"
+    assert first["description"] == "Carried over from the meeting"
+    assert first["due_date"].startswith("2026-12-01")
+    # Left out entirely, it still defaults the way the column does.
+    assert second["status"] == "todo"

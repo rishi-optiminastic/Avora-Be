@@ -43,6 +43,7 @@ from app.core.tenancy import InvalidWorkspaceSlug, use_schema
 from app.main import create_app
 from app.models import Base, Device, Employee, EmployeeStatus, Role
 from app.models.attendance_policy import AttendancePolicy
+from app.models.auth_identity import auth_metadata
 from app.models.work_session import WorkSession
 from app.repositories.attendance_policy import AttendancePolicyRepository
 from app.repositories.employee import EmployeeRepository
@@ -222,6 +223,11 @@ async def engine() -> AsyncIterator[object]:
         # two models create and query exactly as they do in production.
         await conn.execute(text("ATTACH DATABASE ':memory:' AS public"))
         await conn.run_sync(Base.metadata.create_all)
+        # `auth_user` belongs to Better Auth in the Next.js app, so it is not in
+        # `Base.metadata` and Alembic never touches it. The backend still writes
+        # it when an employee's work email moves, so the suite has to create it
+        # or those tests would pass against a table that does not exist.
+        await conn.run_sync(auth_metadata.create_all)
     yield eng
     await eng.dispose()
 

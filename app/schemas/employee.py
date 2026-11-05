@@ -134,6 +134,21 @@ class AdminProfileUpdate(BaseModel):
     probation_months: int | None = Field(default=None, ge=0, le=24)
 
 
+class WorkEmailUpdate(BaseModel):
+    """Moving an employee to a new work address.
+
+    Its own endpoint rather than a field on `AdminProfileUpdate`, because this
+    is not a profile edit: the work email is the identity key, so changing it
+    moves the account - and whatever role it holds - to whoever owns the new
+    address. That deserves a deliberate action, its own authorisation, and an
+    audit row recording both addresses, which a PATCH of mixed profile fields
+    cannot give. `hr_service._guard_email_change` already defers a privileged
+    account's email change to "an admin inside Avora"; this is that path.
+    """
+
+    work_email: EmailStr
+
+
 class EmployeeCreate(AdminProfileUpdate):
     """Admin/HR adding a person straight to the roster — no invite, no email, no
     account. Used for people we only need a *record* of (contractors, staff who

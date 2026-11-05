@@ -41,6 +41,9 @@ class TaskCreate(BaseModel):
     project: str | None = Field(default=None, max_length=128)
     project_id: uuid.UUID | None = None
     priority: TaskPriority = TaskPriority.MEDIUM
+    # A task may be created already underway - the bulk flow imports work that
+    # started before anyone wrote it down. Matches the column default.
+    status: TaskStatus = TaskStatus.TODO
     cadence: TaskCadence = TaskCadence.ONE_TIME
     start_date: datetime | None = None
     due_date: datetime | None = None

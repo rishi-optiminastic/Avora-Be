@@ -211,6 +211,12 @@ class EmployeeRepository:
         employee.is_active = is_active
         await self._session.flush()
 
+    async def set_work_email(self, employee: Employee, work_email: str) -> None:
+        """Move the roster's identity key. Stored lower-case, because login
+        matches the token's address against this column exactly."""
+        employee.work_email = work_email
+        await self._session.flush()
+
     async def set_avatar(
         self,
         employee: Employee,

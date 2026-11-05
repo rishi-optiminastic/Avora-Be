@@ -42,6 +42,7 @@ from app.repositories.attendance_override import AttendanceOverrideRepository
 from app.repositories.attendance_policy import AttendancePolicyRepository
 from app.repositories.attribution_correction import AttributionCorrectionRepository
 from app.repositories.audit import AuditRepository
+from app.repositories.auth_identity import AuthIdentityRepository
 from app.repositories.browsing_hidden_domain import BrowsingHiddenDomainRepository
 from app.repositories.category_rule import CategoryRuleRepository
 from app.repositories.celebration_settings import CelebrationSettingsRepository
@@ -478,14 +479,19 @@ def get_meeting_service(
     return MeetingService(settings, employees, audit, quick_meet)
 
 
+def get_auth_identity_repo(db: DbDep) -> AuthIdentityRepository:
+    return AuthIdentityRepository(db)
+
+
 def get_employee_service(
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     grants: Annotated[AssignmentGrantRepository, Depends(get_assignment_grant_repo)],
     pings: Annotated[PingRepository, Depends(get_ping_repo)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
     settings: SettingsDep,
+    auth_identities: Annotated[AuthIdentityRepository, Depends(get_auth_identity_repo)],
 ) -> EmployeeService:
-    return EmployeeService(employees, grants, pings, audit, settings)
+    return EmployeeService(employees, grants, pings, audit, settings, auth_identities)
 
 
 def get_hr_service(
