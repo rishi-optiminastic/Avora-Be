@@ -86,6 +86,7 @@ from app.models.reimbursement import (
     ReimbursementStatus,
 )
 from app.models.resignation import Resignation, ResignationStatus
+from app.models.room import EventRsvp, RoomMessage, RoomTopicKind
 from app.models.screenshot import OcrStatus, Screenshot
 from app.models.target import Target, TargetPeriod, TargetStatus
 from app.models.task import Task, TaskCadence, TaskPriority, TaskStatus
@@ -138,6 +139,7 @@ __all__ = [
     "EodSettings",
     "EodStatus",
     "Event",
+    "EventRsvp",
     "EventStatus",
     "Festival",
     "Form",
@@ -208,6 +210,8 @@ __all__ = [
     "Resignation",
     "ResignationStatus",
     "Role",
+    "RoomMessage",
+    "RoomTopicKind",
     "Screenshot",
     "Target",
     "TargetPeriod",

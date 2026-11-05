@@ -140,6 +140,24 @@ class CelebrationService:
         logger.info("celebration_run_done", extra={"date": str(today), "emails": sent})
         return sent
 
+    async def celebrations_on(self, today: date) -> list[tuple[Employee, str, int | None]]:
+        """Whose day it is: (person, "birthday" | "anniversary", years).
+
+        The same month/day rule the mailer uses, lifted into a read so the Room
+        can show it. Previously this existed only inside `_run_birthdays`, which
+        meant the only way to find out whose birthday it was today was to send
+        everybody an email about it.
+        """
+        found: list[tuple[Employee, str, int | None]] = []
+        for person in await self._employees.list_all_active():
+            if person.date_of_birth and _same_month_day(person.date_of_birth, today):
+                found.append((person, "birthday", None))
+            if person.hire_date and _same_month_day(person.hire_date, today):
+                years = _years_between(person.hire_date, today)
+                if years >= 1:  # a same-year joiner has no anniversary yet
+                    found.append((person, "anniversary", years))
+        return found
+
     async def _run_birthdays(self, team: list[Employee], recipients: list[str], today: date) -> int:
         """One email per birthday: addressed TO the person, with the team CC'd.
 

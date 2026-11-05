@@ -91,6 +91,7 @@ from app.repositories.recognition import RecognitionRepository
 from app.repositories.regularization import RegularizationRepository
 from app.repositories.reimbursement import ReimbursementRepository
 from app.repositories.resignation import ResignationRepository
+from app.repositories.room import RoomRepository
 from app.repositories.screenshot import ScreenshotRepository
 from app.repositories.target import TargetRepository
 from app.repositories.task import TaskRepository
@@ -163,6 +164,7 @@ from app.services.reconciliation_service import ReconciliationService
 from app.services.regularization_service import RegularizationService
 from app.services.reimbursement_service import ReimbursementService
 from app.services.resignation_service import ResignationService
+from app.services.room_service import RoomService
 from app.services.screenshot_service import ScreenshotService
 from app.services.target_service import TargetService
 from app.services.task_service import TaskService
@@ -694,6 +696,20 @@ def get_worker_health_service(
     heartbeats: Annotated[WorkerHeartbeatRepository, Depends(get_worker_heartbeat_repo)],
 ) -> WorkerHealthService:
     return WorkerHealthService(heartbeats)
+
+
+def get_room_repo(db: Annotated[AsyncSession, Depends(get_db)]) -> RoomRepository:
+    return RoomRepository(db)
+
+
+def get_room_service(
+    room: Annotated[RoomRepository, Depends(get_room_repo)],
+    events: Annotated[EventRepository, Depends(get_event_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    celebrations: Annotated[CelebrationService, Depends(get_celebration_service)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> RoomService:
+    return RoomService(room, events, employees, celebrations, audit)
 
 
 def get_recognition_repo(db: Annotated[AsyncSession, Depends(get_db)]) -> RecognitionRepository:
@@ -1234,6 +1250,7 @@ ReconciliationServiceDep = Annotated[ReconciliationService, Depends(get_reconcil
 RegularizationServiceDep = Annotated[RegularizationService, Depends(get_regularization_service)]
 OutOfOfficeServiceDep = Annotated[OutOfOfficeService, Depends(get_out_of_office_service)]
 RecognitionServiceDep = Annotated[RecognitionService, Depends(get_recognition_service)]
+RoomServiceDep = Annotated[RoomService, Depends(get_room_service)]
 WorkerHealthServiceDep = Annotated[WorkerHealthService, Depends(get_worker_health_service)]
 ScreenshotServiceDep = Annotated[ScreenshotService, Depends(get_screenshot_service)]
 PingServiceDep = Annotated[PingService, Depends(get_ping_service)]
