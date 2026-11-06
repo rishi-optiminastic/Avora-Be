@@ -5,7 +5,7 @@ async session + services. Each tick, when EOD is enabled: at/after the configure
 local hour it generates a draft for every present employee (idempotent per
 employee/day via the unique `eod_reports` constraint), auto-sends any draft left
 unreviewed past the cutoff to that person's reporting manager, and then mails the
-admins one rolled-up digest per department (once per local day).
+admins one rolled-up digest of every department (once per local day).
 
 Deploy alongside the API (one instance). Env:
   DATABASE_URL            Postgres URL (asyncpg-style, same as the API).
@@ -114,7 +114,7 @@ async def _tick() -> None:
             ).run_due(now)
             if generated or sent or digests or purged_activity or purged_shots:
                 log.info(
-                    "generated %d draft(s), auto-sent %d, mailed %d department digest(s), "
+                    "generated %d draft(s), auto-sent %d, mailed %d admin digest(s), "
                     "purged %d activity row(s), %d screenshot(s)",
                     generated,
                     sent,

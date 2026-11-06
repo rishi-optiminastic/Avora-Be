@@ -69,20 +69,14 @@ _ON_HANDOVER: dict[FormTrigger, dict[int, str]] = {
     FormTrigger.PROBATION_MANAGER: {},
     FormTrigger.PROBATION_HR: {},
 }
+_MANAGER_DONE = {
+    5: "reporting manager submitted the probation evaluation.",
+    6: "reporting manager submitted the probation evaluation.",
+}
 _ON_SUBMIT: dict[FormTrigger, dict[int, str]] = {
-    # On a two-stage review this is the MANAGER finishing, because the
-    # employee's half settles at the handover above. On the old single-stage
-    # self-assessment it stays step 3, so a form sent before the merge still
-    # ticks the right box when it comes back.
-    FormTrigger.PROBATION_SELF: {
-        3: "self-assessment form submitted.",
-        5: "reporting manager submitted the probation evaluation.",
-        6: "reporting manager submitted the probation evaluation.",
-    },
-    FormTrigger.PROBATION_MANAGER: {
-        5: "reporting manager submitted the probation evaluation.",
-        6: "reporting manager submitted the probation evaluation.",
-    },
+    # The single-stage self-assessment, as it was sent before the merge.
+    FormTrigger.PROBATION_SELF: {3: "self-assessment form submitted."},
+    FormTrigger.PROBATION_MANAGER: dict(_MANAGER_DONE),
     FormTrigger.PROBATION_HR: {
         8: "HR probation review form submitted.",
         9: "HR probation review form submitted.",
@@ -90,7 +84,34 @@ _ON_SUBMIT: dict[FormTrigger, dict[int, str]] = {
 }
 
 
+def steps_on_submit(assignment: FormAssignment) -> dict[int, str]:
+    """Which steps a FINISHED probation form settles.
+
+    Keyed on the stage, not the trigger alone. A merged review ends with the
+    MANAGER's half, and the employee's step was already settled at the
+    handover - listing step 3 here as well would re-stamp it with the
+    manager's timestamp, so the checklist would claim the employee wrote their
+    self-assessment at the moment their manager finished reading it.
+    `mark_done_by_system` refreshes its own earlier ticks, so this is not
+    hypothetical.
+    """
+    if assignment.trigger is FormTrigger.PROBATION_SELF and assignment.stage is not None:
+        return dict(_MANAGER_DONE)
+    return _ON_SUBMIT[assignment.trigger]
+
+
 # --- pure rules (unit-tested directly) ------------------------------------ #
+# The review itself: the employee's account of their probation and their
+# manager's assessment of it. The people running the review may read these.
+#
+# PROBATION_HR is deliberately NOT here. It is HR's own feedback on the same
+# person - a different judgement, kept to HR and admins, and widening it to
+# the reporting line is a privacy change nobody asked for.
+OVERSEEABLE_PROBATION = frozenset(
+    {FormTrigger.PROBATION_SELF, FormTrigger.PROBATION_MANAGER}
+)
+
+
 def is_probation_form(trigger: FormTrigger) -> bool:
     return trigger in PROBATION_TRIGGERS
 
@@ -226,7 +247,7 @@ class ProbationFormLink:
     async def on_submitted(self, assignment: FormAssignment) -> None:
         if assignment.subject_id is None or not is_probation_form(assignment.trigger):
             return
-        await self._tick(assignment.subject_id, _ON_SUBMIT[assignment.trigger])
+        await self._tick(assignment.subject_id, steps_on_submit(assignment))
 
     async def _tick(self, employee_id: uuid.UUID, steps: dict[int, str]) -> None:
         await self._checklist.mark_done_by_system(employee_id, steps, datetime.now(UTC))

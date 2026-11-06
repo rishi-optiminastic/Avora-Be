@@ -72,7 +72,7 @@ def _one_published(bind: sa.Connection, trigger: str) -> sa.Row[tuple[str, str]]
     rows = bind.execute(
         sa.text(
             "SELECT id, title FROM forms"
-            " WHERE trigger = :trigger AND status = :status"
+            " WHERE trigger = CAST(:trigger AS formtrigger) AND status = CAST(:status AS formstatus)"
             " ORDER BY created_at"
         ),
         {"trigger": trigger, "status": _PUBLISHED},
@@ -101,12 +101,10 @@ def upgrade() -> None:
     #    `uq_form_fields_position` is on (form_id, position), so they are
     #    shifted clear of the positions already in use rather than renumbered
     #    from scratch - which keeps the order HR wrote them in.
-    offset = (
-        bind.execute(
-            sa.text("SELECT COALESCE(MAX(position), -1) + 1 FROM form_fields WHERE form_id = :f"),
-            {"f": employee_form.id},
-        ).scalar_one()
-    )
+    offset = bind.execute(
+        sa.text("SELECT COALESCE(MAX(position), -1) + 1 FROM form_fields WHERE form_id = :f"),
+        {"f": employee_form.id},
+    ).scalar_one()
     bind.execute(
         sa.text(
             "UPDATE form_fields"
@@ -116,25 +114,44 @@ def upgrade() -> None:
         {"to_form": employee_form.id, "from_form": manager_form.id, "offset": offset},
     )
 
-    # 3. The form is no longer only a self-assessment.
+    # 3. Assignments already in flight were created when the form had no
+    #    stages, so they carry stage = NULL - and NULL does not mean "the
+    #    first stage", it means "this form has no stages". `fields_for_stage`
+    #    returns EVERY field for it and `next_stage` returns None, so the
+    #    probationer would be handed all 37 questions, their manager's half
+    #    included, and submitting would finish the whole review with no
+    #    handover and no manager involved at all.
+    #
+    #    Only PENDING ones. A submitted assignment is history: it was answered
+    #    under the single-stage form and its stage must stay null to read back
+    #    the way it was filled in.
+    bind.execute(
+        sa.text(
+            "UPDATE form_assignments SET stage = 'EMPLOYEE'"
+            " WHERE form_id = :form_id AND status = CAST(:pending AS assignmentstatus) AND stage IS NULL"
+        ),
+        {"form_id": employee_form.id, "pending": _PENDING},
+    )
+
+    # 4. The form is no longer only a self-assessment.
     bind.execute(
         sa.text("UPDATE forms SET title = :title WHERE id = :id"),
         {"title": _MERGED_TITLE, "id": employee_form.id},
     )
 
-    # 4. Stop the empty manager form going out. Archived, never deleted: its
+    # 5. Stop the empty manager form going out. Archived, never deleted: its
     #    old assignments and answers stay readable.
     bind.execute(
-        sa.text("UPDATE forms SET status = :archived WHERE id = :id"),
+        sa.text("UPDATE forms SET status = CAST(:archived AS formstatus) WHERE id = :id"),
         {"archived": _ARCHIVED, "id": manager_form.id},
     )
 
-    # 5. Cancel manager assignments nobody has answered. One that HAS answers
+    # 6. Cancel manager assignments nobody has answered. One that HAS answers
     #    is left exactly as it is - a half-finished review is still a record.
     bind.execute(
         sa.text(
-            "UPDATE form_assignments SET status = :cancelled"
-            " WHERE form_id = :form_id AND status IN (:pending, :needs_manager)"
+            "UPDATE form_assignments SET status = CAST(:cancelled AS assignmentstatus)"
+            " WHERE form_id = :form_id AND status IN (CAST(:pending AS assignmentstatus), CAST(:needs_manager AS assignmentstatus))"
             " AND NOT EXISTS ("
             "   SELECT 1 FROM form_responses r WHERE r.assignment_id = form_assignments.id"
             " )"
@@ -159,7 +176,7 @@ def downgrade() -> None:
     employee_form = _one_published(bind, _SELF)
     rows = bind.execute(
         sa.text(
-            "SELECT id FROM forms WHERE trigger = :trigger AND status = :status ORDER BY created_at"
+            "SELECT id FROM forms WHERE trigger = CAST(:trigger AS formtrigger) AND status = CAST(:status AS formstatus) ORDER BY created_at"
         ),
         {"trigger": _MANAGER, "status": _ARCHIVED},
     ).all()
@@ -167,15 +184,13 @@ def downgrade() -> None:
         return
     manager_form_id = rows[0].id
 
-    offset = (
-        bind.execute(
-            sa.text(
-                "SELECT COALESCE(MIN(position), 0) FROM form_fields"
-                " WHERE form_id = :f AND stage = 'MANAGER'"
-            ),
-            {"f": employee_form.id},
-        ).scalar_one()
-    )
+    offset = bind.execute(
+        sa.text(
+            "SELECT COALESCE(MIN(position), 0) FROM form_fields"
+            " WHERE form_id = :f AND stage = 'MANAGER'"
+        ),
+        {"f": employee_form.id},
+    ).scalar_one()
     bind.execute(
         sa.text(
             "UPDATE form_fields"
@@ -189,7 +204,14 @@ def downgrade() -> None:
         {"f": employee_form.id},
     )
     bind.execute(
-        sa.text("UPDATE forms SET status = :published WHERE id = :id"),
+        sa.text(
+            "UPDATE form_assignments SET stage = NULL, handed_over_at = NULL"
+            " WHERE form_id = :form_id AND status = CAST(:pending AS assignmentstatus)"
+        ),
+        {"form_id": employee_form.id, "pending": _PENDING},
+    )
+    bind.execute(
+        sa.text("UPDATE forms SET status = CAST(:published AS formstatus) WHERE id = :id"),
         {"published": _PUBLISHED, "id": manager_form_id},
     )
     bind.execute(

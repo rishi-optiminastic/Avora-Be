@@ -10,6 +10,7 @@ most email clients can't load a custom web font.
 
 from __future__ import annotations
 
+import re
 from datetime import date
 from html import escape
 from typing import TYPE_CHECKING
@@ -17,6 +18,8 @@ from typing import TYPE_CHECKING
 from app.core.probation_letter_pdf import COMPANY_LEGAL_NAME
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping, Sequence
+
     from app.schemas.eod import EodDepartmentDigest, EodDepartmentMember, EodDraftContent
 
 _VIOLET = "#5a48e0"
@@ -57,7 +60,21 @@ def _money(minor: int, currency: str) -> str:
 # on a phone without zooming. A template with a real table (the department
 # roster) asks for `_WIDE` so its columns are not squeezed into one another.
 _WIDTH = 460
-_WIDTH_WIDE = 560
+_WIDTH_WIDE = 600
+
+# Phone-width adjustments. Every Avora email is fluid already (percentage
+# widths, no fixed pixel columns); this trims the chrome so a 360px screen
+# spends its width on the content rather than on padding. Gmail, Apple Mail and
+# Outlook mobile honour an embedded media query; a client that strips <style>
+# still gets the fluid layout, just with desktop padding.
+_RESPONSIVE_CSS = """\
+@media only screen and (max-width: 600px) {
+  .shell { padding: 22px 12px !important; }
+  .h1 { font-size: 22px !important; }
+  .hero { font-size: 34px !important; }
+  .tile { padding: 12px 4px !important; }
+  .tile-value { font-size: 20px !important; }
+}"""
 
 
 def _layout(
@@ -67,14 +84,24 @@ def _layout(
     footer: str = _INVITE_FOOTER,
     max_width: int = _WIDTH,
 ) -> str:
-    """Wrap an email body in the shared Avora shell — no card, on paper."""
+    """Wrap an email body in the shared Avora shell — no card, on paper.
+
+    The head carries a viewport meta and one media query: without the meta a
+    phone client lays the mail out at desktop width and scales it down until the
+    type is unreadable, which is exactly what the department rollup used to do."""
     return f"""\
 <!doctype html>
 <html>
-  <body style="margin:0;padding:0;background:{_PAPER};font-family:{_SANS};-webkit-font-smoothing:antialiased;">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="x-apple-disable-message-reformatting">
+    <style>{_RESPONSIVE_CSS}</style>
+  </head>
+  <body style="margin:0;padding:0;background:{_PAPER};font-family:{_SANS};-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%;">
     <span style="display:none;max-height:0;overflow:hidden;opacity:0;">{preheader}</span>
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{_PAPER};padding:44px 20px;">
-      <tr><td align="center">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{_PAPER};">
+      <tr><td align="center" class="shell" style="padding:44px 20px;">
         <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:{max_width}px;">
           <tr><td style="padding-bottom:22px;border-bottom:1px solid {_LINE};">
             <span style="font-family:{_SERIF};font-size:24px;font-weight:600;color:{_INK};letter-spacing:-0.01em;">Avora</span>
@@ -603,10 +630,10 @@ def _stat_cell(value: str, label: str, *, accent: bool = False) -> str:
     value_color = _VIOLET if accent else _INK
     return (
         f'<td width="33.33%" valign="top" style="padding:0 4px;">'
-        f'<div style="background:{bg};border:1px solid {_LINE};border-radius:10px;'
+        f'<div class="tile" style="background:{bg};border:1px solid {_LINE};border-radius:10px;'
         f'padding:14px 8px;text-align:center;">'
-        f'<div style="font-family:{_SERIF};font-size:24px;font-weight:600;line-height:1;'
-        f'color:{value_color};font-variant-numeric:tabular-nums;">{value}</div>'
+        f'<div class="tile-value" style="font-family:{_SERIF};font-size:24px;font-weight:600;'
+        f'line-height:1;color:{value_color};font-variant-numeric:tabular-nums;">{value}</div>'
         f'<div style="font-size:10px;font-weight:600;letter-spacing:0.1em;'
         f'text-transform:uppercase;color:{_MUTED};margin-top:7px;">{label}</div>'
         f"</div></td>"
@@ -624,19 +651,32 @@ def _stat_row(worked_minutes: int, active_pct: int, tasks_done: int) -> str:
     )
 
 
-def _active_bar(active_pct: int, worked_minutes: int, active_minutes: int) -> str:
-    """A slim violet progress bar for active share — email-safe (table cells)."""
-    pct = max(0, min(100, active_pct))
-    rest = max(0, 100 - pct)
+def _meter(pct: int, color: str, *, height: int = 8) -> str:
+    """A slim proportion bar - table cells, so Outlook draws it too."""
+    pct = max(0, min(100, pct))
+    rest = 100 - pct
     fill = (
-        f'<td style="width:{pct}%;background:{_VIOLET};height:8px;'
+        f'<td style="width:{pct}%;background:{color};height:{height}px;'
         f'border-radius:6px;font-size:0;line-height:0;">&nbsp;</td>'
+        if pct
+        else ""
     )
-    gap = f'<td style="width:{rest}%;font-size:0;line-height:0;">&nbsp;</td>' if rest else ""
+    gap = (
+        f'<td style="width:{rest}%;height:{height}px;font-size:0;line-height:0;">&nbsp;</td>'
+        if rest
+        else ""
+    )
     return (
-        '<div style="margin:8px 0 18px;">'
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
         f'style="background:{_VIOLET_SOFT};border-radius:6px;"><tr>{fill}{gap}</tr></table>'
+    )
+
+
+def _active_bar(active_pct: int, worked_minutes: int, active_minutes: int) -> str:
+    """The active-share meter with its caption, under the stat tiles."""
+    return (
+        '<div style="margin:8px 0 18px;">'
+        f"{_meter(active_pct, _VIOLET)}"
         f'<div style="font-size:11px;color:{_MUTED};margin-top:6px;">'
         f"{active_minutes} min actively engaged of {worked_minutes} min on the machine"
         "</div></div>"
@@ -731,7 +771,7 @@ def eod_report_email(
     )
     content = f"""\
 {_eyebrow(f"End of day · {escape(day)}")}
-<h1 style="margin:8px 0 0;font-family:{_SERIF};font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
+<h1 class="h1" style="margin:8px 0 0;font-family:{_SERIF};font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
   {escape(employee_name)}
 </h1>
 {_stat_row(worked_minutes, active_pct, tasks_done)}
@@ -748,7 +788,7 @@ def eod_report_email(
     )
 
 
-# -- EOD department rollup (to admins) -------------------------------------- #
+# -- EOD admin rollup (every department, one email) ------------------------- #
 # Submission-rate bands. The same thresholds and hex values the dashboard uses
 # (fe/.../department-eod `bandColor`), so a department that reads amber on screen
 # reads amber in the inbox. A flat brand colour here made 0% and 100% look
@@ -779,6 +819,19 @@ _COVERAGE_EMAIL: dict[str, tuple[str, str, str]] = {
     "failed": ("#fbe9ec", "#7a2424", "Failed"),
     "missing": ("#efedf4", _MUTED, "No report"),
 }
+# Healthy → attention, left to right: the order the coverage bar paints in.
+_COVERAGE_ORDER = ("submitted", "pending", "failed", "absent", "missing")
+# People who could have reported and have not. Absent is not owed: someone who
+# was not at work legitimately has no report, and dunning them for it is how a
+# tool starts feeling like surveillance rather than a summary. Mirrors the
+# dashboard's "Still owed" row (fe/.../team-eod `_digest.tsx`).
+_OWED_BANDS = ("pending", "missing")
+# How many owed names to print before summarising the rest. Across a whole
+# company the list can run long, and past this it stops being read.
+_MAX_OWED_NAMED = 12
+# How many shipped titles to name per person before summarising the rest. A
+# twenty-task day must not turn one roster row into half the email.
+_MAX_TASKS_SHOWN = 3
 
 
 def _coverage_pill(coverage: str) -> str:
@@ -789,22 +842,25 @@ def _coverage_pill(coverage: str) -> str:
     )
 
 
-def _coverage_bar(digest: EodDepartmentDigest) -> str:
-    """Proportion bar over the department, healthy → attention, left to right.
-    Table cells rather than divs so Outlook renders it."""
-    bands = (
-        ("submitted", digest.submitted),
-        ("pending", digest.pending),
-        ("failed", digest.failed),
-        ("absent", digest.absent),
-        ("missing", digest.missing),
-    )
-    total = digest.member_count or 1
+def _coverage_counts(rollups: Iterable[EodDepartmentDigest]) -> dict[str, int]:
+    """Per-band head counts summed over `rollups` - one department, or every
+    department for the company-wide bar."""
+    counts = dict.fromkeys(_COVERAGE_ORDER, 0)
+    for rollup in rollups:
+        for band in _COVERAGE_ORDER:
+            counts[band] += int(getattr(rollup, band))
+    return counts
+
+
+def _coverage_bar(counts: Mapping[str, int], member_count: int) -> str:
+    """Proportion bar over the people counted, healthy → attention, left to
+    right. Table cells rather than divs so Outlook renders it."""
+    total = member_count or 1
     cells = "".join(
-        f'<td style="width:{count / total * 100:.4f}%;background:{_COVERAGE_EMAIL[band][0]};'
+        f'<td style="width:{counts[band] / total * 100:.4f}%;background:{_COVERAGE_EMAIL[band][0]};'
         f'height:8px;font-size:0;line-height:0;">&nbsp;</td>'
-        for band, count in bands
-        if count > 0
+        for band in _COVERAGE_ORDER
+        if counts[band] > 0
     )
     if not cells:
         cells = '<td style="width:100%;background:#efedf4;height:8px;font-size:0;line-height:0;">&nbsp;</td>'
@@ -812,9 +868,9 @@ def _coverage_bar(digest: EodDepartmentDigest) -> str:
         f'<span style="display:inline-block;margin:0 12px 0 0;font-size:11px;color:{_MUTED};">'
         f'<span style="display:inline-block;width:8px;height:8px;border-radius:8px;'
         f'background:{_COVERAGE_EMAIL[band][0]};"></span> '
-        f'<strong style="color:{_INK};">{count}</strong> {_COVERAGE_EMAIL[band][2].lower()}</span>'
-        for band, count in bands
-        if count > 0
+        f'<strong style="color:{_INK};">{counts[band]}</strong> {_COVERAGE_EMAIL[band][2].lower()}</span>'
+        for band in _COVERAGE_ORDER
+        if counts[band] > 0
     )
     return (
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
@@ -823,80 +879,86 @@ def _coverage_bar(digest: EodDepartmentDigest) -> str:
     )
 
 
-def _workload_line(digest: EodDepartmentDigest) -> str:
-    """The department's standing workload, under the effort tiles.
+def _hero(pct: int, caption: str) -> str:
+    """The one number you can read across the room, and what it counts."""
+    return (
+        '<div style="margin:14px 0 4px;">'
+        f'<span class="hero" style="font-family:{_SERIF};font-size:40px;font-weight:600;'
+        f"line-height:1;color:{_band_color(pct)};font-variant-numeric:tabular-nums;"
+        f'">{pct}%</span>'
+        f'<span style="font-size:12.5px;color:{_MUTED};margin-left:8px;">{caption}</span></div>'
+    )
+
+
+def _effort_block(
+    *, worked_minutes: int, active_minutes: int, tasks_done: int, submitted: int
+) -> str:
+    """The three-up effort tiles, or a plain note when there is no effort to show.
+
+    A day where nobody reported would otherwise render "0m worked, 0% active,
+    0 done" - three measurements of zero, which reads as "they sat there doing
+    nothing" rather than "no reports came in". The roster says `-` on every
+    row; the headline has to agree.
+    """
+    if worked_minutes == 0 and submitted == 0:
+        return (
+            f'<div style="margin:18px 0 4px;padding:14px 16px;background:{_PAPER};'
+            f"border:1px solid {_LINE};border-radius:10px;font-size:13px;"
+            f'color:{_MUTED};">No reports came in, so there is nothing to total yet.</div>'
+        )
+    return _stat_row(worked_minutes, _active_pct(active_minutes, worked_minutes), tasks_done)
+
+
+def _overdue_note(overdue: int) -> str:
+    return (
+        f', <span style="color:{_BAND_POOR};font-weight:600;">{overdue} overdue</span>'
+        if overdue
+        else ""
+    )
+
+
+def _workload_line(open_tasks: int, overdue_tasks: int, scope: str) -> str:
+    """The standing workload, under the effort tiles.
 
     The tiles answer "what did today produce"; this answers "what is still
     waiting", which is the question a rollup of finished work otherwise leaves
-    open.
+    open. `scope` names whose: "the team" or "the company".
     """
-    if not digest.open_tasks:
+    if not open_tasks:
         return ""
-    late = (
-        f' &middot; <span style="color:{_BAND_POOR};font-weight:600;">'
-        f"{digest.overdue_tasks} overdue</span>"
-        if digest.overdue_tasks
-        else ""
-    )
     return (
         f'<div style="margin:10px 0 0;font-size:12.5px;color:{_MUTED};">'
-        f'<span style="font-weight:600;color:{_INK};">{digest.open_tasks}</span> '
-        f"still open across the team{late}</div>"
+        f'<span style="font-weight:600;color:{_INK};">{open_tasks}</span> '
+        f"still open across {scope}{_overdue_note(overdue_tasks)}</div>"
     )
 
 
-def _still_owed(digest: EodDepartmentDigest) -> str:
+def _still_owed(members: Iterable[EodDepartmentMember]) -> str:
     """The people who still owe a report, named.
 
     Resolves the question the roster alone leaves open: in a department of six
-    you can spot the gaps, in one of twenty you cannot. Mirrors the dashboard's
-    "Still owed" row (fe/.../team-eod `_digest.tsx`), including which bands count
-    - PENDING and MISSING only. Absent is not owed: someone who was not at work
-    legitimately has no report, and dunning them for it is how a tool starts
-    feeling like surveillance rather than a summary.
-
-    Deliberately a summary line, not a re-sort of the roster: ordering people by
-    who failed to report turns a daily digest into a leaderboard of shame, and
-    alphabetical stays predictable week to week.
+    you can spot the gaps, in a company of forty you cannot. Deliberately a
+    summary line, not a re-sort of the roster: ordering people by who failed to
+    report turns a daily digest into a leaderboard of shame, and alphabetical
+    stays predictable week to week.
     """
-    owed = [m.name for m in digest.members if m.coverage in ("pending", "missing")]
+    owed = [m.name for m in members if m.coverage in _OWED_BANDS]
     if not owed:
         return ""
+    named = ", ".join(escape(n) for n in owed[:_MAX_OWED_NAMED])
+    rest = len(owed) - _MAX_OWED_NAMED
+    if rest > 0:
+        named += f" and {rest} more"
     return (
         f'<div style="margin:10px 0 0;padding:9px 12px;background:{_PAPER};'
         f'border-radius:8px;font-size:12px;color:{_MUTED};">'
-        f'<span style="font-weight:600;color:{_INK};">Still owed</span> &middot; '
-        f"{', '.join(escape(n) for n in owed)}</div>"
+        f'<span style="font-weight:600;color:{_INK};">Still owed</span> &middot; {named}</div>'
     )
-
-
-def _roster_head(label: str) -> str:
-    """A right-aligned numeric column header."""
-    return (
-        f'<td style="padding:0 0 5px 12px;font-size:9.5px;font-weight:600;'
-        f"letter-spacing:0.1em;text-transform:uppercase;color:{_MUTED};"
-        f'text-align:right;white-space:nowrap;">{label}</td>'
-    )
-
-
-def _roster_cell(value: str) -> str:
-    """A right-aligned numeric cell. Tabular figures so the column lines up."""
-    return (
-        f'<td style="padding:9px 0 9px 12px;border-top:1px solid {_LINE};'
-        f"text-align:right;font-size:12.5px;color:{_INK};white-space:nowrap;"
-        f'vertical-align:top;font-variant-numeric:tabular-nums;">{value}</td>'
-    )
-
-
-# How many shipped titles to name per person before summarising the rest. A
-# twenty-task day must not turn one roster row into half the email.
-_MAX_TASKS_SHOWN = 3
 
 
 def _role_label(job_title: str | None) -> str:
     """The person's designation, muted, beside their name. Reading across six
-    departments an admin needs to know who someone is; the field was already on
-    the schema and rendered nowhere."""
+    departments an admin needs to know who someone is."""
     if not job_title:
         return ""
     return (
@@ -920,159 +982,199 @@ def _shipped_line(tasks: list[str]) -> str:
     )
 
 
-def _open_cell(member: EodDepartmentMember) -> str:
-    """What is still on this person's plate, with the late share called out.
-
-    Separate from "Done" on purpose: that counts what the day closed, this
-    counts what it left open. A department can ship well and still be falling
-    behind, and only the two numbers side by side show it.
-    """
-    if not member.tasks_open:
-        return "&ndash;"
-    if not member.tasks_overdue:
-        return str(member.tasks_open)
+def _figures_line(parts: list[str], margin: str) -> str:
     return (
-        f'{member.tasks_open}<span style="color:{_BAND_POOR};font-size:11px;">'
-        f" &#9679;{member.tasks_overdue}</span>"
+        f'<div style="margin:{margin};font-size:11.5px;line-height:1.45;color:{_MUTED};'
+        f'font-variant-numeric:tabular-nums;">{" &middot; ".join(parts)}</div>'
+        if parts
+        else ""
     )
 
 
-def _roster_rows(digest: EodDepartmentDigest) -> str:
-    """One line per person: name, coverage, hours on the machine, active share
-    and tasks shipped.
+def _member_figures(member: EodDepartmentMember) -> str:
+    """One muted line of the day's figures under a person's name.
 
-    The active share gets its OWN labelled column rather than riding along inside
-    the hours cell: an unlabelled "82%" sitting next to "8.2h" is a number the
-    reader has to guess at. A dash wherever there is nothing to show - never
-    "0h", which reads as a measurement rather than an absence.
+    This replaces the six-column table the rollup used to be. At phone width
+    those columns never fit, so the client scaled the whole email down until
+    nothing in it could be read; a line of labelled figures wraps instead of
+    shrinking. Nothing is printed for a measurement that was not taken - never
+    "0h", which reads as a measurement rather than an absence. Open and overdue
+    come from the task board, not the report, so they show for everyone.
     """
+    parts: list[str] = []
+    if member.worked_minutes > 0:
+        parts.append(f"{_fmt_hours(member.worked_minutes)} on the machine")
+        parts.append(f"{member.active_pct}% active")
+    if member.tasks_done:
+        parts.append(f"{member.tasks_done} done")
+    if member.tasks_open:
+        parts.append(f"{member.tasks_open} open{_overdue_note(member.tasks_overdue)}")
+    return _figures_line(parts, "3px 0 0")
+
+
+def _roster_rows(members: Sequence[EodDepartmentMember]) -> str:
+    """One row per person: name and designation with the coverage pill beside
+    them, the day's figures and what they shipped underneath. Two cells only,
+    so the row keeps its shape at 320px."""
     rows = ""
-    for member in digest.members:
-        reported = member.worked_minutes > 0
+    for member in members:
         flag = (
             f' <span style="color:{_AMBER};font-weight:600;">&#9888;{member.blockers}</span>'
             if member.blockers
             else ""
         )
         rows += (
-            f'<tr><td style="padding:9px 14px 9px 0;border-top:1px solid {_LINE};'
+            f'<tr><td style="padding:9px 10px 9px 0;border-top:1px solid {_LINE};'
             f'font-size:13px;color:{_INK};vertical-align:top;">'
-            f"{escape(member.name)}{_role_label(member.job_title)}{flag}"
-            f"{_shipped_line(member.tasks)}</td>"
-            f'<td style="padding:9px 0 9px 10px;border-top:1px solid {_LINE};'
-            f'text-align:right;white-space:nowrap;vertical-align:top;">'
-            f"{_coverage_pill(member.coverage)}</td>"
-            + _roster_cell(_fmt_hours(member.worked_minutes) if reported else "&ndash;")
-            + _roster_cell(f"{member.active_pct}%" if reported else "&ndash;")
-            + _roster_cell(str(member.tasks_done) if member.tasks_done else "&ndash;")
-            + _roster_cell(_open_cell(member))
-            + "</tr>"
+            f'<span style="font-weight:600;">{escape(member.name)}</span>'
+            f"{_role_label(member.job_title)}{flag}"
+            f"{_member_figures(member)}{_shipped_line(member.tasks)}</td>"
+            f'<td style="padding:9px 0;border-top:1px solid {_LINE};text-align:right;'
+            f'white-space:nowrap;vertical-align:top;">{_coverage_pill(member.coverage)}</td></tr>'
         )
-    header = (
-        f'<tr><td style="padding:0 0 5px;font-size:9.5px;font-weight:600;'
-        f'letter-spacing:0.1em;text-transform:uppercase;color:{_MUTED};">Who</td>'
-        '<td style="padding:0 0 5px;"></td>'
-        + _roster_head("Hours")
-        + _roster_head("Active")
-        + _roster_head("Done")
-        + _roster_head("Open")
-        + "</tr>"
-    )
     return (
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-        f'style="margin:0 0 18px;">{header}{rows}</table>'
+        f'style="margin:6px 0 0;">{rows}</table>'
     )
 
 
-def _effort_block(digest: EodDepartmentDigest) -> str:
-    """The three-up effort tiles, or a plain note when there is no effort to show.
+def _department_anchor(department: str) -> str:
+    """A stable id for a department's section, so the index can link down."""
+    return "dept-" + re.sub(r"[^a-z0-9]+", "-", department.lower()).strip("-")
 
-    A department where nobody reported would otherwise render "0m worked, 0%
-    active, 0 done" - three measurements of zero, which reads as "they sat there
-    doing nothing" rather than "no reports came in". Its own roster says `-` on
-    every row; the headline has to agree.
-    """
-    if digest.totals.worked_minutes == 0 and digest.submitted == 0:
-        return (
-            f'<div style="margin:18px 0 4px;padding:14px 16px;background:{_PAPER};'
-            f"border:1px solid {_LINE};border-radius:10px;font-size:13px;"
-            f'color:{_MUTED};">No reports came in, so there is nothing to total '
-            "for this department yet.</div>"
+
+def _department_index(digests: Sequence[EodDepartmentDigest]) -> str:
+    """Every department on one line: name, a meter, the figure. It answers
+    "which department do I need to look at" before any roster is read."""
+    rows = ""
+    for digest in digests:
+        pct = round(digest.submission_rate * 100)
+        rows += (
+            f'<tr><td style="padding:7px 10px 7px 0;border-top:1px solid {_LINE};font-size:13px;">'
+            f'<a href="#{_department_anchor(digest.department)}" style="color:{_INK};'
+            f'font-weight:600;text-decoration:none;">{escape(digest.department)}</a></td>'
+            f'<td width="34%" style="padding:7px 10px 7px 0;border-top:1px solid {_LINE};'
+            f'vertical-align:middle;">{_meter(pct, _band_color(pct), height=6)}</td>'
+            f'<td style="padding:7px 0;border-top:1px solid {_LINE};text-align:right;'
+            f"white-space:nowrap;font-size:12.5px;color:{_MUTED};"
+            f'font-variant-numeric:tabular-nums;">'
+            f'<span style="font-weight:600;color:{_band_color(pct)};">{pct}%</span> '
+            f"{digest.submitted}/{digest.member_count}</td></tr>"
         )
-    return _stat_row(
-        digest.totals.worked_minutes,
-        _active_pct(digest.totals.active_minutes, digest.totals.worked_minutes),
-        digest.totals.tasks_done,
+    return (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        f'style="margin:0 0 6px;">{rows}</table>'
     )
 
 
-def eod_department_digest_email(
-    *, digest: EodDepartmentDigest, dashboard_url: str | None = None
+def _department_figures(digest: EodDepartmentDigest) -> str:
+    """One muted line under a department's heading: what the day produced and
+    what the department still carries. Says so in words when nobody reported."""
+    totals = digest.totals
+    parts: list[str] = []
+    if totals.worked_minutes > 0:
+        parts.append(f"{_fmt_hours(totals.worked_minutes)} on machines")
+        parts.append(f"{_active_pct(totals.active_minutes, totals.worked_minutes)}% active")
+    elif digest.submitted == 0:
+        parts.append("No reports came in")
+    if totals.tasks_done:
+        parts.append(f"{totals.tasks_done} done")
+    if digest.open_tasks:
+        parts.append(f"{digest.open_tasks} open{_overdue_note(digest.overdue_tasks)}")
+    return _figures_line(parts, "4px 0 12px")
+
+
+def _department_block(digest: EodDepartmentDigest) -> str:
+    """One department's section: heading with its figure, the coverage bar, who
+    still owes, the roster, and the department's blockers."""
+    pct = round(digest.submission_rate * 100)
+    blockers = _blocker_block([escape(b) for b in digest.blockers])
+    blockers_html = f'<div style="margin:14px 0 0;">{blockers}</div>' if blockers else ""
+    return (
+        f'<div id="{_department_anchor(digest.department)}" '
+        f'style="margin:26px 0 0;padding:18px 0 0;border-top:2px solid {_LINE};">'
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>'
+        f'<td style="vertical-align:baseline;"><h2 style="margin:0;font-family:{_SERIF};'
+        f'font-size:19px;line-height:1.2;font-weight:600;color:{_INK};">'
+        f"{escape(digest.department)}</h2></td>"
+        f'<td style="vertical-align:baseline;text-align:right;white-space:nowrap;">'
+        f'<span style="font-family:{_SERIF};font-size:22px;font-weight:600;'
+        f'color:{_band_color(pct)};font-variant-numeric:tabular-nums;">{pct}%</span>'
+        f'<span style="font-size:12px;color:{_MUTED};margin-left:6px;">'
+        f"{digest.submitted} of {digest.member_count} reported</span></td>"
+        "</tr></table>"
+        f"{_department_figures(digest)}"
+        f"{_coverage_bar(_coverage_counts([digest]), digest.member_count)}"
+        f"{_still_owed(digest.members)}"
+        f"{_roster_rows(digest.members)}"
+        f"{blockers_html}"
+        "</div>"
+    )
+
+
+def eod_admin_digest_email(
+    *,
+    digests: Sequence[EodDepartmentDigest],
+    report_date: str,
+    dashboard_url: str | None = None,
 ) -> tuple[str, str]:
-    """Render the (subject, html) per-department End-of-Day rollup sent to admins.
+    """Render the (subject, html) end-of-day rollup sent to the admins: the whole
+    company first, then a section per department.
+
+    One email where there used to be one per department. Ten near-identical
+    messages landing at six o'clock answered "how did the day go" no faster
+    than one, and the inbox count alone read as noise; the department sections
+    are all still here, after an index that says which of them needs opening.
 
     Deliberately carries NO narratives: the anchor submission rate, the day's
-    summed effort, a coverage bar, the roster with each person's hours and tasks,
-    and the department's blockers. A person's own account of their day goes to
-    their reporting manager only (see EodService's module docstring), so there is
-    no `summary` field anywhere in here to leak one.
+    summed effort, a coverage bar, each roster with its figures, and each
+    department's blockers. A person's own account of their day goes to their
+    reporting manager only (see EodService's module docstring), so there is no
+    `summary` field anywhere in here to leak one.
     """
-    department = escape(digest.department)
-    single_day = digest.from_date == digest.to_date
-    # A multi-day rollup must say so in BOTH places. Naming only `to_date` made a
-    # seven-day digest look like one Tuesday's numbers, which is the kind of
-    # mislabel someone acts on.
-    date_label = (
-        _day_label(digest.to_date)
-        if single_day
-        else f"{_day_label(digest.from_date)} &rarr; {_day_label(digest.to_date)}"
-    )
-    subject_date = (
-        _day_label(digest.to_date)
-        if single_day
-        else f"{_day_label(digest.from_date)} - {_day_label(digest.to_date)}"
-    )
-    pct = round(digest.submission_rate * 100)
-    subject = (
-        f"EOD · {digest.department} · {digest.submitted}/{digest.member_count} reported · "
-        f"{subject_date}"
-    )
-    blockers_html = _blocker_block([escape(b) for b in digest.blockers]) if digest.blockers else ""
+    day = _day_label(report_date)
+    member_count = sum(d.member_count for d in digests)
+    submitted = sum(d.submitted for d in digests)
+    # Per day, the same basis every rollup uses (`EodRollup.submission_rate`),
+    # so the company figure and the department figures can never disagree.
+    possible = sum(d.member_count * d.working_days for d in digests)
+    pct = round(sum(d.submitted_days for d in digests) / possible * 100) if possible else 0
+    worked = sum(d.totals.worked_minutes for d in digests)
+    active = sum(d.totals.active_minutes for d in digests)
+    done = sum(d.totals.tasks_done for d in digests)
+    open_tasks = sum(d.open_tasks for d in digests)
+    overdue = sum(d.overdue_tasks for d in digests)
+    everyone = [m for d in digests for m in d.members]
+    departments = f"{len(digests)} department{'s' if len(digests) != 1 else ''}"
+
+    subject = f"EOD · {day} · {submitted}/{member_count} reported"
     # Every other Avora email offers a way back into the product; without this
     # the rollup is a dead end - you can see a department is behind and have
     # nowhere to click.
     open_html = (
-        f'<p style="margin:4px 0 0;">{_button("Open in Avora", dashboard_url)}</p>'
+        f'<p style="margin:22px 0 0;">{_button("Open in Avora", dashboard_url)}</p>'
         if dashboard_url
         else ""
     )
     content = f"""\
-{_eyebrow(f"Department rollup &middot; {date_label}")}
-<h1 style="margin:8px 0 0;font-family:{_SERIF};font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
-  {department}
+{_eyebrow(f"End of day &middot; {escape(day)}")}
+<h1 class="h1" style="margin:8px 0 0;font-family:{_SERIF};font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
+  All departments
 </h1>
-<div style="margin:14px 0 4px;">
-  <span style="font-family:{_SERIF};font-size:40px;font-weight:600;line-height:1;color:{_band_color(pct)};font-variant-numeric:tabular-nums;">{pct}%</span>
-  <span style="font-size:12.5px;color:{_MUTED};margin-left:8px;">
-    {digest.submitted} of {digest.member_count} reported
-  </span>
-</div>
-{_effort_block(digest)}
-{_workload_line(digest)}
-<div style="margin:18px 0 16px;">{_section_label("Coverage")}{_coverage_bar(digest)}{_still_owed(digest)}</div>
-{_section_label("Roster")}
-{_roster_rows(digest)}
-{blockers_html}
+{_hero(pct, f"{submitted} of {member_count} reported &middot; {departments}")}
+{_effort_block(worked_minutes=worked, active_minutes=active, tasks_done=done, submitted=submitted)}
+{_workload_line(open_tasks, overdue, "the company")}
+<div style="margin:18px 0 16px;">{_section_label("Coverage")}{_coverage_bar(_coverage_counts(digests), member_count)}{_still_owed(everyone)}</div>
+{_section_label("Departments")}
+{_department_index(digests)}
+{"".join(_department_block(d) for d in digests)}
 {open_html}"""
     return subject, _layout(
-        preheader=(
-            f"{digest.department}: {digest.submitted} of {digest.member_count} reported, "
-            f"{digest.totals.tasks_done} tasks shipped"
-        ),
+        preheader=f"{departments} · {submitted} of {member_count} reported · {done} tasks shipped",
         content_html=content,
         footer=_ACTIVITY_FOOTER,
-        # Wider than the default shell: this is the one EOD email with a real
-        # five-column table in it, and at 460px the numbers crowd each other.
+        # Wider than the default shell: a roster row carries a name, a title and
+        # a pill side by side, and at 460px they crowd each other on desktop.
         max_width=_WIDTH_WIDE,
     )
 

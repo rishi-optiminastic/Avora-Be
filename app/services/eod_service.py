@@ -7,8 +7,8 @@ author-only. No FastAPI objects here (Layering §4); the screenshot signal is OC
 *text* only.
 
 **Who receives what.** A person's report goes to their reporting manager and
-nobody else. Admins instead get one per-department rollup at the send time:
-coverage, summed effort, the work shipped and the department's blockers - but no
+nobody else. Admins instead get one rollup of every department at the send time:
+coverage, summed effort, the work shipped and each department's blockers - but no
 narratives. A completed task is an organisational fact already on the board; the
 written account of someone's day is not.
 That split is the same org decision `EmployeeRepository._personal_scope_clause`
@@ -64,7 +64,7 @@ from app.schemas.monitoring import AttendanceStatus
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.attendance_service import AttendanceService
 from app.services.email_service import EmailService
-from app.services.email_templates import eod_department_digest_email, eod_report_email
+from app.services.email_templates import eod_admin_digest_email, eod_report_email
 from app.services.eod_settings_service import EodSchedule, EodSettingsService
 from app.services.llm_service import LlmError, LlmService
 from app.services.notification_service import NotificationService
@@ -319,18 +319,24 @@ class EodService:
             return await self._employees.all_in_scope(caller)
         raise AuthorizationError()
 
-    async def send_department_digests(
+    async def send_admin_digest(
         self, now: datetime, local_dt: datetime, sched: EodSchedule | None = None
     ) -> int:
-        """Mail every department's rollup to the admins, once per local day.
-        Returns the number of digests sent (0 when too early, or already done).
+        """Mail the admins ONE end-of-day rollup covering every department, once
+        per local day. Returns 1 when it went out, 0 when too early, already
+        done, or there was nobody to tell.
+
+        One message where there used to be one per department. Ten near-identical
+        mails at six o'clock answered "how did the day go" no better than one,
+        and the inbox count alone read as noise; the department sections are all
+        still inside, behind an index that says which of them needs opening.
 
         Called AFTER `auto_send_due` in the same tick so a draft flushed moments
         ago counts as submitted rather than still pending - otherwise the admins'
         coverage figure would permanently lag the managers' inboxes by one tick.
 
-        The day is stamped BEFORE the mails go out, inside the caller's
-        transaction. If a send throws, the worker rolls the whole tick back, the
+        The day is stamped BEFORE the mail goes out, inside the caller's
+        transaction. If the send throws, the worker rolls the whole tick back, the
         stamp goes with it and the next tick retries; if it succeeds, the stamp
         commits alongside and the remaining ticks of the evening stay quiet. The
         alternative - stamping afterwards - turns one broken transport into a
@@ -348,13 +354,13 @@ class EodService:
         # `it_admin`, so the role query silently skips every IT admin.
         admins = await self._employees.list_admins()
         recipients = [a.work_email for a in admins if a.work_email]
-        if not recipients:
-            # No one to tell. Still stamp the day: re-deriving the same empty
-            # answer every 15 minutes buys nothing.
+        employees = await self._employees.list_all_active()
+        if not recipients or not employees:
+            # No one to tell, or no one to tell about. Still stamp the day:
+            # re-deriving the same empty answer every 15 minutes buys nothing.
             await self._eod_settings.mark_digest_sent(today)
             return 0
 
-        employees = await self._employees.list_all_active()
         member_ids = [e.id for e in employees]
         reports = await self._reports.list_for_employees_between(member_ids, today, today)
         load = await self._tasks.load_for_employees(member_ids, now)
@@ -362,39 +368,32 @@ class EodService:
         digests = self._build_digests(employees, reports, (today, today, expected), load)
         await self._eod_settings.mark_digest_sent(today)
 
-        sent = 0
-        for digest in digests:
-            subject, html = eod_department_digest_email(
-                digest=digest,
-                dashboard_url=f"{self._settings.app_base_url}{_DEPARTMENT_EOD_LINK}",
-            )
-            try:
-                # One message per department with the other admins CC'd, not one
-                # mail each: on Gmail SMTP that is departments sends instead of
-                # departments x admins, against a hard daily cap.
-                await self._email.send(
-                    to=recipients[0], subject=subject, html=html, cc=recipients[1:]
-                )
-            except Exception:
-                # Swallowed on purpose, and this one matters. The individual
-                # reports were emailed moments ago in this SAME transaction and
-                # their SENT status is only flushed, not committed - the worker
-                # rolls the whole tick back on an exception. Letting a digest
-                # failure escape would undo those rows while the mail already sits
-                # in people's inboxes, so the next tick would send every manager
-                # their report a second time. A missed digest is a far smaller
-                # problem than duplicate mail: log it and carry on.
-                logger.warning(
-                    "eod department digest failed", extra={"department": digest.department}
-                )
-                continue
-            sent += 1
-            await self._audit.append(
-                actor="system:eod",
-                action="eod.department_digest",
-                target=f"eod_digest:{today}:{digest.department}",
-            )
-        return sent
+        subject, html = eod_admin_digest_email(
+            digests=digests,
+            report_date=today,
+            dashboard_url=f"{self._settings.app_base_url}{_DEPARTMENT_EOD_LINK}",
+        )
+        try:
+            # One message with the other admins CC'd, not one each: on Gmail SMTP
+            # that is a single send against a hard daily cap.
+            await self._email.send(to=recipients[0], subject=subject, html=html, cc=recipients[1:])
+        except Exception:
+            # Swallowed on purpose, and this one matters. The individual reports
+            # were emailed moments ago in this SAME transaction and their SENT
+            # status is only flushed, not committed - the worker rolls the whole
+            # tick back on an exception. Letting a digest failure escape would
+            # undo those rows while the mail already sits in people's inboxes, so
+            # the next tick would send every manager their report a second time.
+            # A missed digest is a far smaller problem than duplicate mail: log
+            # it and carry on.
+            logger.warning("eod admin digest failed", extra={"report_date": today})
+            return 0
+        await self._audit.append(
+            actor="system:eod",
+            action="eod.admin_digest",
+            target=f"eod_digest:{today}",
+        )
+        return 1
 
     def _build_digests(
         self,
@@ -640,11 +639,11 @@ class EodService:
     async def run_due(self, now: datetime) -> tuple[int, int, int, int, int]:
         """One scheduler tick (local-tz gated): when EOD is enabled, generate drafts
         once we're past the DRAFT time, auto-send drafts to their managers once past
-        the SEND time, then mail the admins each department's rollup (once a day);
-        and once a day prune old monitoring data. The schedule + the on/off switch
+        the SEND time, then mail the admins one rollup of every department (once a
+        day); and once a day prune old monitoring data. The schedule + the on/off switch
         are read from the DB (`eod_settings`, editable in Settings), so changes take
         effect on the next tick with no redeploy. Returns (drafts_created,
-        drafts_sent, department_digests_sent, activity_rows_purged,
+        drafts_sent, admin_digests_sent, activity_rows_purged,
         screenshots_purged). Shared by the worker loop and the free-tier cron
         endpoint."""
         local_dt = await self._local_dt(now)
@@ -657,7 +656,7 @@ class EodService:
             sent = await self.auto_send_due(now, local_dt, sched)
             # After the individual send, never before: a draft flushed in this
             # same tick must read as submitted in the admins' coverage figure.
-            digests = await self.send_department_digests(now, local_dt, sched)
+            digests = await self.send_admin_digest(now, local_dt, sched)
         purged_activity = purged_shots = 0
         if local_dt.hour == self._settings.activity_purge_hour:
             # Same reasoning as the digest loop: retention runs AFTER mail has
@@ -784,7 +783,7 @@ class EodService:
         Just the one address. Admins used to be copied on every individual
         report, which contradicted `_personal_scope_clause` - an admin could be
         mailed a report they are not allowed to open in the app. They now get the
-        per-department rollup instead (`send_department_digests`).
+        company-wide rollup instead (`send_admin_digest`).
 
         Someone with no manager on file therefore has no individual recipient,
         and the report simply closes out as SENT. They are NOT silently dropped:

@@ -329,4 +329,8 @@ async def test_hr_still_reads_the_review_form_panel(
     )
 
     assert res.status_code == 200, res.text
-    assert len(res.json()["forms"]) == 3
+    # Two, not three: the manager evaluation became the second STAGE of the
+    # review rather than a form of its own, so there is no separate one to
+    # publish or send. The review and HR's feedback are what is left.
+    triggers = [f["trigger"] for f in res.json()["forms"]]
+    assert triggers == ["probation_self", "probation_hr"]

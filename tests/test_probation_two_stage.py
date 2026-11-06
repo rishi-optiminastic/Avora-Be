@@ -36,8 +36,8 @@ from app.models.form import (
     FormAssignment,
     FormField,
     FormFieldType,
-    FormStage,
     FormResponse,
+    FormStage,
     FormStatus,
     FormTrigger,
 )
@@ -382,3 +382,61 @@ async def test_both_halves_land_in_one_set_of_answers(
     )
     authors = set(rows.scalars().all())
     assert authors == {seed.report.id, seed.manager.id}
+
+
+# --- what the merge must not break ----------------------------------------- #
+async def test_a_null_stage_is_not_the_first_stage(db: AsyncSession) -> None:
+    """The trap the merge migration has to defuse.
+
+    An assignment created before the form had stages carries stage = NULL, and
+    NULL does not mean "start at the beginning" - it means "this form has no
+    stages". Left alone, the probationer is handed EVERY question, their
+    manager's half included, and submitting ends the review with no handover.
+    """
+    from app.services.form_stages import fields_for_stage, next_stage
+
+    form = await _two_stage_form(db)
+    fields = (
+        await db.execute(select(FormField).where(FormField.form_id == form.id))
+    ).scalars().all()
+
+    assert len(fields_for_stage(list(fields), None)) == 4, "NULL sees the whole form"
+    assert next_stage(list(fields), None) is None, "NULL never hands over"
+    # ...whereas the stage the migration writes sees half, and moves on.
+    assert len(fields_for_stage(list(fields), FormStage.EMPLOYEE)) == 2
+    assert next_stage(list(fields), FormStage.EMPLOYEE) is FormStage.MANAGER
+
+
+def test_the_manager_submit_does_not_restamp_the_employee_step() -> None:
+    """`mark_done_by_system` REFRESHES its own earlier ticks. Listing step 3
+    under the final submit as well would stamp it with the manager's
+    timestamp, so the checklist would say the employee wrote their
+    self-assessment the moment their manager finished reading it."""
+    from app.services.probation_forms import steps_on_submit
+
+    merged = FormAssignment(
+        form_id=uuid.uuid4(),
+        trigger=FormTrigger.PROBATION_SELF,
+        stage=FormStage.MANAGER,
+        status=AssignmentStatus.PENDING,
+    )
+    assert set(steps_on_submit(merged)) == {5, 6}
+
+    # the single-stage form, as it was sent before the merge
+    legacy = FormAssignment(
+        form_id=uuid.uuid4(),
+        trigger=FormTrigger.PROBATION_SELF,
+        stage=None,
+        status=AssignmentStatus.PENDING,
+    )
+    assert set(steps_on_submit(legacy)) == {3}
+
+
+def test_hr_feedback_is_never_overseeable() -> None:
+    """HR's own judgement on the same person is a different form with a
+    different audience. The first cut of the oversight rule said "any
+    probation form" and handed it to the reporting line."""
+    from app.services.probation_forms import OVERSEEABLE_PROBATION
+
+    assert FormTrigger.PROBATION_HR not in OVERSEEABLE_PROBATION
+    assert FormTrigger.PROBATION_SELF in OVERSEEABLE_PROBATION

@@ -490,8 +490,14 @@ async def test_panel_scores_and_scope(
     own = (await client.get(panel, headers=manager)).json()
     rows = {f["trigger"]: f for f in own["forms"]}
     assert rows["probation_manager"]["can_open"] is True  # their own submission
-    assert rows["probation_self"]["can_open"] is False  # not theirs to read
-    assert rows["probation_self"]["weighted_total"] is None
+    # The reporting manager READS the probationer's self-assessment. This used
+    # to be refused, and refusing it was the complaint: they were asked to
+    # assess six months they had just watched someone else write an account
+    # of, without being shown it. Org decision, Nov 2026, alongside merging
+    # the two forms into one two-stage review where the manager holds the
+    # form outright. HR's own feedback form is NOT part of this - see
+    # `OVERSEEABLE_PROBATION` and `test_hr_feedback_is_never_overseeable`.
+    assert rows["probation_self"]["can_open"] is True
 
     results = await client.get(
         f"/api/v1/forms/{by_trigger[FormTrigger.PROBATION_MANAGER].form_id}/results",

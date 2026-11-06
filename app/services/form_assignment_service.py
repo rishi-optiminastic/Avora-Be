@@ -71,6 +71,7 @@ from app.services.form_stages import fields_for_stage, first_stage, next_stage
 from app.services.form_views import can_manage_forms, to_answer, to_assignment, to_read, to_summary
 from app.services.notification_service import NotificationService
 from app.services.probation_forms import (
+    OVERSEEABLE_PROBATION,
     ProbationFormLink,
     is_pool,
     is_probation_form,
@@ -675,15 +676,16 @@ class FormAssignmentService:
 
         Deliberately NOT part of `_may_open`: that one also guards submitting,
         and a department head is not meant to fill in a review on a manager's
-        behalf. It is also probation-only - the same widening on `_may_open`
-        would hand a senior manager every joiner and buddy form in their tree,
-        which nobody asked for and those people were promised was private.
+        behalf. It is also narrower than "probation" - see
+        `OVERSEEABLE_PROBATION`. The first cut of this said "any probation
+        form" and handed the reporting line HR's confidential feedback with
+        it, which `test_hr_pool_first_submit_claims_it` caught.
 
         The scope is the one that already decides who may see the probation
         checklist, so this adds no reader who could not already see that the
         review exists - and never the subject reading their own.
         """
-        if not is_probation_form(assignment.trigger) or assignment.subject_id is None:
+        if assignment.trigger not in OVERSEEABLE_PROBATION or assignment.subject_id is None:
             return False
         if assignment.subject_id == caller.employee_id:
             return False

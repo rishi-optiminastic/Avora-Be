@@ -28,6 +28,9 @@ from app.services.form_views import can_manage_forms, to_answer
 
 # Display order on the checklist page.
 _ORDER = (FormTrigger.PROBATION_SELF, FormTrigger.PROBATION_MANAGER, FormTrigger.PROBATION_HR)
+# Triggers that no longer go out on their own. Kept in `_ORDER` so a review
+# sent before the merge still shows its history.
+_MERGED_AWAY = frozenset({FormTrigger.PROBATION_MANAGER})
 
 
 class ProbationFormPanelService:
@@ -60,7 +63,21 @@ class ProbationFormPanelService:
         by_trigger = {
             r[0].trigger: r for r in rows if r[0].status is not AssignmentStatus.CANCELLED
         }
-        forms = [await self._status(caller, t, by_trigger.get(t)) for t in _ORDER]
+        statuses = [await self._status(caller, t, by_trigger.get(t)) for t in _ORDER]
+        # The manager evaluation was folded into the employee's form as its
+        # second stage, so there is no longer a separate one to publish or
+        # send. Its empty row is work that no longer exists, and listing it is
+        # what made this page describe a sequence it was not running.
+        #
+        # Only this trigger, and only when it is truly empty: an unpublished
+        # HR form still earns its row, because "nobody has published it yet"
+        # is exactly what HR needs to see. A probationer reviewed BEFORE the
+        # merge keeps their row too, because the assignment is still there.
+        forms = [
+            f
+            for f in statuses
+            if f.trigger not in _MERGED_AWAY or f.assignment_id is not None or f.form_title
+        ]
         await self._audit.append(
             actor=str(caller.employee_id),
             action="probation.forms.read",

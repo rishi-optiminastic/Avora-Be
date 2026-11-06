@@ -27,10 +27,20 @@ from tests.conftest import _Seed, auth_headers
 _PDF = b"%PDF-1.4\n%fake pdf for the attachment path\n"
 
 
-async def _probationer(db: AsyncSession, seed: _Seed) -> None:
+async def _probationer(db: AsyncSession, seed: _Seed, *, days_in: int = 30) -> None:
+    """Someone `days_in` days into a default six-month probation.
+
+    `days_in` matters for CONFIRMED. The outcome is stored by rewriting
+    `probation_months` to `max(1, anniversaries_reached(...))`, so a person
+    confirmed before their FIRST monthly anniversary still reads as on
+    probation until it arrives - and "30 days ago" is not reliably a month:
+    land it in a 31-day month and the anniversary falls tomorrow. That made
+    `test_an_early_confirmation_ends_probation` pass or fail depending on the
+    month it ran in.
+    """
     person = await db.get(Employee, seed.report.id)
     assert person is not None
-    person.hire_date = datetime.now(UTC).date() - timedelta(days=30)
+    person.hire_date = datetime.now(UTC).date() - timedelta(days=days_in)
     person.job_title = "Software Engineer"
     await db.commit()
 
@@ -364,7 +374,9 @@ async def test_an_extension_must_end_after_the_current_end(
 async def test_an_early_confirmation_ends_probation(
     client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
 ) -> None:
-    await _probationer(db, seed)
+    # Comfortably past the first monthly anniversary, so "ends probation"
+    # means today whatever month this runs in. See `_probationer`.
+    await _probationer(db, seed, days_in=100)
     today = datetime.now(UTC).date()
 
     res = await _decide(

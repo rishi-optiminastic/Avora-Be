@@ -34,9 +34,15 @@ from app.repositories.regularization import RegularizationRepository
 from app.repositories.screenshot import ScreenshotRepository
 from app.repositories.task import TaskRepository
 from app.schemas.auth import CurrentUser
-from app.schemas.eod import EodDraftContent
+from app.schemas.eod import (
+    EodCumulativeTotals,
+    EodDepartmentDigest,
+    EodDepartmentMember,
+    EodDraftContent,
+)
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.attendance_service import AttendanceService
+from app.services.email_templates import eod_admin_digest_email, eod_report_email
 from app.services.eod_service import MAX_DIGEST_DAYS, UNASSIGNED_DEPARTMENT, EodService
 from app.services.eod_settings_service import EodSettingsService
 from app.services.llm_service import LlmError
@@ -643,8 +649,8 @@ async def test_cumulative_is_scoped_with_coverage_and_totals(
 
 
 # --------------------------------------------------------------------------- #
-# Department rollups — what the admins get now that individual reports go only
-# to the reporting manager.
+# The admins' rollup — one email covering every department, now that individual
+# reports go only to the reporting manager.
 # --------------------------------------------------------------------------- #
 _IST = ZoneInfo("Asia/Kolkata")
 # A fixed local evening, past the default 18:00 send time, so the window gate and
@@ -672,34 +678,123 @@ async def _add_department(db: AsyncSession, department: str, *names: str) -> lis
     return people
 
 
-def _digest_for(email: _CapturingEmail, department: str) -> dict[str, object]:
-    """The one message whose subject names this department."""
-    matches = [m for m in email.messages if department in str(m["subject"])]
-    assert len(matches) == 1, f"expected one {department} digest, got {len(matches)}"
+def _admin_digest(email: _CapturingEmail) -> dict[str, object]:
+    """The one end-of-day rollup the admins were sent."""
+    matches = [m for m in email.messages if str(m["subject"]).startswith("EOD · ")]
+    assert len(matches) == 1, f"expected one admin digest, got {len(matches)}"
     return matches[0]
 
 
-async def test_department_digest_mails_admins_one_rollup_per_department(
+async def _headcount(db: AsyncSession) -> int:
+    rows = await db.execute(select(Employee).where(Employee.is_active.is_(True)))
+    return len(rows.scalars().all())
+
+
+async def test_admin_digest_is_one_email_covering_every_department(
     db: AsyncSession, seed: _Seed, settings: Settings
 ) -> None:
+    """One message, not one per department: ten near-identical mails at six
+    o'clock read as noise. Every department is inside it, including the bucket
+    holding the seed people who have no department on file - they must not
+    vanish from the admins' view."""
     await _add_department(db, "Design", "dia", "devi")
+    await _add_department(db, "Sales", "sam")
     email = _CapturingEmail()
     service = _build_service(db, settings, llm=_StubLlm(), email=email)
 
-    count = await service.send_department_digests(datetime.now(UTC), _EVENING)
+    count = await service.send_admin_digest(datetime.now(UTC), _EVENING)
 
-    # Design, plus the bucket holding the four seed people who have no
-    # department on file — they must not vanish from the admins' view.
-    assert count == 2
-    subjects = [str(m["subject"]) for m in email.messages]
-    assert any("Design" in s for s in subjects)
-    assert any(UNASSIGNED_DEPARTMENT in s for s in subjects)
-    # Every digest goes to the admin, and to nobody who isn't one.
-    assert {m["to"] for m in email.messages} == {"admin@corp.test"}
-    assert all(m["cc"] == [] for m in email.messages)  # only one admin is seeded
+    assert count == 1
+    message = _admin_digest(email)
+    html = str(message["html"])
+    for department in ("Design", "Sales", UNASSIGNED_DEPARTMENT):
+        assert department in html
+    # The subject carries the company-wide figure, not any one department's.
+    assert message["subject"] == f"EOD · Mon, 29 Jun · 0/{await _headcount(db)} reported"
+    # To the admin, and to nobody who isn't one.
+    assert message["to"] == "admin@corp.test"
+    assert message["cc"] == []  # only one admin is seeded
 
 
-async def test_department_digest_carries_the_numbers_and_blockers_but_no_narrative(
+async def test_admin_digest_leads_with_the_company_figure_and_indexes_departments(
+    db: AsyncSession, seed: _Seed, settings: Settings
+) -> None:
+    """The first number is the company's; an index then says which department
+    to open, and each department keeps its own figure in its section below."""
+    (dia, _devi) = await _add_department(db, "Design", "dia", "devi")
+    await _add_department(db, "Sales", "sam")
+    db.add(
+        EodReport(
+            employee_id=dia.id,
+            report_date=_DIGEST_DAY,
+            status=EodStatus.SENT,
+            summary="x",
+            highlights={},
+            metrics={"worked_minutes": 120, "active_minutes": 60},
+        )
+    )
+    await db.commit()
+
+    email = _CapturingEmail()
+    service = _build_service(db, settings, llm=_StubLlm(), email=email)
+    await service.send_admin_digest(datetime.now(UTC), _EVENING)
+    html = str(_admin_digest(email)["html"])
+
+    company = f"1 of {await _headcount(db)} reported"
+    assert company in html
+    assert "1 of 2 reported" in html  # Design's own heading
+    assert "0 of 1 reported" in html  # Sales
+    assert 'href="#dept-design"' in html and 'id="dept-design"' in html
+    assert 'href="#dept-sales"' in html and 'id="dept-sales"' in html
+    # The company figure comes before any department's section.
+    assert html.index(company) < html.index('id="dept-design"')
+
+
+def test_eod_emails_are_laid_out_for_a_phone() -> None:
+    """Both EOD emails declare a viewport and carry the phone-width rules.
+
+    Without the meta a phone client lays the mail out at desktop width and
+    scales it down until the type cannot be read - which is what the old
+    six-column department rollup did on every phone it reached.
+    """
+    _subject, report = eod_report_email(
+        employee_name="Dia", date_label=_DIGEST_DAY, summary="A day.", highlights=EodDraftContent()
+    )
+    digest = EodDepartmentDigest(
+        from_date=_DIGEST_DAY,
+        to_date=_DIGEST_DAY,
+        member_count=1,
+        submitted=1,
+        pending=0,
+        absent=0,
+        failed=0,
+        missing=0,
+        submission_rate=1.0,
+        working_days=1,
+        submitted_days=1,
+        totals=EodCumulativeTotals(worked_minutes=60, active_minutes=30, tasks_done=1),
+        department="Design",
+        members=[
+            EodDepartmentMember(
+                employee_id=uuid.uuid4(),
+                name="Dia",
+                coverage="submitted",
+                worked_minutes=60,
+                active_minutes=30,
+                active_pct=50,
+                tasks_done=1,
+            )
+        ],
+        blockers=[],
+    )
+    _subject, rollup = eod_admin_digest_email(digests=[digest], report_date=_DIGEST_DAY)
+
+    for html in (report, rollup):
+        assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in html
+        assert "@media only screen and (max-width: 600px)" in html
+
+
+async def test_admin_digest_carries_the_numbers_and_blockers_but_no_narrative(
     db: AsyncSession, seed: _Seed, settings: Settings
 ) -> None:
     """The privacy contract: an admin learns who reported and what the day added
@@ -724,8 +819,8 @@ async def test_department_digest_carries_the_numbers_and_blockers_but_no_narrati
 
     email = _CapturingEmail()
     service = _build_service(db, settings, llm=_StubLlm(), email=email)
-    await service.send_department_digests(datetime.now(UTC), _EVENING)
-    html = str(_digest_for(email, "Design")["html"])
+    await service.send_admin_digest(datetime.now(UTC), _EVENING)
+    html = str(_admin_digest(email)["html"])
 
     # The narrative never appears — not the edited summary, not the draft copy of
     # it inside `highlights`.
@@ -742,7 +837,7 @@ async def test_department_digest_carries_the_numbers_and_blockers_but_no_narrati
     assert "1 of 2 reported" in html
 
 
-async def test_department_digest_sends_once_per_local_day(
+async def test_admin_digest_sends_once_per_local_day(
     db: AsyncSession, seed: _Seed, settings: Settings
 ) -> None:
     """The scheduler ticks every 15 minutes and re-flushes pending drafts; without
@@ -751,18 +846,16 @@ async def test_department_digest_sends_once_per_local_day(
     email = _CapturingEmail()
     service = _build_service(db, settings, llm=_StubLlm(), email=email)
 
-    assert await service.send_department_digests(datetime.now(UTC), _EVENING) == 2
+    assert await service.send_admin_digest(datetime.now(UTC), _EVENING) == 1
     before = len(email.messages)
     # A later tick the same evening sends nothing more…
-    assert await service.send_department_digests(datetime.now(UTC), _EVENING.replace(hour=21)) == 0
+    assert await service.send_admin_digest(datetime.now(UTC), _EVENING.replace(hour=21)) == 0
     assert len(email.messages) == before
     # …but the next day is a fresh run.
-    assert (
-        await service.send_department_digests(datetime.now(UTC), _EVENING + timedelta(days=1)) == 2
-    )
+    assert await service.send_admin_digest(datetime.now(UTC), _EVENING + timedelta(days=1)) == 1
 
 
-async def test_department_digest_waits_for_the_send_window(
+async def test_admin_digest_waits_for_the_send_window(
     db: AsyncSession, seed: _Seed, settings: Settings
 ) -> None:
     await _add_department(db, "Design", "dia")
@@ -771,11 +864,11 @@ async def test_department_digest_waits_for_the_send_window(
 
     # 5 PM IST — before the 18:00 send time. Nothing leaves, same hard gate the
     # individual reports obey.
-    assert await service.send_department_digests(datetime.now(UTC), _EVENING.replace(hour=17)) == 0
+    assert await service.send_admin_digest(datetime.now(UTC), _EVENING.replace(hour=17)) == 0
     assert email.messages == []
 
 
-async def test_department_digest_counts_a_draft_flushed_in_the_same_tick(
+async def test_admin_digest_counts_a_draft_flushed_in_the_same_tick(
     db: AsyncSession, seed: _Seed, settings: Settings
 ) -> None:
     """Ordering guard: the digest runs after the individual auto-send, so a draft
@@ -796,9 +889,9 @@ async def test_department_digest_counts_a_draft_flushed_in_the_same_tick(
     email = _CapturingEmail()
     service = _build_service(db, settings, llm=_StubLlm(), email=email)
     await service.auto_send_due(datetime.now(UTC), _EVENING)
-    await service.send_department_digests(datetime.now(UTC), _EVENING)
+    await service.send_admin_digest(datetime.now(UTC), _EVENING)
 
-    html = str(_digest_for(email, "Design")["html"])
+    html = str(_admin_digest(email)["html"])
     assert "1 of 1 reported" in html
     assert "Pending" not in html
 
@@ -1060,7 +1153,7 @@ async def test_departments_endpoint_reports_coverage_without_narratives(
     assert reported["worked_minutes"] == 480 and reported["active_pct"] == 50
 
 
-async def test_department_digest_names_the_work_shipped_but_caps_the_list(
+async def test_admin_digest_names_the_work_shipped_but_caps_the_list(
     db: AsyncSession, seed: _Seed, settings: Settings
 ) -> None:
     """Titles appear under each person, de-duped across the window and capped so
@@ -1099,15 +1192,15 @@ async def test_department_digest_names_the_work_shipped_but_caps_the_list(
 
     email = _CapturingEmail()
     service = _build_service(db, settings, llm=_StubLlm(), email=email)
-    await service.send_department_digests(datetime.now(UTC), _EVENING)
-    html = str(_digest_for(email, "Design")["html"])
+    await service.send_admin_digest(datetime.now(UTC), _EVENING)
+    html = str(_admin_digest(email)["html"])
     # Only the first three are named; the rest are counted, not listed.
     assert "Logo pass" in html and "Type scale" in html and "Icon set" in html
     assert "Spacing audit" not in html
     assert "+2 more" in html
 
 
-async def test_department_digest_names_who_still_owes_but_not_the_absent(
+async def test_admin_digest_names_who_still_owes_but_not_the_absent(
     db: AsyncSession, seed: _Seed, settings: Settings
 ) -> None:
     """ "Still owed" is for people who could have reported and have not.
@@ -1140,8 +1233,8 @@ async def test_department_digest_names_who_still_owes_but_not_the_absent(
     email = _CapturingEmail()
     service = _build_service(db, settings, llm=_StubLlm(), email=email)
     # Send without flushing drafts first, so the pending row stays pending.
-    await service.send_department_digests(datetime.now(UTC), _EVENING)
-    html = str(_digest_for(email, "Design")["html"])
+    await service.send_admin_digest(datetime.now(UTC), _EVENING)
+    html = str(_admin_digest(email)["html"])
 
     owed = html.split("Still owed")[1].split("</div>")[0]
     assert "Dia" in owed  # pending
@@ -1190,7 +1283,7 @@ async def test_department_digest_counts_what_the_day_left_open(
     assert design.open_tasks == 3 and design.overdue_tasks == 1
 
 
-async def test_an_it_admin_receives_the_department_digest(
+async def test_an_it_admin_receives_the_admin_digest(
     db: AsyncSession, seed: _Seed, settings: Settings
 ) -> None:
     """`it_admin` is an admin for every purpose, including being mailed.
@@ -1214,7 +1307,7 @@ async def test_an_it_admin_receives_the_department_digest(
 
     email = _CapturingEmail()
     service = _build_service(db, settings, llm=_StubLlm(), email=email)
-    await service.send_department_digests(datetime.now(UTC), _EVENING)
+    await service.send_admin_digest(datetime.now(UTC), _EVENING)
 
     everyone = {str(m["to"]) for m in email.messages} | {
         a
@@ -1242,7 +1335,7 @@ async def test_a_failing_digest_send_cannot_undo_already_delivered_reports(
         async def send(
             self, *, to: str, subject: str, html: str, cc: list[str] | None = None
         ) -> None:
-            if subject.startswith("EOD · "):  # the department digest
+            if subject.startswith("EOD · "):  # the admins' rollup
                 raise RuntimeError("smtp went away mid-digest")
             await super().send(to=to, subject=subject, html=html, cc=cc)
 
@@ -1264,7 +1357,7 @@ async def test_a_failing_digest_send_cannot_undo_already_delivered_reports(
     assert email.sent == ["manager@corp.test"]  # delivered, irreversibly
 
     # Must NOT raise - that is the whole point.
-    assert await service.send_department_digests(datetime.now(UTC), _EVENING) == 0
+    assert await service.send_admin_digest(datetime.now(UTC), _EVENING) == 0
 
     # The individual report stays SENT, so the next tick will not resend it.
     row = (
