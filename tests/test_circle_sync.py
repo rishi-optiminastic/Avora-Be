@@ -123,6 +123,21 @@ async def test_empty_or_invalid_circle_values_never_wipe(
     assert decrypt_pii(settings, comp.account_number_encrypted or "") == "999999999"
 
 
+async def test_a_lakh_count_sent_as_rupees_never_overwrites_pay(
+    scheduler: Scheduler, seed: _Seed, db: AsyncSession, settings: Settings
+) -> None:
+    """Circle's free-text CTC let "6" (6 LPA) through as 6 rupees. A year's pay
+    under 1,000 rupees is not money, so Avora keeps the figure it has."""
+    module, fake = scheduler
+    await _seed_pay(db, settings, seed.report.id)
+    fake.compensation = _circle_pay(annual_ctc_text="6", annual_ctc_inr=6)
+    changed = await module.sync_records_for(seed.report.id)
+    assert not {"amount_minor", "currency", "period"} & set(changed)
+    comp = await _comp(db, seed.report.id)
+    assert comp is not None
+    assert (comp.amount_minor, comp.currency, comp.period) == (100, "USD", PayPeriod.MONTHLY)
+
+
 async def test_new_record_gets_circles_joining_date(
     scheduler: Scheduler, seed: _Seed, db: AsyncSession
 ) -> None:

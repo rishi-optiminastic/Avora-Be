@@ -440,3 +440,62 @@ def test_hr_feedback_is_never_overseeable() -> None:
 
     assert FormTrigger.PROBATION_HR not in OVERSEEABLE_PROBATION
     assert FormTrigger.PROBATION_SELF in OVERSEEABLE_PROBATION
+
+
+async def test_a_probationer_with_no_manager_parks_the_review(
+    db: AsyncSession, settings: Settings, seed: _Seed, client: AsyncClient
+) -> None:
+    """The review cannot be "with the manager" when there isn't one.
+
+    A probationer with no `manager_id` leaves the form parked as NEEDS_MANAGER
+    with no assignee. Ticking step 4 there tells HR the review has moved on
+    while it is in fact waiting for them - the checklist claiming something
+    happened that did not, which is the whole failure this feature exists to
+    stop.
+    """
+    assignment = await _send(db, settings, seed)
+    # HR has not set a reporting manager on this person.
+    person = await db.get(Employee, seed.report.id)
+    assert person is not None
+    person.manager_id = None
+    await db.commit()
+
+    detail = (await _open(client, settings, seed.report, assignment.id)).json()
+    res = await client.post(
+        f"/api/v1/forms/assignments/{assignment.id}/submit",
+        json=_my_answers(detail),
+        headers=auth_headers(settings, seed.report),
+    )
+    assert res.status_code == 200, res.text
+
+    parked = await _assignment(db)
+    assert parked.status is AssignmentStatus.NEEDS_MANAGER
+    assert parked.assignee_id is None
+
+    steps = await _steps(db, seed.report)
+    assert steps[3].status is ProbationStepStatus.DONE, "they did do their half"
+    assert 4 not in steps or steps[4].status is not ProbationStepStatus.DONE, (
+        "step 4 claims the review reached a manager that does not exist"
+    )
+
+
+def test_handover_steps_depend_on_whether_a_manager_was_found() -> None:
+    from app.services.probation_forms import steps_on_handover
+
+    reached = FormAssignment(
+        form_id=uuid.uuid4(),
+        trigger=FormTrigger.PROBATION_SELF,
+        stage=FormStage.MANAGER,
+        status=AssignmentStatus.PENDING,
+        assignee_id=uuid.uuid4(),
+    )
+    assert set(steps_on_handover(reached)) == {3, 4}
+
+    parked = FormAssignment(
+        form_id=uuid.uuid4(),
+        trigger=FormTrigger.PROBATION_SELF,
+        stage=FormStage.MANAGER,
+        status=AssignmentStatus.NEEDS_MANAGER,
+        assignee_id=None,
+    )
+    assert set(steps_on_handover(parked)) == {3}

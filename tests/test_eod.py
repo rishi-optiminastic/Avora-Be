@@ -1236,10 +1236,11 @@ async def test_admin_digest_names_who_still_owes_but_not_the_absent(
     await service.send_admin_digest(datetime.now(UTC), _EVENING)
     html = str(_admin_digest(email)["html"])
 
-    owed = html.split("Still owed")[1].split("</div>")[0]
-    assert "Dia" in owed  # pending
-    assert "Dara" in owed  # no report at all
-    assert "Devi" not in owed  # absent - never chased
+    # The "Needs attention" box names who still owes a report, per department.
+    attention = html.split("Needs attention")[1].split("</table>")[0]
+    assert "Dia" in attention  # pending
+    assert "Dara" in attention  # no report at all
+    assert "Devi" not in attention  # absent - never chased
 
 
 async def test_department_digest_counts_what_the_day_left_open(

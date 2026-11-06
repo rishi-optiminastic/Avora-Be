@@ -1,11 +1,12 @@
 """Branded Avora email templates.
 
-A single inline-styled layout (`_layout`) is the source of truth for how every
-Avora email looks — new emails render their body through it so the brand stays
-consistent everywhere. There is no inner card: content sits directly on the
-paper background. Radii follow the product's rounded-md (8px). The wordmark and
-headings ask for Reckless (the product serif) with a Georgia fallback, since
-most email clients can't load a custom web font.
+Two inline-styled shells. `_layout` is how every transactional Avora email
+looks: no inner card, content directly on the paper background, radii following
+the product's rounded-md (8px). `_report_layout` is the end-of-day reports'
+shell: a square white card on grey with a dark header band, in the format of
+the team's own written status updates. The wordmark and headings ask for
+Reckless (the product serif) with a Georgia fallback, since most email clients
+can't load a custom web font.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from typing import TYPE_CHECKING
 from app.core.probation_letter_pdf import COMPANY_LEGAL_NAME
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping, Sequence
+    from collections.abc import Sequence
 
     from app.schemas.eod import EodDepartmentDigest, EodDepartmentMember, EodDraftContent
 
@@ -56,11 +57,10 @@ def _money(minor: int, currency: str) -> str:
     return f"{symbol}{minor // 100:,}"
 
 
-# The shell's default column width. Wide enough for prose, narrow enough to read
-# on a phone without zooming. A template with a real table (the department
-# roster) asks for `_WIDE` so its columns are not squeezed into one another.
+# The shell's column width. Wide enough for prose, narrow enough to read on a
+# phone without zooming. The end-of-day reports use their own card shell
+# (`_report_layout`) at 600px.
 _WIDTH = 460
-_WIDTH_WIDE = 600
 
 # Phone-width adjustments. Every Avora email is fluid already (percentage
 # widths, no fixed pixel columns); this trims the chrome so a 360px screen
@@ -70,11 +70,26 @@ _WIDTH_WIDE = 600
 _RESPONSIVE_CSS = """\
 @media only screen and (max-width: 600px) {
   .shell { padding: 22px 12px !important; }
-  .h1 { font-size: 22px !important; }
-  .hero { font-size: 34px !important; }
-  .tile { padding: 12px 4px !important; }
-  .tile-value { font-size: 20px !important; }
+  .pad { padding-left: 16px !important; padding-right: 16px !important; }
+  .title { font-size: 26px !important; }
+  .glance-cell { padding: 10px 5px !important; }
+  .glance-value { font-size: 20px !important; }
+  .glance-label { letter-spacing: 0.04em !important; }
 }"""
+
+
+def _head() -> str:
+    """The <head> both shells share. The viewport meta is what makes a phone
+    client lay the mail out at its own width instead of scaling a desktop
+    column down until the type is unreadable; the style block carries the
+    phone-width rules."""
+    return f"""\
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="x-apple-disable-message-reformatting">
+    <style>{_RESPONSIVE_CSS}</style>
+  </head>"""
 
 
 def _layout(
@@ -92,12 +107,7 @@ def _layout(
     return f"""\
 <!doctype html>
 <html>
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="x-apple-disable-message-reformatting">
-    <style>{_RESPONSIVE_CSS}</style>
-  </head>
+  {_head()}
   <body style="margin:0;padding:0;background:{_PAPER};font-family:{_SANS};-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%;">
     <span style="display:none;max-height:0;overflow:hidden;opacity:0;">{preheader}</span>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{_PAPER};">
@@ -562,20 +572,6 @@ def agent_reinstall_email(*, employee_name: str, install_url: str) -> tuple[str,
     )
 
 
-def _eyebrow(text: str) -> str:
-    return (
-        f'<div style="font-size:11px;font-weight:600;letter-spacing:0.14em;'
-        f'text-transform:uppercase;color:{_MUTED};">{text}</div>'
-    )
-
-
-def _section_label(text: str, color: str = _MUTED) -> str:
-    return (
-        f'<div style="font-size:11px;font-weight:600;letter-spacing:0.14em;'
-        f'text-transform:uppercase;color:{color};margin:0 0 8px;">{text}</div>'
-    )
-
-
 def _fmt_hours(minutes: int) -> str:
     """Compact worked-time label: '45m' under an hour, else '6.7h'."""
     if minutes < 60:
@@ -624,110 +620,320 @@ def _active_pct(active_minutes: int, worked_minutes: int) -> int:
     return round(active_minutes / worked_minutes * 100)
 
 
-def _stat_cell(value: str, label: str, *, accent: bool = False) -> str:
-    """One stat tile in the three-up report-card row."""
-    bg = _VIOLET_SOFT if accent else _CARD
-    value_color = _VIOLET if accent else _INK
+# -- EOD emails: the status-update format ----------------------------------- #
+# Both end-of-day emails follow the format of the team's own written status
+# update: a square white card on a grey page, a dark header band with an eyebrow
+# and a serif title, four pastel figures "at a glance", one plain sentence of
+# totals, violet-barred serif section headings with a count on the right, bold
+# rows with a square status pill, and a dark numbered box at the end for what
+# needs attention. The palette is that mail's, not the dashboard's, so the two
+# reports sitting together in an inbox read as one series.
+
+_REPORT_WIDTH = 600
+_REPORT_PAGE = "#f3f2f7"
+_REPORT_INK = "#1a1825"
+_REPORT_BODY = "#5a5670"
+_REPORT_META = "#9a95ae"
+_REPORT_LABEL = "#7c7795"
+_REPORT_RULE = "#eae8f1"
+_REPORT_BAR = "#594a9c"
+_REPORT_DARK = "#1e1b2e"
+_REPORT_DARK_EYEBROW = "#a79dd6"
+_REPORT_DARK_META = "#9d96bc"
+_REPORT_DARK_NUMBER = "#8f86b8"
+
+# Pastel tones as (background, ink). Four meanings, never decoration: green is
+# done, lavender is in progress, orange needs attention, grey is neutral.
+_Tone = tuple[str, str]
+_TONE_DONE: _Tone = ("#dff1e6", "#1d6540")
+_TONE_ACTIVE: _Tone = ("#e5e1f7", "#4a3c8c")
+_TONE_ATTENTION: _Tone = ("#fbe6d5", "#8a4a18")
+_TONE_NEUTRAL: _Tone = ("#e5e9f0", "#44506b")
+
+_ADMIN_DIGEST_FOOTER = (
+    "You're receiving this because you are an admin of this Avora workspace. "
+    "Managers receive each person's full report separately; this rollup carries "
+    "figures only."
+)
+
+_WEEKDAYS_LONG = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+_MONTHS_LONG = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
+
+
+def _long_day_label(value: str) -> str:
+    """ "2026-11-06" -> "Friday, 6 November 2026", for the header band where the
+    short form would look clipped. Non-ISO input comes back untouched, like
+    `_day_label`."""
+    try:
+        day = date.fromisoformat(value)
+    except (ValueError, TypeError):
+        return value
+    return f"{_WEEKDAYS_LONG[day.weekday()]}, {day.day} {_MONTHS_LONG[day.month - 1]} {day.year}"
+
+
+def _fmt_duration(minutes: int) -> str:
+    """Clock-style length: '7h 24m', '3h', '45m'. For headline figures, where
+    '7.4h' reads like a rate rather than a span of the day."""
+    hours, rest = divmod(max(0, minutes), 60)
+    if hours and rest:
+        return f"{hours}h {rest}m"
+    if hours:
+        return f"{hours}h"
+    return f"{rest}m"
+
+
+def _count(noun: str, n: int) -> str:
+    return f"{n} {noun}{'' if n == 1 else 's'}"
+
+
+def _join_names(names: Sequence[str]) -> str:
+    """ "A", "A and B", "A, B and C"."""
+    if len(names) <= 1:
+        return "".join(names)
+    return f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+# -- Shell ------------------------------------------------------------------ #
+
+
+def _block(
+    inner: str,
+    *,
+    padding: str = "26px 20px 0",
+    anchor: str | None = None,
+    background: str | None = None,
+) -> str:
+    """One full-width row of the card. The side padding carries the `pad` class
+    so the phone rule can tighten it; an empty `inner` renders nothing, so a
+    caller can list blocks unconditionally."""
+    if not inner:
+        return ""
+    id_attr = f' id="{anchor}"' if anchor else ""
+    bg = f"background:{background};" if background else ""
+    return f'<tr><td class="pad"{id_attr} style="padding:{padding};{bg}">{inner}</td></tr>'
+
+
+def _report_layout(*, preheader: str, blocks: Sequence[str], footer: str) -> str:
+    """The status-report shell: a square white card on grey, built from `_block`
+    rows, with the footer as the card's last row."""
+    footer_html = (
+        f'<div style="font-size:12px;line-height:1.6;color:{_REPORT_META};">{footer}</div>'
+    )
+    return f"""\
+<!doctype html>
+<html>
+  {_head()}
+  <body style="margin:0;padding:0;background:{_REPORT_PAGE};font-family:{_SANS};-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%;">
+    <span style="display:none;max-height:0;overflow:hidden;opacity:0;">{preheader}</span>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{_REPORT_PAGE};">
+      <tr><td align="center" style="padding:28px 12px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:{_REPORT_WIDTH}px;background:#ffffff;">
+          {"".join(blocks)}
+          {_block(footer_html, padding="28px 20px 30px")}
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>"""
+
+
+def _eyebrow(text: str, color: str, *, tracking: str = "0.14em", padding: str = "0") -> str:
     return (
-        f'<td width="33.33%" valign="top" style="padding:0 4px;">'
-        f'<div class="tile" style="background:{bg};border:1px solid {_LINE};border-radius:10px;'
-        f'padding:14px 8px;text-align:center;">'
-        f'<div class="tile-value" style="font-family:{_SERIF};font-size:24px;font-weight:600;'
-        f'line-height:1;color:{value_color};font-variant-numeric:tabular-nums;">{value}</div>'
-        f'<div style="font-size:10px;font-weight:600;letter-spacing:0.1em;'
-        f'text-transform:uppercase;color:{_MUTED};margin-top:7px;">{label}</div>'
-        f"</div></td>"
+        f'<div style="font-size:11px;line-height:1;font-weight:700;letter-spacing:{tracking};'
+        f'text-transform:uppercase;color:{color};padding:{padding};">{text}</div>'
     )
 
 
-def _stat_row(worked_minutes: int, active_pct: int, tasks_done: int) -> str:
+def _report_header(*, title: str, date_line: str) -> str:
+    """The dark band that opens the card: eyebrow, serif title, the date line."""
+    return _block(
+        _eyebrow("Avora &middot; End of day", _REPORT_DARK_EYEBROW, tracking="0.16em")
+        + f'<div class="title" style="font-family:{_SERIF};font-size:30px;line-height:1.2;'
+        f'font-weight:400;color:#ffffff;padding-top:12px;">{title}</div>'
+        + f'<div style="font-size:14px;line-height:1.5;color:{_REPORT_DARK_META};'
+        f'padding-top:8px;">{date_line}</div>',
+        padding="34px 20px 26px",
+        background=_REPORT_DARK,
+    )
+
+
+def _glance(cells: Sequence[tuple[str, str, _Tone]]) -> str:
+    """ "At a glance": the figures in a strip of pastel cells, equal widths, no
+    gaps. Serif numbers, small-caps labels in the cell's own ink."""
+    width = f"{100 / len(cells):.2f}%"
+    tds = "".join(
+        f'<td width="{width}" valign="top" style="background:{bg};">'
+        f'<div class="glance-cell" style="padding:12px 10px;">'
+        f'<div class="glance-value" style="font-family:{_SERIF};font-size:26px;line-height:1;'
+        f'font-weight:400;color:{ink};font-variant-numeric:tabular-nums;white-space:nowrap;">'
+        f"{value}</div>"
+        f'<div class="glance-label" style="font-size:10px;line-height:1.3;font-weight:700;'
+        f"letter-spacing:0.08em;text-transform:uppercase;color:{ink};padding-top:6px;"
+        f'">{label}</div></div></td>'
+        for value, label, (bg, ink) in cells
+    )
+    return _eyebrow("At a glance", _REPORT_LABEL, padding="0 0 14px") + (
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>{tds}</tr>'
+        "</table>"
+    )
+
+
+def _sentence(text: str) -> str:
+    """The one line of totals under the glance strip."""
     return (
-        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-        'style="margin:18px 0 4px;"><tr>'
-        f"{_stat_cell(_fmt_hours(worked_minutes), 'Worked')}"
-        f"{_stat_cell(f'{active_pct}%', 'Active', accent=True)}"
-        f"{_stat_cell(str(tasks_done), 'Done')}"
+        f'<div style="font-size:14px;line-height:1.5;color:{_REPORT_BODY};padding-top:14px;">'
+        f"{text}</div>"
+    )
+
+
+def _lead(text: str) -> str:
+    return f'<div style="font-size:16px;line-height:1.6;color:{_REPORT_BODY};">{text}</div>'
+
+
+def _heading(title: str, aside: str) -> str:
+    """A section heading: violet bar, serif title, a muted count on the right."""
+    return (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>'
+        f'<td style="border-left:3px solid {_REPORT_BAR};padding:1px 0 1px 10px;">'
+        f'<div style="font-family:{_SERIF};font-size:19px;line-height:1.3;font-weight:400;'
+        f'color:{_REPORT_INK};">{title}</div></td>'
+        f'<td align="right" valign="middle" style="font-size:13px;line-height:1;'
+        f'color:{_REPORT_META};white-space:nowrap;padding-left:12px;">{aside}</td>'
         "</tr></table>"
     )
 
 
-def _meter(pct: int, color: str, *, height: int = 8) -> str:
-    """A slim proportion bar - table cells, so Outlook draws it too."""
-    pct = max(0, min(100, pct))
-    rest = 100 - pct
-    fill = (
-        f'<td style="width:{pct}%;background:{color};height:{height}px;'
-        f'border-radius:6px;font-size:0;line-height:0;">&nbsp;</td>'
-        if pct
+def _figures(parts: Sequence[str]) -> str:
+    """A muted line of figures under a heading, indented to the title's text."""
+    if not parts:
+        return ""
+    return (
+        f'<div style="font-size:13px;line-height:1.5;color:{_REPORT_META};padding:8px 0 0 13px;'
+        f'font-variant-numeric:tabular-nums;">{" &middot; ".join(parts)}</div>'
+    )
+
+
+def _pill(label: str, tone: _Tone) -> str:
+    """A square status pill, uppercase, in one of the four tones."""
+    bg, ink = tone
+    return (
+        f'<span style="display:inline-block;background:{bg};color:{ink};font-size:10px;'
+        f"line-height:1;font-weight:700;letter-spacing:0.07em;text-transform:uppercase;"
+        f'padding:4px 8px;white-space:nowrap;">{label}</span>'
+    )
+
+
+def _tag(label: str, tone: _Tone, *, href: str | None = None) -> str:
+    """A square tag that keeps its case: a topic, or a department with its
+    fraction. With `href` it is a link, same look."""
+    bg, ink = tone
+    element = "a" if href else "span"
+    href_attr = f' href="{href}"' if href else ""
+    return (
+        f'<{element}{href_attr} style="display:inline-block;background:{bg};color:{ink};'
+        f"font-size:11px;line-height:1;font-weight:700;letter-spacing:0.04em;padding:6px 9px;"
+        f'margin:0 6px 6px 0;text-decoration:none;white-space:nowrap;">{label}</{element}>'
+    )
+
+
+def _line(text: str, *, color: str = _REPORT_BODY, size: int = 15, top: int = 8) -> str:
+    return (
+        f'<div style="font-size:{size}px;line-height:1.55;color:{color};padding-top:{top}px;">'
+        f"{text}</div>"
+    )
+
+
+def _row(title: str, pill: str, lines: Sequence[str], *, last: bool) -> str:
+    """One item: bold title, the status pill on its own line under it, then any
+    detail lines. A hairline closes every row but the section's last."""
+    padding = "12px 0 0" if last else "12px 0 14px"
+    rule = "" if last else f"border-bottom:1px solid {_REPORT_RULE};"
+    title_html = (
+        f'<div style="font-size:15px;line-height:1.35;font-weight:700;color:{_REPORT_INK};'
+        f'padding-bottom:6px;">{title}</div>'
+        if title
         else ""
     )
-    gap = (
-        f'<td style="width:{rest}%;height:{height}px;font-size:0;line-height:0;">&nbsp;</td>'
-        if rest
-        else ""
+    return f'<tr><td style="padding:{padding};{rule}">{title_html}{pill}{"".join(lines)}</td></tr>'
+
+
+def _rows(rows: Sequence[str]) -> str:
+    if not rows:
+        return ""
+    return (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">'
+        f"{''.join(rows)}</table>"
     )
+
+
+def _dark_list(eyebrow: str, items: Sequence[str], *, numbered: bool = True) -> str:
+    """The dark box that closes a report: an eyebrow and a numbered list of
+    what needs attention. Unnumbered for a single all-clear line."""
+    rows = ""
+    for index, item in enumerate(items):
+        top = 16 if index == 0 else 12
+        number = (
+            f'<td width="26" valign="top" style="padding:{top}px 0 0;font-family:{_SERIF};'
+            f'font-size:15px;line-height:1.5;color:{_REPORT_DARK_NUMBER};">{index + 1}</td>'
+            if numbered
+            else ""
+        )
+        rows += (
+            f'<tr>{number}<td style="padding:{top}px 0 0;font-size:16px;line-height:1.5;'
+            f'color:#ffffff;">{item}</td></tr>'
+        )
     return (
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-        f'style="background:{_VIOLET_SOFT};border-radius:6px;"><tr>{fill}{gap}</tr></table>'
+        f'style="background:{_REPORT_DARK};"><tr><td style="padding:24px 20px 22px;">'
+        f"{_eyebrow(eyebrow, _REPORT_DARK_EYEBROW)}"
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{rows}</table>'
+        "</td></tr></table>"
     )
 
 
-def _active_bar(active_pct: int, worked_minutes: int, active_minutes: int) -> str:
-    """The active-share meter with its caption, under the stat tiles."""
+def _report_button(label: str, url: str) -> str:
     return (
-        '<div style="margin:8px 0 18px;">'
-        f"{_meter(active_pct, _VIOLET)}"
-        f'<div style="font-size:11px;color:{_MUTED};margin-top:6px;">'
-        f"{active_minutes} min actively engaged of {worked_minutes} min on the machine"
-        "</div></div>"
+        f'<a href="{url}" style="display:inline-block;background:{_REPORT_BAR};color:#ffffff;'
+        f"text-decoration:none;font-size:13px;line-height:1;font-weight:700;"
+        f'letter-spacing:0.04em;padding:13px 22px;">{label}</a>'
     )
 
 
-def _pill(text: str) -> str:
-    """A spaced, wrapping pill — like `_chip` but with margin for chip rows."""
+def _overdue_note(overdue: int) -> str:
     return (
-        f'<span style="display:inline-block;background:{_VIOLET_SOFT};color:{_VIOLET};'
-        f"font-size:12px;font-weight:600;padding:4px 11px;border-radius:8px;"
-        f'margin:0 6px 6px 0;">{text}</span>'
+        f', <span style="color:{_TONE_ATTENTION[1]};">{overdue} overdue</span>' if overdue else ""
     )
 
 
-def _pill_row(label: str, items: list[str]) -> str:
-    if not items:
+# -- Personal report (to the reporting manager) ----------------------------- #
+
+
+def _paragraphs(text: str) -> str:
+    # Escaped: the narrative is free text the employee edits. Unescaped, a stray
+    # "<" silently swallowed the rest of the paragraph in the manager's inbox -
+    # and anything shaped like a tag was injected straight into the message.
+    paras = [p for p in text.split("\n\n") if p.strip()]
+    if not paras:
         return ""
-    pills = "".join(_pill(i) for i in items)
-    return f'<div style="margin:0 0 16px;">{_section_label(label)}<div>{pills}</div></div>'
-
-
-def _check_list(label: str, items: list[str]) -> str:
-    if not items:
-        return ""
-    rows = "".join(
-        f'<tr><td valign="top" style="color:{_VIOLET};font-size:14px;font-weight:700;'
-        f'padding:0 9px 7px 0;line-height:1.5;">&#10003;</td>'
-        f'<td style="font-size:14px;line-height:1.5;color:{_INK};padding:0 0 7px;">{i}</td></tr>'
-        for i in items
+    body = "".join(
+        f'<p style="margin:0 0 10px;font-size:16px;line-height:1.6;color:{_REPORT_INK};">'
+        f"{escape(p)}</p>"
+        for p in paras
     )
-    return (
-        f'<div style="margin:0 0 16px;">{_section_label(label)}'
-        f'<table role="presentation" cellpadding="0" cellspacing="0">{rows}</table></div>'
-    )
-
-
-def _blocker_block(items: list[str]) -> str:
-    if not items:
-        return ""
-    lis = "".join(
-        f'<li style="margin:0 0 4px;font-size:13.5px;line-height:1.5;color:{_AMBER_INK};">{i}</li>'
-        for i in items
-    )
-    return (
-        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-        'style="margin:2px 0 16px;"><tr><td style="background:'
-        f'{_AMBER_SOFT};border:1px solid {_AMBER_LINE};border-radius:10px;padding:12px 16px;">'
-        f"{_section_label('&#9888; Blockers', _AMBER)}"
-        f'<ul style="margin:0;padding-left:18px;">{lis}</ul></td></tr></table>'
-    )
+    return f'<div style="padding-top:12px;">{body}</div>'
 
 
 def eod_report_email(
@@ -742,265 +948,140 @@ def eod_report_email(
 ) -> tuple[str, str]:
     """Render the (subject, html) End-of-Day report sent to the reporting manager.
 
-    Report-card layout: a three-up stat row (worked / active / done), an active-
-    share bar, the narrative, then Worked-on pills, a Completed checklist, and any
-    Blockers in an amber callout. Stats fall back to 0 cleanly when a signal is
-    missing, so a quiet day still renders a clean card."""
+    Header band with the person and the day; four figures at a glance (on the
+    machine, active share, done, blocked); the narrative under Summary; each
+    completed task as a row with a Done pill; the areas worked on as tags; and
+    the blockers in the dark box at the end. Sections appear only when they have
+    something in them, so a quiet day is a short email rather than a card full
+    of zeros."""
     # `date_label` arrives as the raw local YYYY-MM-DD from the report row.
-    day = _day_label(date_label)
-    subject = f"End of day · {employee_name} · {day}"
-    active_pct = _active_pct(active_minutes, worked_minutes)
-    # Escaped: the narrative is free text the employee edits, and the highlight
-    # lists come back from the model. Unescaped, a stray "<" silently swallowed
-    # the rest of the paragraph in the manager's inbox - and anything shaped like
-    # a tag was injected straight into the message body.
-    summary_html = "".join(
-        f'<p style="margin:0 0 12px;font-size:15px;line-height:1.6;color:{_INK};">'
-        f"{escape(para)}</p>"
-        for para in summary.split("\n\n")
-        if para.strip()
+    subject = f"End of day · {employee_name} · {_day_label(date_label)}"
+    blockers = [escape(b) for b in highlights.blockers]
+    if worked_minutes > 0:
+        on_machine = _fmt_duration(worked_minutes)
+        active = f"{_active_pct(active_minutes, worked_minutes)}%"
+        lead = f"{_fmt_duration(active_minutes)} actively engaged of {on_machine} on the machine."
+    else:
+        on_machine = active = "-"
+        lead = "No activity was recorded from the machine today."
+    glance = _glance(
+        [
+            (on_machine, "Worked", _TONE_NEUTRAL),
+            (active, "Active", _TONE_ACTIVE),
+            (str(tasks_done), "Done", _TONE_DONE),
+            (str(len(blockers)), "Blocked", _TONE_ATTENTION),
+        ]
     )
-    bar_html = _active_bar(active_pct, worked_minutes, active_minutes) if worked_minutes > 0 else ""
+    done = [escape(t) for t in highlights.tasks_completed]
+    done_rows = [
+        _row(title, _pill("Done", _TONE_DONE), [], last=i == len(done) - 1)
+        for i, title in enumerate(done)
+    ]
+    areas = "".join(_tag(escape(a), _TONE_ACTIVE) for a in highlights.worked_on)
     confidence = max(0, min(100, highlights.confidence or 0))
-    confidence_html = (
-        f'<div style="margin:20px 0 0;padding-top:14px;border-top:1px solid {_LINE};'
-        f'font-size:11px;color:{_MUTED};">Signal confidence {confidence}% — '
-        "inferred from tasks, activity, and on-screen context.</div>"
+    summary_html = _paragraphs(summary)
+    blocks = [
+        _report_header(title=escape(employee_name), date_line=escape(_long_day_label(date_label))),
+        _block(glance + _sentence(lead), padding="24px 20px 4px"),
+        _block(_heading("Summary", "") + summary_html) if summary_html else "",
+        _block(_heading("Done", _count("task", len(done))) + _rows(done_rows)) if done else "",
+        _block(
+            _heading("Worked on", _count("area", len(highlights.worked_on)))
+            + f'<div style="padding-top:12px;">{areas}</div>'
+        )
+        if areas
+        else "",
+        _block(_dark_list("Blocked", blockers), padding="34px 20px 0") if blockers else "",
+        _block(
+            f'<div style="font-size:12px;line-height:1.6;color:{_REPORT_META};">'
+            f"Signal confidence {confidence}%, inferred from tasks, activity and on-screen "
+            "context.</div>",
+            padding="22px 20px 0",
+        )
         if confidence
-        else ""
-    )
-    content = f"""\
-{_eyebrow(f"End of day · {escape(day)}")}
-<h1 class="h1" style="margin:8px 0 0;font-family:{_SERIF};font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
-  {escape(employee_name)}
-</h1>
-{_stat_row(worked_minutes, active_pct, tasks_done)}
-{bar_html}
-{summary_html}
-{_pill_row("Worked on", [escape(i) for i in highlights.worked_on])}
-{_check_list("Completed", [escape(i) for i in highlights.tasks_completed])}
-{_blocker_block([escape(i) for i in highlights.blockers])}
-{confidence_html}"""
-    return subject, _layout(
+        else "",
+    ]
+    day = _day_label(date_label)
+    return subject, _report_layout(
         preheader=f"{escape(employee_name)}'s end-of-day summary for {escape(day)}",
-        content_html=content,
+        blocks=blocks,
         footer=_ACTIVITY_FOOTER,
     )
 
 
-# -- EOD admin rollup (every department, one email) ------------------------- #
-# Submission-rate bands. The same thresholds and hex values the dashboard uses
-# (fe/.../department-eod `bandColor`), so a department that reads amber on screen
-# reads amber in the inbox. A flat brand colour here made 0% and 100% look
-# identical at a glance, which is the one thing the number is for.
-_BAND_GOOD = "#1f9d55"
-_BAND_WATCH = "#e0a106"
-_BAND_POOR = "#e5556a"
-_BAND_NONE = "#a0a0ac"
+# -- Admin rollup (every department, one email) ----------------------------- #
 
-
-def _band_color(pct: int) -> str:
-    if pct >= 75:
-        return _BAND_GOOD
-    if pct >= 55:
-        return _BAND_WATCH
-    if pct > 0:
-        return _BAND_POOR
-    return _BAND_NONE
-
-
-# Coverage band → (background, ink, label). Mirrors the product's coverage
-# pastels (fe/features/eod/types.ts EOD_COVERAGE_META) in literal hex, because
-# an email client cannot resolve a CSS custom property.
-_COVERAGE_EMAIL: dict[str, tuple[str, str, str]] = {
-    "submitted": ("#e4f0e8", "#1f4d2e", "Submitted"),
-    "pending": (_AMBER_SOFT, _AMBER_INK, "Pending"),
-    "absent": ("#fbe9ec", "#7a2424", "Absent"),
-    "failed": ("#fbe9ec", "#7a2424", "Failed"),
-    "missing": ("#efedf4", _MUTED, "No report"),
+# Coverage band -> (tone, pill label). Lavender for a draft that exists but was
+# never reviewed, orange for a report that should exist and does not, grey for
+# someone who was legitimately away.
+_COVERAGE_PILL: dict[str, tuple[_Tone, str]] = {
+    "submitted": (_TONE_DONE, "Reported"),
+    "pending": (_TONE_ACTIVE, "Draft pending"),
+    "missing": (_TONE_ATTENTION, "No report"),
+    "failed": (_TONE_ATTENTION, "Report failed"),
+    "absent": (_TONE_NEUTRAL, "Absent"),
 }
-# Healthy → attention, left to right: the order the coverage bar paints in.
-_COVERAGE_ORDER = ("submitted", "pending", "failed", "absent", "missing")
 # People who could have reported and have not. Absent is not owed: someone who
 # was not at work legitimately has no report, and dunning them for it is how a
 # tool starts feeling like surveillance rather than a summary. Mirrors the
 # dashboard's "Still owed" row (fe/.../team-eod `_digest.tsx`).
 _OWED_BANDS = ("pending", "missing")
-# How many owed names to print before summarising the rest. Across a whole
-# company the list can run long, and past this it stops being read.
+# What the "Needs attention" box says about each band, singular and plural.
+_ATTENTION_VERBS: tuple[tuple[str, str, str], ...] = (
+    ("missing", "has not reported", "have not reported"),
+    ("pending", "has a draft that was never reviewed", "have drafts that were never reviewed"),
+    ("failed", "had a report fail to generate", "had reports fail to generate"),
+)
+# How many people to name in the attention box before summarising the rest.
+# Across a whole company the list can run long, and past this it stops being read.
 _MAX_OWED_NAMED = 12
 # How many shipped titles to name per person before summarising the rest. A
 # twenty-task day must not turn one roster row into half the email.
 _MAX_TASKS_SHOWN = 3
 
 
-def _coverage_pill(coverage: str) -> str:
-    bg, ink, label = _COVERAGE_EMAIL.get(coverage, _COVERAGE_EMAIL["missing"])
-    return (
-        f'<span style="display:inline-block;background:{bg};color:{ink};font-size:10px;'
-        f'font-weight:600;padding:2px 7px;border-radius:6px;white-space:nowrap;">{label}</span>'
-    )
+def _department_anchor(department: str) -> str:
+    """A stable id for a department's section, so the tags up top can link down."""
+    return "dept-" + re.sub(r"[^a-z0-9]+", "-", department.lower()).strip("-")
 
 
-def _coverage_counts(rollups: Iterable[EodDepartmentDigest]) -> dict[str, int]:
-    """Per-band head counts summed over `rollups` - one department, or every
-    department for the company-wide bar."""
-    counts = dict.fromkeys(_COVERAGE_ORDER, 0)
-    for rollup in rollups:
-        for band in _COVERAGE_ORDER:
-            counts[band] += int(getattr(rollup, band))
-    return counts
+def _needs_attention(digest: EodDepartmentDigest) -> bool:
+    return (digest.pending + digest.missing + digest.failed) > 0
 
 
-def _coverage_bar(counts: Mapping[str, int], member_count: int) -> str:
-    """Proportion bar over the people counted, healthy → attention, left to
-    right. Table cells rather than divs so Outlook renders it."""
-    total = member_count or 1
-    cells = "".join(
-        f'<td style="width:{counts[band] / total * 100:.4f}%;background:{_COVERAGE_EMAIL[band][0]};'
-        f'height:8px;font-size:0;line-height:0;">&nbsp;</td>'
-        for band in _COVERAGE_ORDER
-        if counts[band] > 0
-    )
-    if not cells:
-        cells = '<td style="width:100%;background:#efedf4;height:8px;font-size:0;line-height:0;">&nbsp;</td>'
-    legend = "".join(
-        f'<span style="display:inline-block;margin:0 12px 0 0;font-size:11px;color:{_MUTED};">'
-        f'<span style="display:inline-block;width:8px;height:8px;border-radius:8px;'
-        f'background:{_COVERAGE_EMAIL[band][0]};"></span> '
-        f'<strong style="color:{_INK};">{counts[band]}</strong> {_COVERAGE_EMAIL[band][2].lower()}</span>'
-        for band in _COVERAGE_ORDER
-        if counts[band] > 0
-    )
-    return (
-        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-        f'style="border-radius:6px;overflow:hidden;margin:0 0 9px;"><tr>{cells}</tr></table>'
-        f"<div>{legend}</div>"
-    )
-
-
-def _hero(pct: int, caption: str) -> str:
-    """The one number you can read across the room, and what it counts."""
-    return (
-        '<div style="margin:14px 0 4px;">'
-        f'<span class="hero" style="font-family:{_SERIF};font-size:40px;font-weight:600;'
-        f"line-height:1;color:{_band_color(pct)};font-variant-numeric:tabular-nums;"
-        f'">{pct}%</span>'
-        f'<span style="font-size:12.5px;color:{_MUTED};margin-left:8px;">{caption}</span></div>'
-    )
-
-
-def _effort_block(
-    *, worked_minutes: int, active_minutes: int, tasks_done: int, submitted: int
-) -> str:
-    """The three-up effort tiles, or a plain note when there is no effort to show.
-
-    A day where nobody reported would otherwise render "0m worked, 0% active,
-    0 done" - three measurements of zero, which reads as "they sat there doing
-    nothing" rather than "no reports came in". The roster says `-` on every
-    row; the headline has to agree.
-    """
-    if worked_minutes == 0 and submitted == 0:
-        return (
-            f'<div style="margin:18px 0 4px;padding:14px 16px;background:{_PAPER};'
-            f"border:1px solid {_LINE};border-radius:10px;font-size:13px;"
-            f'color:{_MUTED};">No reports came in, so there is nothing to total yet.</div>'
+def _department_tags(digests: Sequence[EodDepartmentDigest]) -> str:
+    """Every department as a tag with its fraction, green when everyone is
+    accounted for and orange when someone still owes a report. Each links to
+    the department's section, so the row doubles as the index."""
+    tags = "".join(
+        _tag(
+            f'{escape(d.department)} <span style="font-weight:400;">'
+            f"{d.submitted} / {d.member_count}</span>",
+            _TONE_ATTENTION if _needs_attention(d) else _TONE_DONE,
+            href=f"#{_department_anchor(d.department)}",
         )
-    return _stat_row(worked_minutes, _active_pct(active_minutes, worked_minutes), tasks_done)
-
-
-def _overdue_note(overdue: int) -> str:
-    return (
-        f', <span style="color:{_BAND_POOR};font-weight:600;">{overdue} overdue</span>'
-        if overdue
-        else ""
+        for d in digests
     )
+    return _eyebrow("Departments", _REPORT_LABEL, padding="0 0 10px") + f"<div>{tags}</div>"
 
 
-def _workload_line(open_tasks: int, overdue_tasks: int, scope: str) -> str:
-    """The standing workload, under the effort tiles.
-
-    The tiles answer "what did today produce"; this answers "what is still
-    waiting", which is the question a rollup of finished work otherwise leaves
-    open. `scope` names whose: "the team" or "the company".
-    """
-    if not open_tasks:
-        return ""
-    return (
-        f'<div style="margin:10px 0 0;font-size:12.5px;color:{_MUTED};">'
-        f'<span style="font-weight:600;color:{_INK};">{open_tasks}</span> '
-        f"still open across {scope}{_overdue_note(overdue_tasks)}</div>"
-    )
-
-
-def _still_owed(members: Iterable[EodDepartmentMember]) -> str:
-    """The people who still owe a report, named.
-
-    Resolves the question the roster alone leaves open: in a department of six
-    you can spot the gaps, in a company of forty you cannot. Deliberately a
-    summary line, not a re-sort of the roster: ordering people by who failed to
-    report turns a daily digest into a leaderboard of shame, and alphabetical
-    stays predictable week to week.
-    """
-    owed = [m.name for m in members if m.coverage in _OWED_BANDS]
-    if not owed:
-        return ""
-    named = ", ".join(escape(n) for n in owed[:_MAX_OWED_NAMED])
-    rest = len(owed) - _MAX_OWED_NAMED
-    if rest > 0:
-        named += f" and {rest} more"
-    return (
-        f'<div style="margin:10px 0 0;padding:9px 12px;background:{_PAPER};'
-        f'border-radius:8px;font-size:12px;color:{_MUTED};">'
-        f'<span style="font-weight:600;color:{_INK};">Still owed</span> &middot; {named}</div>'
-    )
-
-
-def _role_label(job_title: str | None) -> str:
-    """The person's designation, muted, beside their name. Reading across six
-    departments an admin needs to know who someone is."""
-    if not job_title:
-        return ""
-    return (
-        f'<span style="color:{_MUTED};font-size:11.5px;font-weight:400;"> '
-        f"&middot; {escape(job_title)}</span>"
-    )
-
-
-def _shipped_line(tasks: list[str]) -> str:
-    """The titles this person shipped, under their name. Empty when none."""
-    if not tasks:
-        return ""
+def _shipped_text(tasks: Sequence[str]) -> str:
+    """The titles this person shipped, capped. Empty when none."""
     shown = [escape(t) for t in tasks[:_MAX_TASKS_SHOWN]]
+    if not shown:
+        return ""
     rest = len(tasks) - len(shown)
     text = " &middot; ".join(shown)
     if rest > 0:
-        text += f' <span style="color:{_MUTED};">+{rest} more</span>'
-    return (
-        f'<div style="margin:3px 0 0;font-size:11.5px;line-height:1.45;'
-        f'color:{_MUTED};">{text}</div>'
-    )
+        text += f" +{rest} more"
+    return text
 
 
-def _figures_line(parts: list[str], margin: str) -> str:
-    return (
-        f'<div style="margin:{margin};font-size:11.5px;line-height:1.45;color:{_MUTED};'
-        f'font-variant-numeric:tabular-nums;">{" &middot; ".join(parts)}</div>'
-        if parts
-        else ""
-    )
-
-
-def _member_figures(member: EodDepartmentMember) -> str:
-    """One muted line of the day's figures under a person's name.
-
-    This replaces the six-column table the rollup used to be. At phone width
-    those columns never fit, so the client scaled the whole email down until
-    nothing in it could be read; a line of labelled figures wraps instead of
-    shrinking. Nothing is printed for a measurement that was not taken - never
-    "0h", which reads as a measurement rather than an absence. Open and overdue
-    come from the task board, not the report, so they show for everyone.
-    """
+def _member_parts(member: EodDepartmentMember) -> list[str]:
+    """The day's figures for one person. Nothing is printed for a measurement
+    that was not taken - never "0h", which reads as a measurement rather than
+    an absence. Open and overdue come from the task board, not the report, so
+    they show for everyone."""
     parts: list[str] = []
     if member.worked_minutes > 0:
         parts.append(f"{_fmt_hours(member.worked_minutes)} on the machine")
@@ -1009,67 +1090,30 @@ def _member_figures(member: EodDepartmentMember) -> str:
         parts.append(f"{member.tasks_done} done")
     if member.tasks_open:
         parts.append(f"{member.tasks_open} open{_overdue_note(member.tasks_overdue)}")
-    return _figures_line(parts, "3px 0 0")
+    return parts
 
 
-def _roster_rows(members: Sequence[EodDepartmentMember]) -> str:
-    """One row per person: name and designation with the coverage pill beside
-    them, the day's figures and what they shipped underneath. Two cells only,
-    so the row keeps its shape at 320px."""
-    rows = ""
-    for member in members:
-        flag = (
-            f' <span style="color:{_AMBER};font-weight:600;">&#9888;{member.blockers}</span>'
-            if member.blockers
-            else ""
+def _member_row(member: EodDepartmentMember, *, last: bool) -> str:
+    tone, label = _COVERAGE_PILL.get(member.coverage, _COVERAGE_PILL["missing"])
+    title = escape(member.name)
+    if member.job_title:
+        title += (
+            f' <span style="font-weight:400;color:{_REPORT_META};">&middot; '
+            f"{escape(member.job_title)}</span>"
         )
-        rows += (
-            f'<tr><td style="padding:9px 10px 9px 0;border-top:1px solid {_LINE};'
-            f'font-size:13px;color:{_INK};vertical-align:top;">'
-            f'<span style="font-weight:600;">{escape(member.name)}</span>'
-            f"{_role_label(member.job_title)}{flag}"
-            f"{_member_figures(member)}{_shipped_line(member.tasks)}</td>"
-            f'<td style="padding:9px 0;border-top:1px solid {_LINE};text-align:right;'
-            f'white-space:nowrap;vertical-align:top;">{_coverage_pill(member.coverage)}</td></tr>'
-        )
-    return (
-        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-        f'style="margin:6px 0 0;">{rows}</table>'
-    )
+    lines: list[str] = []
+    parts = _member_parts(member)
+    if parts:
+        lines.append(_line(" &middot; ".join(parts)))
+    shipped = _shipped_text(member.tasks)
+    if shipped:
+        lines.append(_line(f"Shipped: {shipped}", color=_REPORT_META, size=14, top=2))
+    return _row(title, _pill(label, tone), lines, last=last)
 
 
-def _department_anchor(department: str) -> str:
-    """A stable id for a department's section, so the index can link down."""
-    return "dept-" + re.sub(r"[^a-z0-9]+", "-", department.lower()).strip("-")
-
-
-def _department_index(digests: Sequence[EodDepartmentDigest]) -> str:
-    """Every department on one line: name, a meter, the figure. It answers
-    "which department do I need to look at" before any roster is read."""
-    rows = ""
-    for digest in digests:
-        pct = round(digest.submission_rate * 100)
-        rows += (
-            f'<tr><td style="padding:7px 10px 7px 0;border-top:1px solid {_LINE};font-size:13px;">'
-            f'<a href="#{_department_anchor(digest.department)}" style="color:{_INK};'
-            f'font-weight:600;text-decoration:none;">{escape(digest.department)}</a></td>'
-            f'<td width="34%" style="padding:7px 10px 7px 0;border-top:1px solid {_LINE};'
-            f'vertical-align:middle;">{_meter(pct, _band_color(pct), height=6)}</td>'
-            f'<td style="padding:7px 0;border-top:1px solid {_LINE};text-align:right;'
-            f"white-space:nowrap;font-size:12.5px;color:{_MUTED};"
-            f'font-variant-numeric:tabular-nums;">'
-            f'<span style="font-weight:600;color:{_band_color(pct)};">{pct}%</span> '
-            f"{digest.submitted}/{digest.member_count}</td></tr>"
-        )
-    return (
-        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
-        f'style="margin:0 0 6px;">{rows}</table>'
-    )
-
-
-def _department_figures(digest: EodDepartmentDigest) -> str:
-    """One muted line under a department's heading: what the day produced and
-    what the department still carries. Says so in words when nobody reported."""
+def _department_parts(digest: EodDepartmentDigest) -> list[str]:
+    """What the day produced and what the department still carries. Says so
+    in words when nobody reported."""
     totals = digest.totals
     parts: list[str] = []
     if totals.worked_minutes > 0:
@@ -1081,35 +1125,75 @@ def _department_figures(digest: EodDepartmentDigest) -> str:
         parts.append(f"{totals.tasks_done} done")
     if digest.open_tasks:
         parts.append(f"{digest.open_tasks} open{_overdue_note(digest.overdue_tasks)}")
-    return _figures_line(parts, "4px 0 12px")
+    return parts
 
 
-def _department_block(digest: EodDepartmentDigest) -> str:
-    """One department's section: heading with its figure, the coverage bar, who
-    still owes, the roster, and the department's blockers."""
-    pct = round(digest.submission_rate * 100)
-    blockers = _blocker_block([escape(b) for b in digest.blockers])
-    blockers_html = f'<div style="margin:14px 0 0;">{blockers}</div>' if blockers else ""
-    return (
-        f'<div id="{_department_anchor(digest.department)}" '
-        f'style="margin:26px 0 0;padding:18px 0 0;border-top:2px solid {_LINE};">'
-        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>'
-        f'<td style="vertical-align:baseline;"><h2 style="margin:0;font-family:{_SERIF};'
-        f'font-size:19px;line-height:1.2;font-weight:600;color:{_INK};">'
-        f"{escape(digest.department)}</h2></td>"
-        f'<td style="vertical-align:baseline;text-align:right;white-space:nowrap;">'
-        f'<span style="font-family:{_SERIF};font-size:22px;font-weight:600;'
-        f'color:{_band_color(pct)};font-variant-numeric:tabular-nums;">{pct}%</span>'
-        f'<span style="font-size:12px;color:{_MUTED};margin-left:6px;">'
-        f"{digest.submitted} of {digest.member_count} reported</span></td>"
-        "</tr></table>"
-        f"{_department_figures(digest)}"
-        f"{_coverage_bar(_coverage_counts([digest]), digest.member_count)}"
-        f"{_still_owed(digest.members)}"
-        f"{_roster_rows(digest.members)}"
-        f"{blockers_html}"
-        "</div>"
+def _blocker_rows(blockers: Sequence[str]) -> str:
+    """The department's blockers under its roster: a Blocked pill and the text.
+    Unattributed on purpose - "what is holding this department up" is
+    operational, where "what X is stuck on" is personal."""
+    if not blockers:
+        return ""
+    rows = [
+        _row(
+            "",
+            _pill("Blocked", _TONE_ATTENTION),
+            [_line(escape(text), color=_REPORT_INK)],
+            last=i == len(blockers) - 1,
+        )
+        for i, text in enumerate(blockers)
+    ]
+    return _eyebrow("Blockers", _TONE_ATTENTION[1], padding="20px 0 0") + _rows(rows)
+
+
+def _department_block(digest: EodDepartmentDigest, *, first: bool) -> str:
+    members = digest.members
+    rows = [_member_row(m, last=i == len(members) - 1) for i, m in enumerate(members)]
+    return _block(
+        _heading(escape(digest.department), f"{digest.submitted} of {digest.member_count} reported")
+        + _figures(_department_parts(digest))
+        + _rows(rows)
+        + _blocker_rows(digest.blockers),
+        padding="26px 20px 0" if first else "30px 20px 0",
+        anchor=_department_anchor(digest.department),
     )
+
+
+def _attention_items(digests: Sequence[EodDepartmentDigest], *, overdue: int) -> list[str]:
+    """The lines of the "Needs attention" box: per department, who still owes a
+    report and why; then blockers and where; then overdue work. Names stay in
+    roster order and are capped, so a company-wide list cannot run forever."""
+    items: list[str] = []
+    named = 0
+    unnamed = 0
+    for digest in digests:
+        sentences: list[str] = []
+        for band, singular, plural in _ATTENTION_VERBS:
+            names = [m.name for m in digest.members if m.coverage == band]
+            if not names:
+                continue
+            room = _MAX_OWED_NAMED - named
+            if room <= 0:
+                unnamed += len(names)
+                continue
+            shown = [escape(n) for n in names[:room]]
+            hidden = len(names) - len(shown)
+            named += len(shown)
+            who = _join_names(shown) + (f" and {hidden} more" if hidden else "")
+            sentences.append(f"{who} {plural if len(names) > 1 else singular}.")
+        if sentences:
+            items.append(f"{escape(digest.department)}: {' '.join(sentences)}")
+    if unnamed:
+        items.append(f"{_count('more person', unnamed)} still owe a report.")
+    raised = [(escape(d.department), len(d.blockers)) for d in digests if d.blockers]
+    if raised:
+        total = sum(n for _, n in raised)
+        items.append(f"{_count('blocker', total)} raised in {_join_names([d for d, _ in raised])}.")
+    if overdue:
+        items.append(
+            f"{_count('task', overdue)} {'is' if overdue == 1 else 'are'} overdue across the company."
+        )
+    return items
 
 
 def eod_admin_digest_email(
@@ -1124,58 +1208,81 @@ def eod_admin_digest_email(
     One email where there used to be one per department. Ten near-identical
     messages landing at six o'clock answered "how did the day go" no faster
     than one, and the inbox count alone read as noise; the department sections
-    are all still here, after an index that says which of them needs opening.
+    are all still here, after the glance figures, a row of department tags that
+    says which section needs opening, and before a dark box that lists what
+    needs a decision.
 
-    Deliberately carries NO narratives: the anchor submission rate, the day's
-    summed effort, a coverage bar, each roster with its figures, and each
-    department's blockers. A person's own account of their day goes to their
-    reporting manager only (see EodService's module docstring), so there is no
-    `summary` field anywhere in here to leak one.
+    Deliberately carries NO narratives: coverage, the day's summed effort, each
+    roster with its figures and shipped titles, and each department's blockers.
+    A person's own account of their day goes to their reporting manager only
+    (see EodService's module docstring), so there is no `summary` field
+    anywhere in here to leak one.
     """
     day = _day_label(report_date)
     member_count = sum(d.member_count for d in digests)
     submitted = sum(d.submitted for d in digests)
-    # Per day, the same basis every rollup uses (`EodRollup.submission_rate`),
-    # so the company figure and the department figures can never disagree.
-    possible = sum(d.member_count * d.working_days for d in digests)
-    pct = round(sum(d.submitted_days for d in digests) / possible * 100) if possible else 0
+    owed = sum(d.pending + d.missing for d in digests)
     worked = sum(d.totals.worked_minutes for d in digests)
     active = sum(d.totals.active_minutes for d in digests)
     done = sum(d.totals.tasks_done for d in digests)
+    blocker_count = sum(len(d.blockers) for d in digests)
     open_tasks = sum(d.open_tasks for d in digests)
     overdue = sum(d.overdue_tasks for d in digests)
-    everyone = [m for d in digests for m in d.members]
-    departments = f"{len(digests)} department{'s' if len(digests) != 1 else ''}"
+    departments = _count("department", len(digests))
 
     subject = f"EOD · {day} · {submitted}/{member_count} reported"
-    # Every other Avora email offers a way back into the product; without this
-    # the rollup is a dead end - you can see a department is behind and have
-    # nowhere to click.
-    open_html = (
-        f'<p style="margin:22px 0 0;">{_button("Open in Avora", dashboard_url)}</p>'
-        if dashboard_url
-        else ""
+    glance = _glance(
+        [
+            (str(submitted), "Reported", _TONE_DONE),
+            (str(done), "Done", _TONE_ACTIVE),
+            (str(blocker_count), "Blockers", _TONE_ATTENTION),
+            (str(owed), "Still owed", _TONE_NEUTRAL),
+        ]
     )
-    content = f"""\
-{_eyebrow(f"End of day &middot; {escape(day)}")}
-<h1 class="h1" style="margin:8px 0 0;font-family:{_SERIF};font-size:26px;line-height:1.2;font-weight:600;color:{_INK};">
-  All departments
-</h1>
-{_hero(pct, f"{submitted} of {member_count} reported &middot; {departments}")}
-{_effort_block(worked_minutes=worked, active_minutes=active, tasks_done=done, submitted=submitted)}
-{_workload_line(open_tasks, overdue, "the company")}
-<div style="margin:18px 0 16px;">{_section_label("Coverage")}{_coverage_bar(_coverage_counts(digests), member_count)}{_still_owed(everyone)}</div>
-{_section_label("Departments")}
-{_department_index(digests)}
-{"".join(_department_block(d) for d in digests)}
-{open_html}"""
-    return subject, _layout(
+    # A day where nobody reported would otherwise total "0m, 0%" - measurements
+    # of zero, which read as "they sat there doing nothing" rather than "no
+    # reports came in". Say that in words instead.
+    sentences = [f"{submitted} of {member_count} reported across {departments}."]
+    if worked > 0:
+        sentences.append(
+            f"{_fmt_duration(worked)} on machines, {_active_pct(active, worked)}% active."
+        )
+    elif submitted == 0:
+        sentences.append("No reports came in, so there is nothing to total yet.")
+    if open_tasks:
+        tail = f", {overdue} overdue." if overdue else "."
+        sentences.append(f"{_count('task', open_tasks)} open{tail}")
+    attention = _attention_items(digests, overdue=overdue)
+    all_clear = not attention
+    if all_clear:
+        attention = ["Everyone expected to report did, and no blockers were raised."]
+    blocks = [
+        _report_header(
+            title="End of Day Report",
+            date_line=f"{escape(_long_day_label(report_date))} &middot; All departments",
+        ),
+        _block(glance + _sentence(" ".join(sentences)), padding="24px 20px 4px"),
+        _block(_department_tags(digests), padding="20px 20px 0"),
+        _block(
+            _lead(
+                "Reports below, grouped by department. A green tag means everyone is "
+                "accounted for. An orange one still owes a report."
+            ),
+            padding="18px 20px 0",
+        ),
+        *(_department_block(d, first=i == 0) for i, d in enumerate(digests)),
+        _block(
+            _dark_list("Needs attention", attention, numbered=not all_clear), padding="34px 20px 0"
+        ),
+        # Every other Avora email offers a way back into the product; without
+        # this the rollup is a dead end - you can see a department is behind
+        # and have nowhere to click.
+        _block(_report_button("Open in Avora", dashboard_url)) if dashboard_url else "",
+    ]
+    return subject, _report_layout(
         preheader=f"{departments} · {submitted} of {member_count} reported · {done} tasks shipped",
-        content_html=content,
-        footer=_ACTIVITY_FOOTER,
-        # Wider than the default shell: a roster row carries a name, a title and
-        # a pill side by side, and at 460px they crowd each other on desktop.
-        max_width=_WIDTH_WIDE,
+        blocks=blocks,
+        footer=_ADMIN_DIGEST_FOOTER,
     )
 
 

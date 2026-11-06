@@ -487,6 +487,16 @@ async def test_boolean_ctc_is_not_read_as_money(
     assert body["amount_minor"] is None and body["warnings"]
 
 
+async def test_a_lakh_count_sent_as_rupees_is_not_read_as_money(
+    circle_client: tuple[AsyncClient, FakeCircle], settings: Settings, seed: _Seed
+) -> None:
+    client, fake = circle_client
+    fake.compensation = {"annual_ctc_inr": 6, "annual_ctc_text": "6"}
+    body = (await client.get(_prefill_url(seed), headers=auth_headers(settings, seed.admin))).json()
+    assert body["amount_minor"] is None and body["annual_ctc_text"] == "6"
+    assert body["warnings"]
+
+
 async def test_oversized_file_is_skipped_without_retrying(
     scheduler: tuple[Any, FakeCircle], seed: _Seed, db: AsyncSession
 ) -> None:

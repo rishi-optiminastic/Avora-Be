@@ -1,5 +1,16 @@
 # Deploying the Avora backend to a Hetzner VPS (Docker)
 
+> **This compose stack is no longer production (since August 2026).**
+> Live traffic goes to the Coolify application `avora-api` and its own Postgres (`eteddkdrtn7slsrjnjpysbut`, host port 5433).
+> The stack below runs against a different Postgres (`deploy-db-1`, host port 5434), a frozen copy from August 2026 with 10 employees.
+> Running `docker compose up` here starts schedulers against that snapshot.
+> They email real people stale data (a second "0/N" EOD digest every evening, payroll digests for the old roster) while the live workers are untouched.
+> Do not use the build / up / deploy commands in this file on the VPS.
+>
+> To release: deploy `avora-api` in Coolify (there is no GitHub webhook, so it is a manual Deploy), then run `bash deploy/make-workers-live.sh` on the VPS.
+> That script starts the schedulers from the API's own image on the live database and stops any `deploy-*` scheduler it finds.
+> `build-workers.sh` refreshes the Coolify-managed worker images.
+
 This stack runs the API, a self-hosted Postgres, and the background workers
 on a single VPS. TLS is terminated by the Coolify proxy running in front of the
 stack (it owns 80/443 and forwards to `api`); this compose no longer ships its

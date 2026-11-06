@@ -19,6 +19,11 @@ from app.schemas.compensation import BankDetailsWrite
 _PAISE_PER_RUPEE = 100
 # Matches CompensationWrite's ceiling (10**15 minor units).
 _MAX_ANNUAL_RUPEES = 10**13
+# Below this an "annual rupees" figure is really a lakh count that Circle's
+# free-text CTC field let through unconverted: "6" (6 LPA) arrived as 6 rupees
+# and on 2026-11-05 the sync wrote it over every real salary. Nobody is paid
+# under 1,000 rupees a year, so such a value is unusable, never money.
+_MIN_ANNUAL_RUPEES = 1_000
 
 BANK_FIELD_LABELS = (
     ("bank_name", "Bank name"),
@@ -59,10 +64,11 @@ def clipped(raw: Any, length: int) -> str | None:
 
 
 def amount_minor(raw: Any) -> int | None:
-    """Annual rupees (int or float, never a bool) to paise; None if unusable."""
+    """Annual rupees (int or float, never a bool) to paise; None if unusable,
+    which includes a figure too small to be a year's pay."""
     if isinstance(raw, bool) or not isinstance(raw, int | float):
         return None
-    if not math.isfinite(raw) or not 0 < raw <= _MAX_ANNUAL_RUPEES:
+    if not math.isfinite(raw) or not _MIN_ANNUAL_RUPEES <= raw <= _MAX_ANNUAL_RUPEES:
         return None
     return round(raw * _PAISE_PER_RUPEE)
 

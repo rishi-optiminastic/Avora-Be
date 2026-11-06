@@ -57,18 +57,9 @@ _ON_OPEN: dict[FormTrigger, dict[int, str]] = {
     FormTrigger.PROBATION_HR: {},
 }
 # A two-stage probation review hands over mid-form: the employee finishes
-# their half and it moves to their reporting manager. That handover settles
-# two steps at once - the employee's (3) and the "now with the manager" one
-# (4), which used to be HR posting a second form by hand and is now simply
-# where the form went next.
-_ON_HANDOVER: dict[FormTrigger, dict[int, str]] = {
-    FormTrigger.PROBATION_SELF: {
-        3: "self-assessment submitted by the employee.",
-        4: "probation review handed to the reporting manager.",
-    },
-    FormTrigger.PROBATION_MANAGER: {},
-    FormTrigger.PROBATION_HR: {},
-}
+# their half and it moves to their reporting manager.
+_SELF_HALF_DONE = {3: "self-assessment submitted by the employee."}
+_REACHED_MANAGER = {4: "probation review handed to the reporting manager."}
 _MANAGER_DONE = {
     5: "reporting manager submitted the probation evaluation.",
     6: "reporting manager submitted the probation evaluation.",
@@ -82,6 +73,23 @@ _ON_SUBMIT: dict[FormTrigger, dict[int, str]] = {
         9: "HR probation review form submitted.",
     },
 }
+
+
+def steps_on_handover(assignment: FormAssignment) -> dict[int, str]:
+    """Which steps the mid-form handover settles.
+
+    Step 4 is "it is with the manager now", and that is only true when the
+    handover FOUND one. A probationer with no `manager_id` on file leaves the
+    form parked as NEEDS_MANAGER with no assignee at all - ticking step 4 there
+    would tell HR the review had moved on while it sat waiting for them to set
+    a manager. The employee's own step is settled either way: they did their
+    part regardless of where the form went next.
+    """
+    if assignment.trigger is not FormTrigger.PROBATION_SELF:
+        return {}
+    if assignment.status is AssignmentStatus.NEEDS_MANAGER or assignment.assignee_id is None:
+        return dict(_SELF_HALF_DONE)
+    return {**_SELF_HALF_DONE, **_REACHED_MANAGER}
 
 
 def steps_on_submit(assignment: FormAssignment) -> dict[int, str]:
@@ -242,7 +250,7 @@ class ProbationFormLink:
         """
         if assignment.subject_id is None or not is_probation_form(assignment.trigger):
             return
-        await self._tick(assignment.subject_id, _ON_HANDOVER[assignment.trigger])
+        await self._tick(assignment.subject_id, steps_on_handover(assignment))
 
     async def on_submitted(self, assignment: FormAssignment) -> None:
         if assignment.subject_id is None or not is_probation_form(assignment.trigger):
