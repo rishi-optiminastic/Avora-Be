@@ -44,9 +44,17 @@ from app.schemas.payroll_receipt import (
 
 logger = get_logger("app.payroll.receipt")
 
-# A receipt is a document, not a photo album. PDFs cover almost every bank, and
-# a screenshot of a confirmation screen is a legitimate second-best.
-ALLOWED_TYPES = frozenset({"application/pdf", "image/png", "image/jpeg", "image/webp"})
+# A receipt is a document, not a photo album. PDFs cover almost every bank, a
+# screenshot of a confirmation screen is a legitimate second-best, and the bulk
+# transfer advice for a salary batch is routinely handed over as an Excel
+# workbook - one row per credit, which is exactly the record a dispute asks for.
+# The two Excel types are the ones browsers send for .xlsx and .xls; the file is
+# stored and served back as an attachment, never parsed.
+XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+XLS_TYPE = "application/vnd.ms-excel"
+ALLOWED_TYPES = frozenset(
+    {"application/pdf", "image/png", "image/jpeg", "image/webp", XLSX_TYPE, XLS_TYPE}
+)
 MAX_BYTES = 15 * 1024 * 1024
 
 
@@ -98,7 +106,7 @@ class PayrollReceiptService:
         if len(data) > MAX_BYTES:
             raise ValidationError("Receipt is too large (max 15 MB).")
         if content_type not in ALLOWED_TYPES:
-            raise ValidationError("A receipt must be a PDF or an image.")
+            raise ValidationError("A receipt must be a PDF, an image or an Excel workbook.")
 
         digest = hashlib.sha256(data).hexdigest()
         if await self._receipts.find_duplicate(meta.period_month, digest):

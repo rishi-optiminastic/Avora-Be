@@ -56,8 +56,29 @@ _ON_OPEN: dict[FormTrigger, dict[int, str]] = {
     FormTrigger.PROBATION_MANAGER: {4: "probation evaluation form sent to the reporting manager."},
     FormTrigger.PROBATION_HR: {},
 }
+# A two-stage probation review hands over mid-form: the employee finishes
+# their half and it moves to their reporting manager. That handover settles
+# two steps at once - the employee's (3) and the "now with the manager" one
+# (4), which used to be HR posting a second form by hand and is now simply
+# where the form went next.
+_ON_HANDOVER: dict[FormTrigger, dict[int, str]] = {
+    FormTrigger.PROBATION_SELF: {
+        3: "self-assessment submitted by the employee.",
+        4: "probation review handed to the reporting manager.",
+    },
+    FormTrigger.PROBATION_MANAGER: {},
+    FormTrigger.PROBATION_HR: {},
+}
 _ON_SUBMIT: dict[FormTrigger, dict[int, str]] = {
-    FormTrigger.PROBATION_SELF: {3: "self-assessment form submitted."},
+    # On a two-stage review this is the MANAGER finishing, because the
+    # employee's half settles at the handover above. On the old single-stage
+    # self-assessment it stays step 3, so a form sent before the merge still
+    # ticks the right box when it comes back.
+    FormTrigger.PROBATION_SELF: {
+        3: "self-assessment form submitted.",
+        5: "reporting manager submitted the probation evaluation.",
+        6: "reporting manager submitted the probation evaluation.",
+    },
     FormTrigger.PROBATION_MANAGER: {
         5: "reporting manager submitted the probation evaluation.",
         6: "reporting manager submitted the probation evaluation.",
@@ -189,6 +210,18 @@ class ProbationFormLink:
         if assignment.status is AssignmentStatus.PENDING:
             steps.update(_ON_OPEN[assignment.trigger])
         await self._tick(assignment.subject_id, steps)
+
+    async def on_handed_over(self, assignment: FormAssignment) -> None:
+        """The employee finished their half and it moved to their manager.
+
+        `on_submitted` deliberately fires only on a FINISHED form, so without
+        this the employee's step would stay open until their manager wrote the
+        second half - the checklist would show nothing had happened for days
+        after they had in fact done their part.
+        """
+        if assignment.subject_id is None or not is_probation_form(assignment.trigger):
+            return
+        await self._tick(assignment.subject_id, _ON_HANDOVER[assignment.trigger])
 
     async def on_submitted(self, assignment: FormAssignment) -> None:
         if assignment.subject_id is None or not is_probation_form(assignment.trigger):

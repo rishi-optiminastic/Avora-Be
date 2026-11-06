@@ -75,7 +75,7 @@ class ProbationFormPanelService:
             live = await self._forms.published_for_trigger(trigger)
             return ProbationFormStatus(trigger=trigger, form_title=live[0].title if live else None)
         assignment, form_title, assignee_name, _ = row
-        can_open = _may_open_answers(caller, assignment)
+        can_open = await self._may_open_answers(caller, assignment)
         return ProbationFormStatus(
             trigger=trigger,
             form_title=form_title,
@@ -88,6 +88,22 @@ class ProbationFormPanelService:
             weighted_total=await self._total(assignment) if can_open else None,
             can_open=can_open,
         )
+
+    async def _may_open_answers(self, caller: CurrentUser, assignment: FormAssignment) -> bool:
+        """Whether the link on the checklist actually opens.
+
+        This MUST agree with `FormAssignmentService.detail`, or the panel
+        offers a link that 404s - which is how a checklist starts lying about
+        what you can do. The reporting manager holds the form outright once it
+        has been handed to them; the line above them reads it as oversight.
+        """
+        if _may_open_answers(caller, assignment):
+            return True
+        if assignment.subject_id is None or assignment.subject_id == caller.employee_id:
+            return False
+        if assignment.status not in (AssignmentStatus.PENDING, AssignmentStatus.SUBMITTED):
+            return False
+        return await self._employees.can_read(caller, assignment.subject_id)
 
     async def _total(self, assignment: FormAssignment) -> float | None:
         """The weighted score out of 100, once submitted."""
@@ -102,9 +118,8 @@ class ProbationFormPanelService:
 
 
 def _may_open_answers(caller: CurrentUser, assignment: FormAssignment) -> bool:
-    """Whether the link to this form works for the caller: the assignee (to
-    fill it in, or read their own answers), or HR/admin, never about
-    themselves (the same rule as the form page)."""
+    """The part of the rule that needs no database: the assignee (to fill it
+    in, or read their own answers), or HR/admin, never about themselves."""
     if assignment.status not in (AssignmentStatus.PENDING, AssignmentStatus.SUBMITTED):
         return False
     if assignment.assignee_id == caller.employee_id:

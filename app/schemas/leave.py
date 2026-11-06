@@ -128,6 +128,9 @@ class LeaveTypeBalance(BaseModel):
     used: float  # approved days in the current leave year
     pending: float  # submitted-but-undecided days in the current leave year
     remaining: float  # allocated - used - pending (may be negative if over-quota)
+    # The part of `used` HR entered as taken before Avora held leave records,
+    # so a card can say "4 used (4 before Avora)" rather than leave it a mystery.
+    used_before: float = 0.0
     # False while the employee's tenure band grants none of this type — during
     # probation, planned and annual leave are not yet earned. Distinct from a
     # quota that has simply run out: both read as 0 remaining, but only one of

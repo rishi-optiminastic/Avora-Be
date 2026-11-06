@@ -243,7 +243,7 @@ async def add_payroll_receipt(
     amount_minor: Annotated[int | None, Form()] = None,
     note: Annotated[str | None, Form()] = None,
 ) -> PayrollReceiptRead:
-    """File proof that a month's payroll was paid (PDF or image, max 15 MB).
+    """File proof that a month's payroll was paid (PDF, image or Excel, max 15 MB).
 
     Multipart because the document rides along. Several per month is normal:
     salaries and reimbursements often go out as separate transfers.

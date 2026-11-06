@@ -8,12 +8,13 @@ mirroring `CompensationRepository`.
 from __future__ import annotations
 
 import uuid
+from datetime import date
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.leave_allocation import LeaveAllocation
-from app.schemas.leave_allocation import LeaveAllocationWrite
+from app.schemas.leave_allocation import USED_BEFORE_FIELDS, LeaveAllocationWrite
 
 
 class LeaveAllocationRepository:
@@ -27,7 +28,12 @@ class LeaveAllocationRepository:
         return record
 
     async def upsert(
-        self, employee_id: uuid.UUID, data: LeaveAllocationWrite, *, updated_by: uuid.UUID
+        self,
+        employee_id: uuid.UUID,
+        data: LeaveAllocationWrite,
+        *,
+        updated_by: uuid.UUID,
+        used_before_year_start: date | None,
     ) -> LeaveAllocation:
         record = await self.get_for_employee(employee_id)
         if record is None:
@@ -41,6 +47,9 @@ class LeaveAllocationRepository:
         record.maternity_days = data.maternity_days
         record.paternity_days = data.paternity_days
         record.marriage_days = data.marriage_days
+        for field in USED_BEFORE_FIELDS:
+            setattr(record, field, getattr(data, field))
+        record.used_before_year_start = used_before_year_start
         record.note = data.note
         record.updated_by = updated_by
         await self._session.flush()

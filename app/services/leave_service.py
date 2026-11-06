@@ -26,6 +26,7 @@ from app.core.exceptions import (
     NotFoundError,
     ValidationError,
 )
+from app.core.leave_year import leave_year_window
 from app.core.logging import get_logger
 from app.core.payroll import working_days_between
 from app.core.tenure import TenureStatus, accrued_units, probation_end, tenure_status
@@ -85,19 +86,57 @@ PROBATION_HALF_DAYS_PER_MONTH = 2
 _NOTICE_TYPES = (LeaveType.PLANNED, LeaveType.ANNUAL)
 
 # The paid, quota-tracked leave types shown on the balance. Each row is:
-#   (leave type, LeavePolicy attr, LeaveAllocation override attr, member types)
+#   (leave type, LeavePolicy attr, LeaveAllocation override attr,
+#    LeaveAllocation taken-before-Avora attr, member types)
 # "member types" are the leave types whose approved/pending days count against
 # this quota (half-day rolls up into planned). UNPAID is uncapped and handled
-# separately. Adding a new tracked type is a single row here + the two columns.
-_TRACKED_LEAVE: tuple[tuple[LeaveType, str, str, tuple[LeaveType, ...]], ...] = (
-    (LeaveType.PLANNED, "annual_planned_days", "planned_days", _PLANNED_TYPES),
-    (LeaveType.ANNUAL, "annual_days", "annual_days", (LeaveType.ANNUAL,)),
-    (LeaveType.SICK, "annual_sick_days", "sick_days", (LeaveType.SICK,)),
-    (LeaveType.BEREAVEMENT, "bereavement_days", "bereavement_days", (LeaveType.BEREAVEMENT,)),
-    (LeaveType.BIRTHDAY, "birthday_days", "birthday_days", (LeaveType.BIRTHDAY,)),
-    (LeaveType.MATERNITY, "maternity_days", "maternity_days", (LeaveType.MATERNITY,)),
-    (LeaveType.PATERNITY, "paternity_days", "paternity_days", (LeaveType.PATERNITY,)),
-    (LeaveType.MARRIAGE, "marriage_days", "marriage_days", (LeaveType.MARRIAGE,)),
+# separately. Adding a new tracked type is a single row here + the three columns.
+_TrackedLeave = tuple[LeaveType, str, str, str, tuple[LeaveType, ...]]
+_TRACKED_LEAVE: tuple[_TrackedLeave, ...] = (
+    (
+        LeaveType.PLANNED,
+        "annual_planned_days",
+        "planned_days",
+        "planned_used_before",
+        _PLANNED_TYPES,
+    ),
+    (LeaveType.ANNUAL, "annual_days", "annual_days", "annual_used_before", (LeaveType.ANNUAL,)),
+    (LeaveType.SICK, "annual_sick_days", "sick_days", "sick_used_before", (LeaveType.SICK,)),
+    (
+        LeaveType.BEREAVEMENT,
+        "bereavement_days",
+        "bereavement_days",
+        "bereavement_used_before",
+        (LeaveType.BEREAVEMENT,),
+    ),
+    (
+        LeaveType.BIRTHDAY,
+        "birthday_days",
+        "birthday_days",
+        "birthday_used_before",
+        (LeaveType.BIRTHDAY,),
+    ),
+    (
+        LeaveType.MATERNITY,
+        "maternity_days",
+        "maternity_days",
+        "maternity_used_before",
+        (LeaveType.MATERNITY,),
+    ),
+    (
+        LeaveType.PATERNITY,
+        "paternity_days",
+        "paternity_days",
+        "paternity_used_before",
+        (LeaveType.PATERNITY,),
+    ),
+    (
+        LeaveType.MARRIAGE,
+        "marriage_days",
+        "marriage_days",
+        "marriage_used_before",
+        (LeaveType.MARRIAGE,),
+    ),
 )
 
 _LEAVES_LINK = "/dashboard/time/leaves"
@@ -106,7 +145,7 @@ _LEAVES_LINK = "/dashboard/time/leaves"
 def _quota_bucket(leave_type: LeaveType) -> LeaveType | None:
     """The tracked quota a leave type spends from (half-day -> planned), or None
     for an uncapped type such as unpaid leave."""
-    for bucket, _policy_attr, _alloc_attr, members in _TRACKED_LEAVE:
+    for bucket, _policy_attr, _alloc_attr, _before_attr, members in _TRACKED_LEAVE:
         if leave_type in members:
             return bucket
     return None
@@ -922,6 +961,19 @@ class LeaveService:
         policy = await self._policy.get_or_create()
         allocation = await self._allocations.get_for_employee(target_id)
 
+        # Days HR entered as taken before Avora held leave records. They belong
+        # to ONE leave year - the one current when HR saved them - so they count
+        # only in that year's window and fall away on 1 April by themselves.
+        counts_taken_before = (
+            allocation is not None and allocation.used_before_year_start == year_start
+        )
+
+        def taken_before(before_attr: str) -> float:
+            if not counts_taken_before or allocation is None:
+                return 0.0
+            value = getattr(allocation, before_attr)
+            return float(value) if value is not None else 0.0
+
         # Which entitlement band this person is in today, and when they leave (or
         # left) probation. Derived from the hire date every time — never stored,
         # so it can't go stale on the day someone crosses a boundary.
@@ -997,9 +1049,10 @@ class LeaveService:
             return total
 
         balances: list[LeaveTypeBalance] = []
-        for leave_type, policy_attr, alloc_attr, types in _TRACKED_LEAVE:
+        for leave_type, policy_attr, alloc_attr, before_attr, types in _TRACKED_LEAVE:
             allocated = quota(leave_type, policy_attr, alloc_attr)
-            used = bucket(approved, types)
+            before = taken_before(before_attr)
+            used = bucket(approved, types) + before
             pend = bucket(pending, types)
             # "Not earned yet" is a statement about TENURE, so read it off the
             # band — never off a zero. A zero can equally be HR typing 0 into
@@ -1019,6 +1072,7 @@ class LeaveService:
                     leave_type=leave_type,
                     allocated=allocated,
                     used=used,
+                    used_before=before,
                     pending=pend,
                     remaining=allocated - used - pend,
                     eligible=not not_yet,
@@ -1101,22 +1155,11 @@ def _ineligible_reason(tier: TenureStatus, confirmed_on: date) -> str:
     return "Not available on your current plan"
 
 
-# The company leave year is the Indian financial year (Leave Policy 2026, General
-# Guidelines: "the financial year from 1 April to 31 March"). Everyone resets
-# together on 1 April, rather than each person resetting on their own joining
-# anniversary as they used to.
-LEAVE_YEAR_START_MONTH = 4
-
-
-def _leave_year_window(today: date) -> tuple[date, date]:
-    """The financial-year leave window containing `today`: 1 April - 31 March.
-
-    Returns [start, end] inclusive. January-March belong to the year that STARTED
-    the previous April, so February 2027 sits in the 2026-27 window.
-    """
-    year = today.year if today.month >= LEAVE_YEAR_START_MONTH else today.year - 1
-    start = date(year, LEAVE_YEAR_START_MONTH, 1)
-    return start, date(year + 1, LEAVE_YEAR_START_MONTH, 1) - timedelta(days=1)
+# The leave year itself (1 April - 31 March) lives in `app.core.leave_year`, so
+# the allocation service can stamp "taken before Avora" days with the year they
+# belong to without reaching into this module. Kept under its old name here
+# because every window below reads as this module's own rule.
+_leave_year_window = leave_year_window
 
 
 def _leave_year_windows(first: date, last: date) -> list[tuple[date, date]]:

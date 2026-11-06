@@ -156,9 +156,17 @@ class FormAssignmentService:
         # form is still partly theirs: they see what they wrote, and nothing
         # the next person has written since.
         wrote_some = caller.employee_id in await self._responses.contributor_ids(assignment.id)
-        if not self._may_open(caller, assignment, await self._today()) and not wrote_some:
+        may_open = self._may_open(caller, assignment, await self._today())
+        # A probation review is also readable by whoever runs the review: the
+        # reporting manager holds the form itself after the handover, but the
+        # people above them only ever see it through the checklist, and a
+        # status line they cannot open is not a review they can run.
+        oversees = not may_open and await self._oversees_probation(caller, assignment)
+        if not may_open and not oversees and not wrote_some:
             raise NotFoundError()
-        own_half_only = wrote_some and not self._may_open(caller, assignment, await self._today())
+        # Someone reading it through oversight gets the whole form, not a half:
+        # `own_half_only` is the employee-after-handover case alone.
+        own_half_only = wrote_some and not may_open and not oversees
         form = await self._forms.get(assignment.form_id)
         if form is None:  # pragma: no cover - cascades with the form
             raise NotFoundError()
@@ -248,9 +256,14 @@ class FormAssignmentService:
         await self._assignments.flush()
         if assignment.status is AssignmentStatus.SUBMITTED:
             # The checklist and the probation panel care about a FINISHED form.
-            # Ticking a step at the handover would claim the manager's half was
-            # done before anyone had written it.
+            # Ticking the MANAGER's steps at the handover would claim their half
+            # was done before anyone had written it.
             await self._probation.on_submitted(assignment)
+        else:
+            # The employee HAS finished their half, though, and the form has
+            # moved on. Saying so is the difference between a checklist that
+            # tracks the review and one that sits still for a week.
+            await self._probation.on_handed_over(assignment)
         await self._audit.append(
             actor=str(caller.employee_id),
             action="form.submit" if following is None else "form.stage_submit",
@@ -655,6 +668,29 @@ class FormAssignmentService:
             assignment.hr_alerted_at = None
 
     # --- helpers ---------------------------------------------------------- #
+    async def _oversees_probation(
+        self, caller: CurrentUser, assignment: FormAssignment
+    ) -> bool:
+        """Read-only oversight of a probation review, for the line above it.
+
+        Deliberately NOT part of `_may_open`: that one also guards submitting,
+        and a department head is not meant to fill in a review on a manager's
+        behalf. It is also probation-only - the same widening on `_may_open`
+        would hand a senior manager every joiner and buddy form in their tree,
+        which nobody asked for and those people were promised was private.
+
+        The scope is the one that already decides who may see the probation
+        checklist, so this adds no reader who could not already see that the
+        review exists - and never the subject reading their own.
+        """
+        if not is_probation_form(assignment.trigger) or assignment.subject_id is None:
+            return False
+        if assignment.subject_id == caller.employee_id:
+            return False
+        if assignment.status not in (AssignmentStatus.PENDING, AssignmentStatus.SUBMITTED):
+            return False
+        return await self._employees.can_read(caller, assignment.subject_id)
+
     @staticmethod
     def _may_open(caller: CurrentUser, assignment: FormAssignment, today: date) -> bool:
         """The assignee, once it has opened (HR and admins too, for their own

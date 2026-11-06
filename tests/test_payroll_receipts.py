@@ -26,6 +26,8 @@ from tests.conftest import _Seed, auth_headers
 
 _MONTH = "2026-06"
 _PDF = b"%PDF-1.4\nfake transfer advice\n%%EOF"
+_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_XLS = "application/vnd.ms-excel"
 
 
 async def _hr(db: AsyncSession) -> Employee:
@@ -176,12 +178,42 @@ async def test_an_unreal_month_is_rejected(
     assert (await _upload(client, settings, hr, month="2026-13")).status_code == 422
 
 
-async def test_only_a_pdf_or_image_is_accepted(
+async def test_only_a_document_type_is_accepted(
     client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
 ) -> None:
     hr = await _hr(db)
     resp = await _upload(client, settings, hr, content_type="application/zip")
     assert resp.status_code == 422
+
+
+async def test_an_excel_workbook_is_accepted(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """Banks hand over the bulk-transfer advice for a salary batch as a
+    workbook, one row per credit. Both the modern and the legacy Excel types
+    are filed and come back under the type they were sent with."""
+    hr = await _hr(db)
+    for filename, content_type, data in (
+        ("advice.xlsx", _XLSX, b"PK\x03\x04fake-workbook"),
+        ("advice.xls", _XLS, b"\xd0\xcf\x11\xe0fake-legacy-workbook"),
+    ):
+        resp = await client.post(
+            "/api/v1/payroll/receipts",
+            data={"period_month": _MONTH},
+            files={"file": (filename, data, content_type)},
+            headers=auth_headers(settings, hr),
+        )
+        assert resp.status_code == 201, resp.text
+        body = resp.json()
+        assert body["content_type"] == content_type
+        assert body["original_filename"] == filename
+
+        fetched = await client.get(
+            f"/api/v1/payroll/receipts/{body['id']}/file", headers=auth_headers(settings, hr)
+        )
+        assert fetched.status_code == 200
+        assert fetched.content == data
+        assert fetched.headers["content-type"] == content_type
 
 
 async def test_an_empty_file_is_rejected(

@@ -1054,8 +1054,9 @@ def get_leave_allocation_service(
     allocations: Annotated[LeaveAllocationRepository, Depends(get_leave_allocation_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    attendance_policy: Annotated[AttendancePolicyRepository, Depends(get_attendance_policy_repo)],
 ) -> LeaveAllocationService:
-    return LeaveAllocationService(allocations, employees, audit)
+    return LeaveAllocationService(allocations, employees, audit, attendance_policy)
 
 
 def get_holiday_service(
