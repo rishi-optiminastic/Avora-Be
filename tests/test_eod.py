@@ -42,7 +42,11 @@ from app.schemas.eod import (
 )
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.attendance_service import AttendanceService
-from app.services.email_templates import eod_admin_digest_email, eod_report_email
+from app.services.email_templates import (
+    eod_admin_digest_email,
+    eod_group_digest_email,
+    eod_report_email,
+)
 from app.services.eod_service import MAX_DIGEST_DAYS, UNASSIGNED_DEPARTMENT, EodService
 from app.services.eod_settings_service import EodSettingsService
 from app.services.llm_service import LlmError
@@ -317,11 +321,12 @@ async def test_purge_old_screenshots(db: AsyncSession, seed: _Seed, settings: Se
 async def test_approve_emails_only_the_reporting_manager(
     db: AsyncSession, seed: _Seed, settings: Settings
 ) -> None:
-    """A person's own report goes to their manager and nobody else.
+    """A person's own report goes to them, and to nobody else at that moment.
 
-    Admins used to be copied on every individual report, which contradicted
-    `_personal_scope_clause` - they were mailed a narrative they are not allowed
-    to open in the app. They get the per-department rollup instead.
+    The manager is not mailed per report any more: they get one team rollup at
+    the send time, carrying this narrative. Admins were once copied on every
+    individual report, which contradicted `_personal_scope_clause` - they were
+    mailed a narrative they are not allowed to open in the app.
     """
     draft = EodReport(
         employee_id=seed.report.id,
@@ -341,16 +346,17 @@ async def test_approve_emails_only_the_reporting_manager(
     result = await service.approve(report_caller, draft.id)
 
     assert result.status == "sent"
-    assert email.sent == ["manager@corp.test"]
-    assert "admin@corp.test" not in email.sent
+    assert email.sent == ["report@corp.test"]
+    assert email.messages[0]["subject"] == "Your end of day · Mon, 22 Jun"
+    assert "admin@corp.test" not in email.sent and "manager@corp.test" not in email.sent
 
 
-async def test_report_with_no_manager_mails_nobody_but_still_closes_out(
+async def test_report_with_no_manager_still_reaches_its_author(
     db: AsyncSession, seed: _Seed, settings: Settings
 ) -> None:
     """The outsider has no `manager_id`. Their report must not fall back to the
-    admins - that is the leak we just removed - but it must not get stuck as a
-    draft either. They stay visible to admins via the department rollup."""
+    admins - that is the leak we removed - and it must not get stuck as a draft
+    either: it goes to them, and they stay visible to admins via the rollup."""
     draft = EodReport(
         employee_id=seed.outsider.id,
         report_date="2026-06-22",
@@ -367,7 +373,7 @@ async def test_report_with_no_manager_mails_nobody_but_still_closes_out(
     result = await service.approve(caller, draft.id)
 
     assert result.status == "sent"
-    assert email.sent == []
+    assert email.sent == ["outsider@corp.test"]
 
 
 async def test_auto_send_respects_the_6pm_window(
@@ -702,9 +708,10 @@ async def test_admin_digest_is_one_email_covering_every_department(
     email = _CapturingEmail()
     service = _build_service(db, settings, llm=_StubLlm(), email=email)
 
-    count = await service.send_admin_digest(datetime.now(UTC), _EVENING)
+    count = await service.send_digests(datetime.now(UTC), _EVENING)
 
-    assert count == 1
+    # The company rollup, plus one team rollup per direct manager (the seed's).
+    assert count >= 1
     message = _admin_digest(email)
     html = str(message["html"])
     for department in ("Design", "Sales", UNASSIGNED_DEPARTMENT):
@@ -737,7 +744,7 @@ async def test_admin_digest_leads_with_the_company_figure_and_indexes_department
 
     email = _CapturingEmail()
     service = _build_service(db, settings, llm=_StubLlm(), email=email)
-    await service.send_admin_digest(datetime.now(UTC), _EVENING)
+    await service.send_digests(datetime.now(UTC), _EVENING)
     html = str(_admin_digest(email)["html"])
 
     company = f"1 of {await _headcount(db)} reported"
@@ -788,8 +795,11 @@ def test_eod_emails_are_laid_out_for_a_phone() -> None:
         blockers=[],
     )
     _subject, rollup = eod_admin_digest_email(digests=[digest], report_date=_DIGEST_DAY)
+    _subject, team = eod_group_digest_email(
+        kind="team", label="Max Manager", digest=digest, narratives={}, report_date=_DIGEST_DAY
+    )
 
-    for html in (report, rollup):
+    for html in (report, rollup, team):
         assert '<meta name="viewport" content="width=device-width, initial-scale=1">' in html
         assert "@media only screen and (max-width: 600px)" in html
 
@@ -819,7 +829,7 @@ async def test_admin_digest_carries_the_numbers_and_blockers_but_no_narrative(
 
     email = _CapturingEmail()
     service = _build_service(db, settings, llm=_StubLlm(), email=email)
-    await service.send_admin_digest(datetime.now(UTC), _EVENING)
+    await service.send_digests(datetime.now(UTC), _EVENING)
     html = str(_admin_digest(email)["html"])
 
     # The narrative never appears — not the edited summary, not the draft copy of
@@ -828,10 +838,10 @@ async def test_admin_digest_carries_the_numbers_and_blockers_but_no_narrative(
     # The work shipped IS named - a completed task is an organisational fact that
     # already sits on the board, unlike the narrative above.
     assert "Logo pass" in html and "Type scale" in html
-    # What IS there: the roster, the effort, and the department's blocker.
+    # What IS there: the roster and the department's blocker. Time on the
+    # machine is deliberately absent: the admins asked for tasks and blockers.
     assert "Dia" in html and "Devi" in html
-    assert "8.0h" in html  # 480 minutes on the machine
-    assert "75%" in html  # 360/480 active
+    assert "8.0h" not in html and "on the machine" not in html
     assert "Waiting on the copy deck" in html
     # Coverage: one of the two Design people reported.
     assert "1 of 2 reported" in html
@@ -846,13 +856,13 @@ async def test_admin_digest_sends_once_per_local_day(
     email = _CapturingEmail()
     service = _build_service(db, settings, llm=_StubLlm(), email=email)
 
-    assert await service.send_admin_digest(datetime.now(UTC), _EVENING) == 1
+    assert await service.send_digests(datetime.now(UTC), _EVENING) >= 1
     before = len(email.messages)
     # A later tick the same evening sends nothing more…
-    assert await service.send_admin_digest(datetime.now(UTC), _EVENING.replace(hour=21)) == 0
+    assert await service.send_digests(datetime.now(UTC), _EVENING.replace(hour=21)) == 0
     assert len(email.messages) == before
     # …but the next day is a fresh run.
-    assert await service.send_admin_digest(datetime.now(UTC), _EVENING + timedelta(days=1)) == 1
+    assert await service.send_digests(datetime.now(UTC), _EVENING + timedelta(days=1)) >= 1
 
 
 async def test_admin_digest_waits_for_the_send_window(
@@ -864,7 +874,7 @@ async def test_admin_digest_waits_for_the_send_window(
 
     # 5 PM IST — before the 18:00 send time. Nothing leaves, same hard gate the
     # individual reports obey.
-    assert await service.send_admin_digest(datetime.now(UTC), _EVENING.replace(hour=17)) == 0
+    assert await service.send_digests(datetime.now(UTC), _EVENING.replace(hour=17)) == 0
     assert email.messages == []
 
 
@@ -889,7 +899,7 @@ async def test_admin_digest_counts_a_draft_flushed_in_the_same_tick(
     email = _CapturingEmail()
     service = _build_service(db, settings, llm=_StubLlm(), email=email)
     await service.auto_send_due(datetime.now(UTC), _EVENING)
-    await service.send_admin_digest(datetime.now(UTC), _EVENING)
+    await service.send_digests(datetime.now(UTC), _EVENING)
 
     html = str(_admin_digest(email)["html"])
     assert "1 of 1 reported" in html
@@ -1192,7 +1202,7 @@ async def test_admin_digest_names_the_work_shipped_but_caps_the_list(
 
     email = _CapturingEmail()
     service = _build_service(db, settings, llm=_StubLlm(), email=email)
-    await service.send_admin_digest(datetime.now(UTC), _EVENING)
+    await service.send_digests(datetime.now(UTC), _EVENING)
     html = str(_admin_digest(email)["html"])
     # Only the first three are named; the rest are counted, not listed.
     assert "Logo pass" in html and "Type scale" in html and "Icon set" in html
@@ -1233,7 +1243,7 @@ async def test_admin_digest_names_who_still_owes_but_not_the_absent(
     email = _CapturingEmail()
     service = _build_service(db, settings, llm=_StubLlm(), email=email)
     # Send without flushing drafts first, so the pending row stays pending.
-    await service.send_admin_digest(datetime.now(UTC), _EVENING)
+    await service.send_digests(datetime.now(UTC), _EVENING)
     html = str(_admin_digest(email)["html"])
 
     # The "Needs attention" box names who still owes a report, per department.
@@ -1308,7 +1318,7 @@ async def test_an_it_admin_receives_the_admin_digest(
 
     email = _CapturingEmail()
     service = _build_service(db, settings, llm=_StubLlm(), email=email)
-    await service.send_admin_digest(datetime.now(UTC), _EVENING)
+    await service.send_digests(datetime.now(UTC), _EVENING)
 
     everyone = {str(m["to"]) for m in email.messages} | {
         a
@@ -1355,13 +1365,141 @@ async def test_a_failing_digest_send_cannot_undo_already_delivered_reports(
     email = _BrokenDigestEmail()
     service = _build_service(db, settings, llm=_StubLlm(), email=email)
     assert await service.auto_send_due(datetime.now(UTC), _EVENING) == 1
-    assert email.sent == ["manager@corp.test"]  # delivered, irreversibly
+    assert email.sent == ["report@corp.test"]  # delivered, irreversibly
 
-    # Must NOT raise - that is the whole point.
-    assert await service.send_admin_digest(datetime.now(UTC), _EVENING) == 0
+    # Must NOT raise - that is the whole point. The company rollup is the one
+    # that failed; the other rollups still go out.
+    await service.send_digests(datetime.now(UTC), _EVENING)
+    assert not [m for m in email.messages if str(m["subject"]).startswith("EOD · ")]
 
     # The individual report stays SENT, so the next tick will not resend it.
     row = (
         await db.execute(select(EodReport).where(EodReport.employee_id == seed.report.id))
     ).scalar_one()
     assert row.status is EodStatus.SENT
+
+
+def _rollups(email: _CapturingEmail, prefix: str, to: str) -> list[dict[str, object]]:
+    return [m for m in email.messages if str(m["subject"]).startswith(prefix) and m["to"] == to]
+
+
+def _sent_report(employee: Employee, summary: str, **highlights: object) -> EodReport:
+    return EodReport(
+        employee_id=employee.id,
+        report_date=_DIGEST_DAY,
+        status=EodStatus.SENT,
+        summary=summary,
+        highlights=highlights,
+        metrics={"tasks_done": 1},
+    )
+
+
+async def test_everyone_gets_their_own_report_at_send_time(
+    db: AsyncSession, seed: _Seed, settings: Settings
+) -> None:
+    """The scheduled send mails each person their own report, not their manager."""
+    db.add(
+        EodReport(
+            employee_id=seed.report.id,
+            report_date=_DIGEST_DAY,
+            status=EodStatus.DRAFT,
+            summary="Shipped the thing.",
+            highlights={},
+        )
+    )
+    await db.commit()
+    email = _CapturingEmail()
+    service = _build_service(db, settings, llm=_StubLlm(), email=email)
+
+    assert await service.auto_send_due(datetime.now(UTC), _EVENING) == 1
+
+    assert email.sent == ["report@corp.test"]
+    assert str(email.messages[0]["subject"]).startswith("Your end of day · ")
+    assert "Shipped the thing." in str(email.messages[0]["html"])
+
+
+async def test_manager_gets_one_team_rollup_with_narratives(
+    db: AsyncSession, seed: _Seed, settings: Settings
+) -> None:
+    """A direct manager gets ONE team rollup carrying each report's own account
+    and blockers - what the personal EOD scope already lets them read - while
+    the admins' company rollup carries neither."""
+    db.add(
+        _sent_report(
+            seed.report,
+            "PRIVATE-NARRATIVE: refactored the ingest path.",
+            tasks_completed=["Ingest refactor"],
+            blockers=["Waiting on the staging database"],
+        )
+    )
+    await db.commit()
+    email = _CapturingEmail()
+    service = _build_service(db, settings, llm=_StubLlm(), email=email)
+
+    await service.send_digests(datetime.now(UTC), _EVENING)
+
+    (team,) = _rollups(email, "Team EOD · ", "manager@corp.test")
+    html = str(team["html"])
+    assert "Remy Report" in html
+    assert "PRIVATE-NARRATIVE: refactored the ingest path." in html
+    assert "Ingest refactor" in html
+    assert "Waiting on the staging database" in html
+    # The company rollup names the work and the blocker, never the narrative.
+    company = str(_admin_digest(email)["html"])
+    assert "PRIVATE-NARRATIVE" not in company
+    assert "Ingest refactor" in company
+    # No individual report was mailed to the manager, and no team rollup to
+    # anyone without reports.
+    assert "Team EOD · " not in [
+        str(m["subject"]) for m in email.messages if m["to"] != "manager@corp.test"
+    ]
+
+
+async def test_department_head_gets_one_department_rollup_with_narratives(
+    db: AsyncSession, seed: _Seed, settings: Settings
+) -> None:
+    """A senior manager with a department gets ONE department rollup. It
+    carries the narratives of everyone in the department (that role's personal
+    scope IS the department), and a direct report inside the department is not
+    repeated in a separate team rollup."""
+    head = await _add_person(db, "hema", Role.SENIOR_MANAGER, "Design")
+    dia, devi = await _add_department(db, "Design", "dia", "devi")
+    devi.manager_id = head.id
+    db.add(
+        _sent_report(dia, "PRIVATE-NARRATIVE: finished the icon set.", tasks_completed=["Icon set"])
+    )
+    db.add(_sent_report(devi, "PRIVATE-NARRATIVE: type scale review."))
+    await db.commit()
+    email = _CapturingEmail()
+    service = _build_service(db, settings, llm=_StubLlm(), email=email)
+
+    await service.send_digests(datetime.now(UTC), _EVENING)
+
+    (department,) = _rollups(email, "Design EOD · ", "hema@corp.test")
+    html = str(department["html"])
+    assert "Dia" in html and "Devi" in html and "Hema" in html
+    assert "finished the icon set" in html and "type scale review" in html
+    assert _rollups(email, "Team EOD · ", "hema@corp.test") == []
+    assert "PRIVATE-NARRATIVE" not in str(_admin_digest(email)["html"])
+
+
+async def test_admin_who_manages_people_also_gets_a_team_rollup(
+    db: AsyncSession, seed: _Seed, settings: Settings
+) -> None:
+    """The company rollup cannot carry narratives, so an admin with direct
+    reports gets a team rollup as well - the only way they see what their own
+    people wrote, exactly as any lead does."""
+    seed.outsider.manager_id = seed.admin.id
+    db.add(_sent_report(seed.outsider, "PRIVATE-NARRATIVE: closed the quarter."))
+    await db.commit()
+    email = _CapturingEmail()
+    service = _build_service(db, settings, llm=_StubLlm(), email=email)
+
+    await service.send_digests(datetime.now(UTC), _EVENING)
+
+    company = _admin_digest(email)
+    assert company["to"] == "admin@corp.test"
+    assert "PRIVATE-NARRATIVE" not in str(company["html"])
+    (team,) = _rollups(email, "Team EOD · ", "admin@corp.test")
+    assert "closed the quarter" in str(team["html"])
+    assert "Olive Outsider" in str(team["html"])

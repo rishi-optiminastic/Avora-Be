@@ -890,7 +890,9 @@ class PayrollService:
         attendance fix) but emails only the slips whose figures changed, so a month
         released again to pick up someone who was skipped the first time does not
         send everyone else their identical slip twice. Employees with no
-        compensation on file are skipped."""
+        compensation on file, or with nothing to pay this month (a joiner whose
+        first day is next month, someone on unpaid leave all month), are
+        skipped: a slip for zero rupees is not a payslip, it is a worry."""
         if not _can_manage(caller):
             raise AuthorizationError()
         est = await self.estimate(caller, month)
@@ -1010,15 +1012,15 @@ class PayrollService:
     async def _release_from_estimate(
         self, est: PayrollEstimateRead, *, actor: CurrentUser | None
     ) -> tuple[int, int, int]:
-        """Snapshot + email each employee with compensation. Returns
-        (released, emailed, skipped). Email failures don't block release — the
-        employee can still download from My Pay."""
+        """Snapshot + email each employee who is owed something this month.
+        Returns (released, emailed, skipped). Email failures don't block
+        release — the employee can still download from My Pay."""
         year, m = _parse_month(est.month)
         label = _month_label(year, m)
         finalized_by = actor.employee_id if actor is not None else None
         released = emailed = skipped = 0
         for line in est.lines:
-            if line.missing_compensation:
+            if line.missing_compensation or line.net_minor <= 0:
                 skipped += 1
                 continue
             fresh = PayslipSnapshot(

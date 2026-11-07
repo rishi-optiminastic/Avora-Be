@@ -6,14 +6,16 @@ report. Reads are scoped via the employee scope (`can_read`); edit/approve are
 author-only. No FastAPI objects here (Layering §4); the screenshot signal is OCR
 *text* only.
 
-**Who receives what.** A person's report goes to their reporting manager and
-nobody else. Admins instead get one rollup of every department at the send time:
-coverage, summed effort, the work shipped and each department's blockers - but no
-narratives. A completed task is an organisational fact already on the board; the
-written account of someone's day is not.
-That split is the same org decision `EmployeeRepository._personal_scope_clause`
-already encodes for reads - running the workspace is not a reason to read what
-everyone wrote about their day - so the mail now matches what the API allows.
+**Who receives what.** At the send time every person is mailed their own
+report. Then, once per local day, the rollups go out by role: each direct
+manager gets ONE team rollup carrying their reports' narratives (the personal
+EOD scope `EmployeeRepository._personal_scope_clause` already grants a manager
+exactly those); each senior manager with a department gets ONE department
+rollup, with narratives, because that role's personal scope is the whole
+department; admins and IT admins get ONE company rollup of every department
+with coverage, the work shipped and each department's blockers - but no
+narratives. Running the workspace is not a reason to read what everyone wrote
+about their day, so the mail matches what the API allows.
 """
 
 from __future__ import annotations
@@ -58,13 +60,18 @@ from app.schemas.eod import (
     EodDepartmentDigest,
     EodDepartmentMember,
     EodDraftContent,
+    EodNarrative,
     EodReportRead,
 )
 from app.schemas.monitoring import AttendanceStatus
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.attendance_service import AttendanceService
 from app.services.email_service import EmailService
-from app.services.email_templates import eod_admin_digest_email, eod_report_email
+from app.services.email_templates import (
+    eod_admin_digest_email,
+    eod_group_digest_email,
+    eod_report_email,
+)
 from app.services.eod_settings_service import EodSchedule, EodSettingsService
 from app.services.llm_service import LlmError, LlmService
 from app.services.notification_service import NotificationService
@@ -77,6 +84,7 @@ SYSTEM_CALLER = CurrentUser(employee_id=uuid.UUID(int=0), role=Role.ADMIN, manag
 
 _EOD_LINK = "/dashboard/me/eod"
 _DEPARTMENT_EOD_LINK = "/dashboard/me/department-eod"
+_TEAM_EOD_LINK = "/dashboard/me/team-eod"
 _ACTIVE_STATUSES = (TaskStatus.TODO, TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED)
 
 # Longest window the team / department digests serve (`days`, or an explicit
@@ -319,28 +327,36 @@ class EodService:
             return await self._employees.all_in_scope(caller)
         raise AuthorizationError()
 
-    async def send_admin_digest(
+    async def send_digests(
         self, now: datetime, local_dt: datetime, sched: EodSchedule | None = None
     ) -> int:
-        """Mail the admins ONE end-of-day rollup covering every department, once
-        per local day. Returns 1 when it went out, 0 when too early, already
-        done, or there was nobody to tell.
+        """Mail every end-of-day rollup, once per local day, at/after the send time:
+        ONE company rollup to the admins, ONE department rollup to each department
+        head, ONE team rollup to each direct manager. Returns how many went out:
+        0 when too early, already done, or there was nobody to tell.
 
-        One message where there used to be one per department. Ten near-identical
-        mails at six o'clock answered "how did the day go" no better than one,
-        and the inbox count alone read as noise; the department sections are all
-        still inside, behind an index that says which of them needs opening.
+        Who gets which (the org decision, mirrored from the personal EOD scope):
+        * admins and IT admins: the company rollup - every department, no
+          narratives. An admin who also manages people gets a team rollup too,
+          since the company one cannot carry their reports' narratives;
+        * a senior manager with a department: that department's rollup, WITH
+          narratives, because the personal scope for that role is the department.
+          Their direct reports inside the department are covered by it, so no
+          separate team rollup repeats them; reports outside it still get one;
+        * anyone else with direct reports: a team rollup of exactly those people,
+          with their narratives.
 
         Called AFTER `auto_send_due` in the same tick so a draft flushed moments
-        ago counts as submitted rather than still pending - otherwise the admins'
-        coverage figure would permanently lag the managers' inboxes by one tick.
+        ago counts as submitted rather than still pending - otherwise every
+        coverage figure would permanently lag the individual mails by one tick.
 
-        The day is stamped BEFORE the mail goes out, inside the caller's
-        transaction. If the send throws, the worker rolls the whole tick back, the
-        stamp goes with it and the next tick retries; if it succeeds, the stamp
-        commits alongside and the remaining ticks of the evening stay quiet. The
-        alternative - stamping afterwards - turns one broken transport into a
-        digest resent every 15 minutes until midnight.
+        The day is stamped BEFORE anything is mailed, inside the caller's
+        transaction. If a send throws, it is logged and skipped: the individual
+        reports were emailed moments ago in this SAME transaction and their SENT
+        status is only flushed, not committed - letting an error escape would
+        roll those rows back while the mail already sits in people's inboxes, so
+        the next tick would send everyone their report a second time. A missed
+        rollup is a far smaller problem than duplicate mail.
         """
         if sched is None:
             sched = await self._eod_settings.spec()
@@ -350,49 +366,107 @@ class EodService:
         if await self._eod_settings.digest_sent_on() == today:
             return 0
 
-        # list_admins, not list_by_role(ADMIN): the stored role column keeps
-        # `it_admin`, so the role query silently skips every IT admin.
-        admins = await self._employees.list_admins()
-        recipients = [a.work_email for a in admins if a.work_email]
         employees = await self._employees.list_all_active()
-        if not recipients or not employees:
-            # No one to tell, or no one to tell about. Still stamp the day:
-            # re-deriving the same empty answer every 15 minutes buys nothing.
+        if not employees:
+            # No one to tell about. Still stamp the day: re-deriving the same
+            # empty answer every 15 minutes buys nothing.
             await self._eod_settings.mark_digest_sent(today)
             return 0
-
         member_ids = [e.id for e in employees]
         reports = await self._reports.list_for_employees_between(member_ids, today, today)
-        load = await self._tasks.load_for_employees(member_ids, now)
+        loads = await self._tasks.load_for_employees(member_ids, now)
         expected = await self._expected_dates(today, today)
-        digests = self._build_digests(employees, reports, (today, today, expected), load)
+        window = (today, today, expected)
+        by_employee = _group_by_employee(reports)
+        narratives = _narratives(reports)
+        base = self._settings.app_base_url
         await self._eod_settings.mark_digest_sent(today)
+        sent = 0
 
-        subject, html = eod_admin_digest_email(
-            digests=digests,
-            report_date=today,
-            dashboard_url=f"{self._settings.app_base_url}{_DEPARTMENT_EOD_LINK}",
-        )
+        # list_admins, not list_by_role(ADMIN): the stored role column keeps
+        # `it_admin`, so the role query silently skips every IT admin.
+        admins = [a.work_email for a in await self._employees.list_admins() if a.work_email]
+        if admins:
+            subject, html = eod_admin_digest_email(
+                digests=self._build_digests(employees, reports, window, loads),
+                report_date=today,
+                dashboard_url=f"{base}{_DEPARTMENT_EOD_LINK}",
+            )
+            sent += await self._deliver(
+                admins, subject, html, action="eod.admin_digest", target=f"eod_digest:{today}"
+            )
+
+        heads: dict[str, list[Employee]] = defaultdict(list)
+        for employee in employees:
+            department = (employee.department or "").strip()
+            if employee.role is Role.SENIOR_MANAGER and department and employee.work_email:
+                heads[department].append(employee)
+        for department in sorted(heads, key=str.lower):
+            members = _by_name(e for e in employees if (e.department or "").strip() == department)
+            subject, html = eod_group_digest_email(
+                kind="department",
+                label=department,
+                digest=self._digest_for(department, members, by_employee, window, loads),
+                narratives=narratives,
+                report_date=today,
+                dashboard_url=f"{base}{_DEPARTMENT_EOD_LINK}",
+            )
+            sent += await self._deliver(
+                [h.work_email for h in heads[department] if h.work_email],
+                subject,
+                html,
+                action="eod.department_digest",
+                target=f"eod_digest:{today}:{department}",
+            )
+
+        by_id = {e.id: e for e in employees}
+        teams: dict[uuid.UUID, list[Employee]] = defaultdict(list)
+        for employee in employees:
+            if employee.manager_id is not None:
+                teams[employee.manager_id].append(employee)
+        for manager_id, team in teams.items():
+            manager = by_id.get(manager_id)
+            if manager is None or not manager.work_email:
+                continue
+            if manager.role is Role.SENIOR_MANAGER and (manager.department or "").strip():
+                # Already inside their department rollup; only reports from
+                # elsewhere still need a team rollup.
+                own = (manager.department or "").strip()
+                team = [e for e in team if (e.department or "").strip() != own]
+                if not team:
+                    continue
+            members = _by_name(team)
+            subject, html = eod_group_digest_email(
+                kind="team",
+                label=manager.full_name,
+                digest=self._digest_for("Your team", members, by_employee, window, loads),
+                narratives=narratives,
+                report_date=today,
+                dashboard_url=f"{base}{_TEAM_EOD_LINK}",
+            )
+            sent += await self._deliver(
+                [manager.work_email],
+                subject,
+                html,
+                action="eod.team_digest",
+                target=f"eod_digest:{today}:{manager.id}",
+            )
+        return sent
+
+    async def _deliver(
+        self, recipients: list[str], subject: str, html: str, *, action: str, target: str
+    ) -> int:
+        """One rollup to its recipients: one message with the others CC'd, not
+        one each - on Gmail SMTP that is a single send against a hard daily cap.
+        A transport failure is logged and swallowed (see `send_digests`)."""
+        if not recipients:
+            return 0
         try:
-            # One message with the other admins CC'd, not one each: on Gmail SMTP
-            # that is a single send against a hard daily cap.
             await self._email.send(to=recipients[0], subject=subject, html=html, cc=recipients[1:])
         except Exception:
-            # Swallowed on purpose, and this one matters. The individual reports
-            # were emailed moments ago in this SAME transaction and their SENT
-            # status is only flushed, not committed - the worker rolls the whole
-            # tick back on an exception. Letting a digest failure escape would
-            # undo those rows while the mail already sits in people's inboxes, so
-            # the next tick would send every manager their report a second time.
-            # A missed digest is a far smaller problem than duplicate mail: log
-            # it and carry on.
-            logger.warning("eod admin digest failed", extra={"report_date": today})
+            logger.warning("eod rollup failed", extra={"action": action, "target": target})
             return 0
-        await self._audit.append(
-            actor="system:eod",
-            action="eod.admin_digest",
-            target=f"eod_digest:{today}",
-        )
+        await self._audit.append(actor="system:eod", action=action, target=target)
         return 1
 
     def _build_digests(
@@ -405,50 +479,62 @@ class EodService:
         """Group the roster by department and roll each one up off one shared
         index of the window's reports. `window` is (start, end, expected dates).
         Departments alphabetically, with the no-department bucket last."""
-        start, end, expected = window
         by_employee = _group_by_employee(reports)
-        loads = load or {}
         by_department: dict[str, list[Employee]] = defaultdict(list)
         for employee in employees:
             label = (employee.department or "").strip() or UNASSIGNED_DEPARTMENT
             by_department[label].append(employee)
-
-        digests: list[EodDepartmentDigest] = []
-        for department in sorted(
-            by_department, key=lambda d: (d == UNASSIGNED_DEPARTMENT, d.lower())
-        ):
-            members = sorted(by_department[department], key=lambda e: e.full_name.lower())
-            roll = _roll_up(members, by_employee, expected)
-            digests.append(
-                EodDepartmentDigest(
-                    **self._rollup_fields(start, end, members, roll),
-                    department=department,
-                    members=[
-                        EodDepartmentMember(
-                            employee_id=e.id,
-                            name=e.full_name,
-                            job_title=e.job_title,
-                            coverage=roll.coverage[e.id],
-                            submitted_days=roll.submitted_days[e.id],
-                            worked_minutes=roll.effort[e.id].worked_minutes,
-                            active_minutes=roll.effort[e.id].active_minutes,
-                            active_pct=roll.effort[e.id].active_pct,
-                            tasks_done=roll.effort[e.id].tasks_done,
-                            blockers=roll.effort[e.id].blockers,
-                            tasks=roll.effort[e.id].tasks,
-                            tasks_open=loads.get(e.id, _NO_LOAD).open_tasks,
-                            tasks_overdue=loads.get(e.id, _NO_LOAD).overdue,
-                        )
-                        for e in members
-                    ],
-                    # De-duped: two people blocked on the same thing is one
-                    # problem for the department, not two.
-                    blockers=list(dict.fromkeys(roll.blockers)),
-                    open_tasks=sum(loads.get(e.id, _NO_LOAD).open_tasks for e in members),
-                    overdue_tasks=sum(loads.get(e.id, _NO_LOAD).overdue for e in members),
-                )
+        return [
+            self._digest_for(
+                department, _by_name(by_department[department]), by_employee, window, load
             )
-        return digests
+            for department in sorted(
+                by_department, key=lambda d: (d == UNASSIGNED_DEPARTMENT, d.lower())
+            )
+        ]
+
+    def _digest_for(
+        self,
+        label: str,
+        members: Sequence[Employee],
+        by_employee: dict[uuid.UUID, list[EodReport]],
+        window: tuple[str, str, frozenset[str]],
+        load: dict[uuid.UUID, TaskLoad] | None = None,
+    ) -> EodDepartmentDigest:
+        """One group's rolled-up day - a department, or a manager's team - off
+        a shared index of the window's reports. The same shape either way, so
+        the department sections of the company rollup and a team rollup can
+        never disagree about what "submitted" or "done" means."""
+        start, end, expected = window
+        loads = load or {}
+        roll = _roll_up(members, by_employee, expected)
+        return EodDepartmentDigest(
+            **self._rollup_fields(start, end, members, roll),
+            department=label,
+            members=[
+                EodDepartmentMember(
+                    employee_id=e.id,
+                    name=e.full_name,
+                    job_title=e.job_title,
+                    coverage=roll.coverage[e.id],
+                    submitted_days=roll.submitted_days[e.id],
+                    worked_minutes=roll.effort[e.id].worked_minutes,
+                    active_minutes=roll.effort[e.id].active_minutes,
+                    active_pct=roll.effort[e.id].active_pct,
+                    tasks_done=roll.effort[e.id].tasks_done,
+                    blockers=roll.effort[e.id].blockers,
+                    tasks=roll.effort[e.id].tasks,
+                    tasks_open=loads.get(e.id, _NO_LOAD).open_tasks,
+                    tasks_overdue=loads.get(e.id, _NO_LOAD).overdue,
+                )
+                for e in members
+            ],
+            # De-duped: two people blocked on the same thing is one problem for
+            # the group, not two.
+            blockers=list(dict.fromkeys(roll.blockers)),
+            open_tasks=sum(loads.get(e.id, _NO_LOAD).open_tasks for e in members),
+            overdue_tasks=sum(loads.get(e.id, _NO_LOAD).overdue for e in members),
+        )
 
     async def _resolve_range(
         self,
@@ -494,8 +580,7 @@ class EodService:
         report.approved_at = datetime.now(UTC)
         report.approved_by = caller.employee_id
         employee = await self._employees.get(report.employee_id)
-        recipients = await self._recipients(employee) if employee is not None else []
-        await self._send(report, employee, recipients)
+        await self._send(report, employee)
         await self._audit.append(
             actor=str(caller.employee_id),
             action="eod.approve",
@@ -638,14 +723,13 @@ class EodService:
 
     async def run_due(self, now: datetime) -> tuple[int, int, int, int, int]:
         """One scheduler tick (local-tz gated): when EOD is enabled, generate drafts
-        once we're past the DRAFT time, auto-send drafts to their managers once past
-        the SEND time, then mail the admins one rollup of every department (once a
+        once we're past the DRAFT time, mail each person their own report once past
+        the SEND time, then the role rollups (team, department, company; once a
         day); and once a day prune old monitoring data. The schedule + the on/off switch
         are read from the DB (`eod_settings`, editable in Settings), so changes take
         effect on the next tick with no redeploy. Returns (drafts_created,
-        drafts_sent, admin_digests_sent, activity_rows_purged,
-        screenshots_purged). Shared by the worker loop and the free-tier cron
-        endpoint."""
+        drafts_sent, rollups_sent, activity_rows_purged, screenshots_purged).
+        Shared by the worker loop and the free-tier cron endpoint."""
         local_dt = await self._local_dt(now)
         minutes = local_dt.hour * 60 + local_dt.minute
         sched = await self._eod_settings.spec()
@@ -655,8 +739,8 @@ class EodService:
                 generated = await self.generate_for_day(SYSTEM_CALLER, now)
             sent = await self.auto_send_due(now, local_dt, sched)
             # After the individual send, never before: a draft flushed in this
-            # same tick must read as submitted in the admins' coverage figure.
-            digests = await self.send_admin_digest(now, local_dt, sched)
+            # same tick must read as submitted in every rollup's coverage figure.
+            digests = await self.send_digests(now, local_dt, sched)
         purged_activity = purged_shots = 0
         if local_dt.hour == self._settings.activity_purge_hour:
             # Same reasoning as the digest loop: retention runs AFTER mail has
@@ -717,34 +801,31 @@ class EodService:
         return await self._send_drafts(drafts, now)
 
     async def _send_drafts(self, drafts: Sequence[EodReport], now: datetime) -> int:
-        """Approve + deliver a batch of drafts. Recipients are resolved in bulk up
-        front (all owners + their managers in two batched lookups) — no per-report
-        DB calls. Returns the count sent."""
+        """Approve + deliver a batch of drafts, each to its own author. Owners
+        are resolved in one batched lookup - no per-report DB calls. Returns the
+        count sent."""
         if not drafts:
             return 0
         owners = await self._employees.get_many([r.employee_id for r in drafts])
-        managers = await self._employees.get_many(
-            [e.manager_id for e in owners.values() if e.manager_id is not None]
-        )
         sent = 0
         for report in drafts:
             report.status = EodStatus.APPROVED
             report.approved_at = now
-            employee = owners.get(report.employee_id)
-            manager = (
-                managers.get(employee.manager_id)
-                if employee is not None and employee.manager_id is not None
-                else None
-            )
-            await self._send(report, employee, self._recipients_for(employee, manager))
+            await self._send(report, owners.get(report.employee_id))
             sent += 1
         return sent
 
     # ---- send -------------------------------------------------------------- #
-    async def _send(
-        self, report: EodReport, employee: Employee | None, recipients: list[str]
-    ) -> None:
-        if employee is not None and recipients:
+    async def _send(self, report: EodReport, employee: Employee | None) -> None:
+        """Mail a report to its own author and close it out as SENT.
+
+        Just the one address. The reporting manager is not mailed per report any
+        more: they get one team rollup at the send time (`send_digests`), which
+        carries this report's narrative. Someone who is gone, or has no address,
+        simply has their report closed out - they still appear, by name and
+        coverage, in every rollup that covers them.
+        """
+        if employee is not None and employee.is_active and employee.work_email:
             highlights = EodDraftContent.model_validate(report.highlights or {})
             metrics = report.metrics or {}
             subject, html = eod_report_email(
@@ -755,10 +836,10 @@ class EodService:
                 worked_minutes=int(metrics.get("worked_minutes", 0) or 0),
                 active_minutes=int(metrics.get("active_minutes", 0) or 0),
                 tasks_done=int(metrics.get("tasks_done", len(highlights.tasks_completed)) or 0),
+                to_self=True,
             )
-            for recipient in recipients:
-                await self._email.send(to=recipient, subject=subject, html=html)
-        report.status = EodStatus.SENT  # employee gone or no recipients → close it out
+            await self._email.send(to=employee.work_email, subject=subject, html=html)
+        report.status = EodStatus.SENT
         report.sent_at = datetime.now(UTC)
         await self._reports.flush()
         await self._audit.append(
@@ -767,38 +848,6 @@ class EodService:
             target=f"eod:{report.id}",
         )
 
-    async def _recipients(self, employee: Employee) -> list[str]:
-        """Single-report path (the `approve()` endpoint) — the reporting manager."""
-        manager = (
-            await self._employees.get(employee.manager_id)
-            if employee.manager_id is not None
-            else None
-        )
-        return self._recipients_for(employee, manager)
-
-    @staticmethod
-    def _recipients_for(employee: Employee | None, manager: Employee | None) -> list[str]:
-        """The reporting manager, if they are active and are not the author.
-
-        Just the one address. Admins used to be copied on every individual
-        report, which contradicted `_personal_scope_clause` - an admin could be
-        mailed a report they are not allowed to open in the app. They now get the
-        company-wide rollup instead (`send_admin_digest`).
-
-        Someone with no manager on file therefore has no individual recipient,
-        and the report simply closes out as SENT. They are NOT silently dropped:
-        they still appear, by name and coverage, in their department's rollup, so
-        a missing reporting edge shows up as something to fix rather than hiding
-        the person. Returning the admins here instead would quietly re-create the
-        very leak this removes.
-        """
-        if employee is None or manager is None or not manager.is_active:
-            return []
-        if not manager.work_email or manager.work_email == employee.work_email:
-            return []
-        return [manager.work_email]
-
-    # ---- vision (sampled screenshot analysis) ----------------------------- #
     async def _vision_blocks(
         self, employees: list[Employee], start: datetime, end: datetime
     ) -> dict[uuid.UUID, str]:
@@ -1016,6 +1065,30 @@ class _Rollup:
         person: one report in a 30-day window is 1/30, not a full month."""
         possible = member_count * self.expected_days
         return round(sum(self.submitted_days.values()) / possible, 4) if possible else 0.0
+
+
+def _by_name(employees: Iterable[Employee]) -> list[Employee]:
+    return sorted(employees, key=lambda e: e.full_name.lower())
+
+
+def _narratives(reports: Iterable[EodReport]) -> dict[uuid.UUID, EodNarrative]:
+    """Each person's own account of the day, off their representative content
+    row. Handed only to the rollups whose recipient is in the person's personal
+    EOD scope - never to the company one."""
+    best: dict[uuid.UUID, EodReport] = {}
+    for report in reports:
+        if report.status not in _CONTENT_STATUSES:
+            continue
+        current = best.get(report.employee_id)
+        if current is None or _outranks(report, current):
+            best[report.employee_id] = report
+    return {
+        employee_id: EodNarrative(
+            summary=report.edited_summary or report.summary,
+            highlights=EodDraftContent.model_validate(report.highlights or {}),
+        )
+        for employee_id, report in best.items()
+    }
 
 
 def _group_by_employee(reports: Iterable[EodReport]) -> dict[uuid.UUID, list[EodReport]]:

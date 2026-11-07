@@ -19,9 +19,15 @@ from typing import TYPE_CHECKING
 from app.core.probation_letter_pdf import COMPANY_LEGAL_NAME
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    import uuid
+    from collections.abc import Mapping, Sequence
 
-    from app.schemas.eod import EodDepartmentDigest, EodDepartmentMember, EodDraftContent
+    from app.schemas.eod import (
+        EodDepartmentDigest,
+        EodDepartmentMember,
+        EodDraftContent,
+        EodNarrative,
+    )
 
 _VIOLET = "#5a48e0"
 _VIOLET_SOFT = "#ece9f7"
@@ -572,13 +578,6 @@ def agent_reinstall_email(*, employee_name: str, install_url: str) -> tuple[str,
     )
 
 
-def _fmt_hours(minutes: int) -> str:
-    """Compact worked-time label: '45m' under an hour, else '6.7h'."""
-    if minutes < 60:
-        return f"{max(0, minutes)}m"
-    return f"{minutes / 60:.1f}h"
-
-
 _WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 _MONTHS = (
     "Jan",
@@ -945,8 +944,10 @@ def eod_report_email(
     worked_minutes: int = 0,
     active_minutes: int = 0,
     tasks_done: int = 0,
+    to_self: bool = False,
 ) -> tuple[str, str]:
-    """Render the (subject, html) End-of-Day report sent to the reporting manager.
+    """Render the (subject, html) End-of-Day report: to its author (`to_self`,
+    the scheduled send) or, for a preview, about them.
 
     Header band with the person and the day; four figures at a glance (on the
     machine, active share, done, blocked); the narrative under Summary; each
@@ -955,7 +956,8 @@ def eod_report_email(
     something in them, so a quiet day is a short email rather than a card full
     of zeros."""
     # `date_label` arrives as the raw local YYYY-MM-DD from the report row.
-    subject = f"End of day · {employee_name} · {_day_label(date_label)}"
+    day = _day_label(date_label)
+    subject = f"Your end of day · {day}" if to_self else f"End of day · {employee_name} · {day}"
     blockers = [escape(b) for b in highlights.blockers]
     if worked_minutes > 0:
         on_machine = _fmt_duration(worked_minutes)
@@ -1001,12 +1003,12 @@ def eod_report_email(
         if confidence
         else "",
     ]
-    day = _day_label(date_label)
-    return subject, _report_layout(
-        preheader=f"{escape(employee_name)}'s end-of-day summary for {escape(day)}",
-        blocks=blocks,
-        footer=_ACTIVITY_FOOTER,
+    preheader = (
+        f"Your end-of-day summary for {escape(day)}"
+        if to_self
+        else f"{escape(employee_name)}'s end-of-day summary for {escape(day)}"
     )
+    return subject, _report_layout(preheader=preheader, blocks=blocks, footer=_ACTIVITY_FOOTER)
 
 
 # -- Admin rollup (every department, one email) ----------------------------- #
@@ -1021,6 +1023,16 @@ _COVERAGE_PILL: dict[str, tuple[_Tone, str]] = {
     "failed": (_TONE_ATTENTION, "Report failed"),
     "absent": (_TONE_NEUTRAL, "Absent"),
 }
+# The coverage bars: band, bar colour, legend word. The tone's ink, because the
+# pastel is invisible as a thin bar on white. Painted healthy, then owed, then
+# away, left to right.
+_COVERAGE_BAR: tuple[tuple[str, str, str], ...] = (
+    ("submitted", _TONE_DONE[1], "reported"),
+    ("pending", _TONE_ACTIVE[1], "draft pending"),
+    ("failed", _TONE_ATTENTION[1], "report failed"),
+    ("missing", _TONE_ATTENTION[1], "no report"),
+    ("absent", _TONE_NEUTRAL[1], "absent"),
+)
 # People who could have reported and have not. Absent is not owed: someone who
 # was not at work legitimately has no report, and dunning them for it is how a
 # tool starts feeling like surveillance rather than a summary. Mirrors the
@@ -1041,28 +1053,122 @@ _MAX_TASKS_SHOWN = 3
 
 
 def _department_anchor(department: str) -> str:
-    """A stable id for a department's section, so the tags up top can link down."""
+    """A stable id for a department's section, so the chart up top can link down."""
     return "dept-" + re.sub(r"[^a-z0-9]+", "-", department.lower()).strip("-")
 
 
-def _needs_attention(digest: EodDepartmentDigest) -> bool:
-    return (digest.pending + digest.missing + digest.failed) > 0
+def _department_link(digest: EodDepartmentDigest) -> str:
+    return (
+        f'<a href="#{_department_anchor(digest.department)}" style="color:{_REPORT_INK};'
+        f'font-weight:600;text-decoration:none;">{escape(digest.department)}</a>'
+    )
 
 
-def _department_tags(digests: Sequence[EodDepartmentDigest]) -> str:
-    """Every department as a tag with its fraction, green when everyone is
-    accounted for and orange when someone still owes a report. Each links to
-    the department's section, so the row doubles as the index."""
-    tags = "".join(
-        _tag(
-            f'{escape(d.department)} <span style="font-weight:400;">'
-            f"{d.submitted} / {d.member_count}</span>",
-            _TONE_ATTENTION if _needs_attention(d) else _TONE_DONE,
-            href=f"#{_department_anchor(d.department)}",
+def _stacked_bar(segments: Sequence[tuple[int, str]], total: int, *, height: int = 10) -> str:
+    """A proportion bar built from table cells, so every mail client draws it:
+    one cell per non-zero segment, the rest of the width in the track colour."""
+    total = max(total, 1)
+    cells = ""
+    filled = 0
+    for count, color in segments:
+        if count <= 0:
+            continue
+        filled += count
+        cells += (
+            f'<td style="width:{count / total * 100:.3f}%;background:{color};'
+            f'height:{height}px;font-size:0;line-height:0;">&nbsp;</td>'
+        )
+    if filled < total:
+        cells += (
+            f'<td style="width:{(total - filled) / total * 100:.3f}%;background:{_REPORT_RULE};'
+            f'height:{height}px;font-size:0;line-height:0;">&nbsp;</td>'
+        )
+    return (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">'
+        f"<tr>{cells}</tr></table>"
+    )
+
+
+def _coverage_segments(digest: EodDepartmentDigest) -> list[tuple[int, str]]:
+    return [(int(getattr(digest, band)), color) for band, color, _ in _COVERAGE_BAR]
+
+
+def _coverage_words(digest: EodDepartmentDigest) -> str:
+    """ "5 reported · 2 absent · 1 no report": the bar in words, non-zero only."""
+    return " &middot; ".join(
+        f"{getattr(digest, band)} {word}"
+        for band, _, word in _COVERAGE_BAR
+        if getattr(digest, band)
+    )
+
+
+def _swatch(color: str, label: str) -> str:
+    return (
+        f'<span style="display:inline-block;margin:0 12px 4px 0;font-size:11px;color:{_REPORT_META};">'
+        f'<span style="display:inline-block;width:9px;height:9px;background:{color};'
+        f'vertical-align:-1px;"></span> {label}</span>'
+    )
+
+
+def _bar_legend() -> str:
+    return "".join(
+        _swatch(color, label)
+        for color, label in (
+            (_TONE_DONE[1], "reported"),
+            (_TONE_ACTIVE[1], "draft pending"),
+            (_TONE_ATTENTION[1], "no report or failed"),
+            (_TONE_NEUTRAL[1], "absent"),
+        )
+    )
+
+
+def _chart(rows: Sequence[tuple[str, str, str]]) -> str:
+    """A horizontal bar chart as a table: label, bar, value per row."""
+    body = "".join(
+        f'<tr><td style="padding:5px 12px 5px 0;font-size:13px;line-height:1.3;'
+        f'color:{_REPORT_INK};">{label}</td>'
+        f'<td width="50%" style="padding:5px 0;vertical-align:middle;">{bar}</td>'
+        f'<td align="right" style="padding:5px 0 5px 10px;font-size:12px;color:{_REPORT_META};'
+        f'white-space:nowrap;font-variant-numeric:tabular-nums;">{value}</td></tr>'
+        for label, bar, value in rows
+    )
+    return f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{body}</table>'
+
+
+def _coverage_chart(digests: Sequence[EodDepartmentDigest]) -> str:
+    """Every department as a bar of who reported, owes, or was away, with its
+    fraction. The names link down to the sections, so this is also the index."""
+    rows = [
+        (
+            _department_link(d),
+            _stacked_bar(_coverage_segments(d), d.member_count),
+            f"{d.submitted} / {d.member_count}",
         )
         for d in digests
+    ]
+    return (
+        _eyebrow("Coverage by department", _REPORT_LABEL, padding="0 0 10px")
+        + _chart(rows)
+        + f'<div style="padding-top:8px;">{_bar_legend()}</div>'
     )
-    return _eyebrow("Departments", _REPORT_LABEL, padding="0 0 10px") + f"<div>{tags}</div>"
+
+
+def _shipped_chart(digests: Sequence[EodDepartmentDigest]) -> str:
+    """Tasks closed today per department, bars relative to the busiest one.
+    Nothing when the day shipped nothing: an empty chart is not information."""
+    top = max((d.totals.tasks_done for d in digests), default=0)
+    if top <= 0:
+        return ""
+    rows = [
+        (
+            _department_link(d),
+            _stacked_bar([(d.totals.tasks_done, _TONE_ACTIVE[1])], top),
+            _count("task", d.totals.tasks_done),
+        )
+        for d in digests
+        if d.totals.tasks_done
+    ]
+    return _eyebrow("Tasks shipped", _REPORT_LABEL, padding="0 0 10px") + _chart(rows)
 
 
 def _shipped_text(tasks: Sequence[str]) -> str:
@@ -1078,14 +1184,10 @@ def _shipped_text(tasks: Sequence[str]) -> str:
 
 
 def _member_parts(member: EodDepartmentMember) -> list[str]:
-    """The day's figures for one person. Nothing is printed for a measurement
-    that was not taken - never "0h", which reads as a measurement rather than
-    an absence. Open and overdue come from the task board, not the report, so
-    they show for everyone."""
+    """Task figures for one person: what the day closed and what is still on
+    the board. Time on the machine is deliberately not here: the admins asked
+    for tasks and blockers, not hours."""
     parts: list[str] = []
-    if member.worked_minutes > 0:
-        parts.append(f"{_fmt_hours(member.worked_minutes)} on the machine")
-        parts.append(f"{member.active_pct}% active")
     if member.tasks_done:
         parts.append(f"{member.tasks_done} done")
     if member.tasks_open:
@@ -1093,7 +1195,12 @@ def _member_parts(member: EodDepartmentMember) -> list[str]:
     return parts
 
 
-def _member_row(member: EodDepartmentMember, *, last: bool) -> str:
+def _member_row(
+    member: EodDepartmentMember, *, last: bool, narrative: EodNarrative | None = None
+) -> str:
+    """One person's row. With `narrative` (only ever passed by the team and
+    department rollups, whose recipient is in the person's personal scope) the
+    row also carries their own account of the day and their blockers, attributed."""
     tone, label = _COVERAGE_PILL.get(member.coverage, _COVERAGE_PILL["missing"])
     title = escape(member.name)
     if member.job_title:
@@ -1102,27 +1209,34 @@ def _member_row(member: EodDepartmentMember, *, last: bool) -> str:
             f"{escape(member.job_title)}</span>"
         )
     lines: list[str] = []
-    parts = _member_parts(member)
-    if parts:
-        lines.append(_line(" &middot; ".join(parts)))
+    if narrative is not None and narrative.summary.strip():
+        lines.extend(
+            _line(escape(para), color=_REPORT_INK)
+            for para in narrative.summary.split("\n\n")
+            if para.strip()
+        )
     shipped = _shipped_text(member.tasks)
     if shipped:
-        lines.append(_line(f"Shipped: {shipped}", color=_REPORT_META, size=14, top=2))
+        lines.append(_line(f"Shipped: {shipped}", color=_REPORT_INK))
+    parts = _member_parts(member)
+    if parts:
+        lines.append(_line(" &middot; ".join(parts), color=_REPORT_META, size=13, top=4))
+    if narrative is not None:
+        lines.extend(
+            f'<div style="padding-top:8px;">{_pill("Blocked", _TONE_ATTENTION)} '
+            f'<span style="font-size:14px;line-height:1.55;color:{_REPORT_INK};">'
+            f"{escape(blocker)}</span></div>"
+            for blocker in narrative.highlights.blockers
+            if blocker.strip()
+        )
     return _row(title, _pill(label, tone), lines, last=last)
 
 
 def _department_parts(digest: EodDepartmentDigest) -> list[str]:
-    """What the day produced and what the department still carries. Says so
-    in words when nobody reported."""
-    totals = digest.totals
+    """What the day closed and what the department still carries."""
     parts: list[str] = []
-    if totals.worked_minutes > 0:
-        parts.append(f"{_fmt_hours(totals.worked_minutes)} on machines")
-        parts.append(f"{_active_pct(totals.active_minutes, totals.worked_minutes)}% active")
-    elif digest.submitted == 0:
-        parts.append("No reports came in")
-    if totals.tasks_done:
-        parts.append(f"{totals.tasks_done} done")
+    if digest.totals.tasks_done:
+        parts.append(f"{digest.totals.tasks_done} done")
     if digest.open_tasks:
         parts.append(f"{digest.open_tasks} open{_overdue_note(digest.overdue_tasks)}")
     return parts
@@ -1146,11 +1260,22 @@ def _blocker_rows(blockers: Sequence[str]) -> str:
     return _eyebrow("Blockers", _TONE_ATTENTION[1], padding="20px 0 0") + _rows(rows)
 
 
+def _coverage_block(digest: EodDepartmentDigest, *, indent: int) -> str:
+    """The group's coverage bar with the counts in words under it."""
+    return (
+        f'<div style="padding:10px 0 0 {indent}px;">'
+        f"{_stacked_bar(_coverage_segments(digest), digest.member_count, height=8)}"
+        f'<div style="font-size:12px;line-height:1.5;color:{_REPORT_META};padding-top:6px;">'
+        f"{_coverage_words(digest)}</div></div>"
+    )
+
+
 def _department_block(digest: EodDepartmentDigest, *, first: bool) -> str:
     members = digest.members
     rows = [_member_row(m, last=i == len(members) - 1) for i, m in enumerate(members)]
     return _block(
         _heading(escape(digest.department), f"{digest.submitted} of {digest.member_count} reported")
+        + _coverage_block(digest, indent=13)
         + _figures(_department_parts(digest))
         + _rows(rows)
         + _blocker_rows(digest.blockers),
@@ -1159,7 +1284,9 @@ def _department_block(digest: EodDepartmentDigest, *, first: bool) -> str:
     )
 
 
-def _attention_items(digests: Sequence[EodDepartmentDigest], *, overdue: int) -> list[str]:
+def _attention_items(
+    digests: Sequence[EodDepartmentDigest], *, overdue: int, labelled: bool = True
+) -> list[str]:
     """The lines of the "Needs attention" box: per department, who still owes a
     report and why; then blockers and where; then overdue work. Names stay in
     roster order and are capped, so a company-wide list cannot run forever."""
@@ -1181,17 +1308,21 @@ def _attention_items(digests: Sequence[EodDepartmentDigest], *, overdue: int) ->
             named += len(shown)
             who = _join_names(shown) + (f" and {hidden} more" if hidden else "")
             sentences.append(f"{who} {plural if len(names) > 1 else singular}.")
-        if sentences:
+        if sentences and labelled:
             items.append(f"{escape(digest.department)}: {' '.join(sentences)}")
+        elif sentences:
+            items.extend(sentences)
     if unnamed:
         items.append(f"{_count('more person', unnamed)} still owe a report.")
     raised = [(escape(d.department), len(d.blockers)) for d in digests if d.blockers]
     if raised:
         total = sum(n for _, n in raised)
-        items.append(f"{_count('blocker', total)} raised in {_join_names([d for d, _ in raised])}.")
+        where = f" in {_join_names([d for d, _ in raised])}" if labelled else ""
+        items.append(f"{_count('blocker', total)} raised{where}.")
     if overdue:
         items.append(
-            f"{_count('task', overdue)} {'is' if overdue == 1 else 'are'} overdue across the company."
+            f"{_count('task', overdue)} {'is' if overdue == 1 else 'are'} overdue"
+            f"{' across the company' if labelled else ''}."
         )
     return items
 
@@ -1208,22 +1339,20 @@ def eod_admin_digest_email(
     One email where there used to be one per department. Ten near-identical
     messages landing at six o'clock answered "how did the day go" no faster
     than one, and the inbox count alone read as noise; the department sections
-    are all still here, after the glance figures, a row of department tags that
-    says which section needs opening, and before a dark box that lists what
-    needs a decision.
+    are all still here, after the glance figures, a coverage chart that says
+    which section needs opening, a tasks-shipped chart, and before a dark box
+    that lists what needs a decision.
 
-    Deliberately carries NO narratives: coverage, the day's summed effort, each
-    roster with its figures and shipped titles, and each department's blockers.
-    A person's own account of their day goes to their reporting manager only
-    (see EodService's module docstring), so there is no `summary` field
-    anywhere in here to leak one.
+    Deliberately carries NO narratives and NO time on the machine: coverage,
+    the tasks shipped and still open, and each department's blockers. The
+    admins asked for tasks and blockers, not hours. A person's own account of
+    their day goes to their reporting manager only (see EodService's module
+    docstring), so there is no `summary` field anywhere in here to leak one.
     """
     day = _day_label(report_date)
     member_count = sum(d.member_count for d in digests)
     submitted = sum(d.submitted for d in digests)
     owed = sum(d.pending + d.missing for d in digests)
-    worked = sum(d.totals.worked_minutes for d in digests)
-    active = sum(d.totals.active_minutes for d in digests)
     done = sum(d.totals.tasks_done for d in digests)
     blocker_count = sum(len(d.blockers) for d in digests)
     open_tasks = sum(d.open_tasks for d in digests)
@@ -1239,19 +1368,14 @@ def eod_admin_digest_email(
             (str(owed), "Still owed", _TONE_NEUTRAL),
         ]
     )
-    # A day where nobody reported would otherwise total "0m, 0%" - measurements
-    # of zero, which read as "they sat there doing nothing" rather than "no
-    # reports came in". Say that in words instead.
     sentences = [f"{submitted} of {member_count} reported across {departments}."]
-    if worked > 0:
-        sentences.append(
-            f"{_fmt_duration(worked)} on machines, {_active_pct(active, worked)}% active."
-        )
-    elif submitted == 0:
-        sentences.append("No reports came in, so there is nothing to total yet.")
+    if submitted == 0:
+        sentences.append("No reports came in yet.")
+    if done:
+        sentences.append(f"{_count('task', done)} shipped.")
     if open_tasks:
         tail = f", {overdue} overdue." if overdue else "."
-        sentences.append(f"{_count('task', open_tasks)} open{tail}")
+        sentences.append(f"{_count('task', open_tasks)} still open{tail}")
     attention = _attention_items(digests, overdue=overdue)
     all_clear = not attention
     if all_clear:
@@ -1262,11 +1386,12 @@ def eod_admin_digest_email(
             date_line=f"{escape(_long_day_label(report_date))} &middot; All departments",
         ),
         _block(glance + _sentence(" ".join(sentences)), padding="24px 20px 4px"),
-        _block(_department_tags(digests), padding="20px 20px 0"),
+        _block(_coverage_chart(digests), padding="22px 20px 0"),
+        _block(_shipped_chart(digests), padding="22px 20px 0"),
         _block(
             _lead(
-                "Reports below, grouped by department. A green tag means everyone is "
-                "accounted for. An orange one still owes a report."
+                "Reports below, grouped by department: who reported, what they shipped, "
+                "and what is blocking them."
             ),
             padding="18px 20px 0",
         ),
@@ -1283,6 +1408,95 @@ def eod_admin_digest_email(
         preheader=f"{departments} · {submitted} of {member_count} reported · {done} tasks shipped",
         blocks=blocks,
         footer=_ADMIN_DIGEST_FOOTER,
+    )
+
+
+# -- Team / department rollup (one group, with narratives) ------------------ #
+
+_TEAM_DIGEST_FOOTER = (
+    "You're receiving this because these people report to you in Avora. Each of "
+    "them was also sent their own report."
+)
+_DEPARTMENT_DIGEST_FOOTER = (
+    "You're receiving this because you head the {department} department in Avora. "
+    "Each person was also sent their own report."
+)
+
+
+def eod_group_digest_email(
+    *,
+    kind: str,
+    label: str,
+    digest: EodDepartmentDigest,
+    narratives: Mapping[uuid.UUID, EodNarrative],
+    report_date: str,
+    dashboard_url: str | None = None,
+) -> tuple[str, str]:
+    """Render the (subject, html) end-of-day rollup for one group: a manager's
+    team (`kind="team"`, `label` is the manager's name) or a department
+    (`kind="department"`, `label` is its name).
+
+    Same format as the company rollup, for one group, plus each person's own
+    account of their day and their blockers under their row. That is allowed
+    here and nowhere else: the recipient is the group's direct manager or its
+    department head, who is in every member's personal EOD scope. Only members
+    of `digest` are rendered, whatever else `narratives` holds.
+    """
+    day = _day_label(report_date)
+    n, submitted = digest.member_count, digest.submitted
+    if kind == "team":
+        subject = f"Team EOD · {day} · {submitted}/{n} reported"
+        title = "Your team"
+        context = f"Team report for {escape(label)}"
+        footer = _TEAM_DIGEST_FOOTER
+    else:
+        subject = f"{label} EOD · {day} · {submitted}/{n} reported"
+        title = escape(label)
+        context = "Department report"
+        footer = _DEPARTMENT_DIGEST_FOOTER.format(department=escape(label))
+    done = digest.totals.tasks_done
+    owed = digest.pending + digest.missing
+    glance = _glance(
+        [
+            (str(submitted), "Reported", _TONE_DONE),
+            (str(done), "Done", _TONE_ACTIVE),
+            (str(digest.totals.blockers), "Blockers", _TONE_ATTENTION),
+            (str(owed), "Still owed", _TONE_NEUTRAL),
+        ]
+    )
+    sentences = [f"{submitted} of {n} reported."]
+    if submitted == 0:
+        sentences.append("No reports came in yet.")
+    if done:
+        sentences.append(f"{_count('task', done)} shipped.")
+    if digest.open_tasks:
+        tail = f", {digest.overdue_tasks} overdue." if digest.overdue_tasks else "."
+        sentences.append(f"{_count('task', digest.open_tasks)} still open{tail}")
+    members = digest.members
+    rows = [
+        _member_row(m, last=i == len(members) - 1, narrative=narratives.get(m.employee_id))
+        for i, m in enumerate(members)
+    ]
+    attention = _attention_items([digest], overdue=digest.overdue_tasks, labelled=False)
+    all_clear = not attention
+    if all_clear:
+        attention = ["Everyone expected to report did, and no blockers were raised."]
+    blocks = [
+        _report_header(
+            title=title, date_line=f"{escape(_long_day_label(report_date))} &middot; {context}"
+        ),
+        _block(glance + _sentence(" ".join(sentences)), padding="24px 20px 4px"),
+        _block(_coverage_block(digest, indent=0), padding="12px 20px 0"),
+        _block(_rows(rows), padding="16px 20px 0"),
+        _block(
+            _dark_list("Needs attention", attention, numbered=not all_clear), padding="34px 20px 0"
+        ),
+        _block(_report_button("Open in Avora", dashboard_url)) if dashboard_url else "",
+    ]
+    return subject, _report_layout(
+        preheader=f"{submitted} of {n} reported · {done} tasks shipped",
+        blocks=blocks,
+        footer=footer,
     )
 
 

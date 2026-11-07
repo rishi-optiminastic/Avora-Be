@@ -39,7 +39,8 @@ router = APIRouter(prefix="/eod", tags=["eod"])
 class EodTickResult(BaseModel):
     generated: int
     sent: int
-    admin_digests: int
+    # Rollups mailed this tick: company, department and team ones together.
+    rollups: int
     purged_activity: int
     purged_screenshots: int
 
@@ -195,7 +196,7 @@ async def cron_tick(
     # and applied inside run_due (so toggling EOD never needs a redeploy).
     if not settings.eod_secrets_present:
         return EodTickResult(
-            generated=0, sent=0, admin_digests=0, purged_activity=0, purged_screenshots=0
+            generated=0, sent=0, rollups=0, purged_activity=0, purged_screenshots=0
         )
     generated, sent, digests, purged_activity, purged_shots = await service.run_due(
         datetime.now(UTC)
@@ -203,7 +204,7 @@ async def cron_tick(
     return EodTickResult(
         generated=generated,
         sent=sent,
-        admin_digests=digests,
+        rollups=digests,
         purged_activity=purged_activity,
         purged_screenshots=purged_shots,
     )

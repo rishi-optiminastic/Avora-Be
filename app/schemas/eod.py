@@ -59,6 +59,15 @@ class EodReportRead(BaseModel):
         )
 
 
+class EodNarrative(BaseModel):
+    """One person's own account of their day, as mailed to whoever is in their
+    personal EOD scope: their reporting manager, or their department head. Never
+    part of the company-wide rollup."""
+
+    summary: str = ""
+    highlights: EodDraftContent = Field(default_factory=EodDraftContent)
+
+
 class EodCumulativeTotals(BaseModel):
     """Summed effort across every content report in the digest window."""
 

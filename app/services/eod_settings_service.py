@@ -69,13 +69,14 @@ class EodSettingsService:
         )
 
     async def digest_sent_on(self) -> str | None:
-        """Local YYYY-MM-DD the admins' end-of-day rollup last went out, or None if
-        never. Read live from the row rather than off `spec()` so a digest run
-        later in the same tick can't act on a stale value."""
+        """Local YYYY-MM-DD the end-of-day rollups (team, department, company)
+        last went out, or None if never. Read live from the row rather than off
+        `spec()` so a digest run later in the same tick can't act on a stale
+        value."""
         return (await self.get_or_create()).digest_sent_on
 
     async def mark_digest_sent(self, report_date: str) -> None:
-        """Stamp the day the admins' end-of-day rollup went out. Not audited and not
+        """Stamp the day the end-of-day rollups went out. Not audited and not
         permission-checked: this is the scheduler's own bookkeeping, not a change
         to the schedule anyone configured."""
         row = await self.get_or_create()

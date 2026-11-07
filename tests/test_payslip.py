@@ -142,6 +142,37 @@ async def test_releasing_a_month_again_emails_only_the_slips_that_changed(
     assert third["emailed_count"] == 1
 
 
+async def test_nothing_to_pay_means_no_payslip(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """Someone with pay on file but zero payable days this month (joined next
+    month, unpaid all month) must not be sent a slip for zero rupees."""
+    await _give_comp(client, settings, seed)
+    admin = auth_headers(settings, seed.admin)
+    override = await client.post(
+        "/api/v1/payroll/adjustments",
+        json={
+            "employee_id": str(seed.report.id),
+            "period_month": _MONTH,
+            "kind": "override",
+            "target": "payable_days",
+            "label": "Not on the payroll this month",
+            "amount_minor": 0,
+        },
+        headers=admin,
+    )
+    assert override.status_code == 201
+
+    result = (await client.post(f"/api/v1/payroll/finalize?month={_MONTH}", headers=admin)).json()
+    assert result["released_count"] == 0
+    assert result["emailed_count"] == 0
+
+    slip = await client.get(
+        f"/api/v1/payroll/payslips/{_MONTH}", headers=auth_headers(settings, seed.report)
+    )
+    assert slip.status_code == 404
+
+
 async def test_unfinalized_month_is_not_visible_to_the_employee(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:

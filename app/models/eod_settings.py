@@ -28,13 +28,13 @@ class EodSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # review/edit (default 16:30 local = 4:30 PM IST).
     draft_hour: Mapped[int] = mapped_column(default=16)
     draft_minute: Mapped[int] = mapped_column(default=30)
-    # SEND time — email the (edited-or-as-is) report to the reporting manager,
-    # then mail admins the rollup of every department (default 18:00 local = 6:00 PM
-    # IST). The draft→send gap is the review window.
+    # SEND time — email each person their (edited-or-as-is) report, then the
+    # rollups: team per manager, department per head, company for the admins
+    # (default 18:00 local = 6:00 PM IST). The draft→send gap is the review window.
     send_hour: Mapped[int] = mapped_column(default=18)
     send_minute: Mapped[int] = mapped_column(default=0)
 
-    # Local YYYY-MM-DD of the last day the admins' end-of-day rollup went out,
+    # Local YYYY-MM-DD of the last day the end-of-day rollups went out,
     # or NULL if never. The scheduler ticks every 15 minutes and flushes
     # any still-pending draft each time, so without a marker the admins would be
     # mailed a fresh digest on every tick from the send time until midnight. The

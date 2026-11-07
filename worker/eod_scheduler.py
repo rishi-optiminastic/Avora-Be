@@ -4,8 +4,9 @@ Runs as its own process (like `worker/payroll_scheduler.py`), reusing the app's
 async session + services. Each tick, when EOD is enabled: at/after the configured
 local hour it generates a draft for every present employee (idempotent per
 employee/day via the unique `eod_reports` constraint), auto-sends any draft left
-unreviewed past the cutoff to that person's reporting manager, and then mails the
-admins one rolled-up digest of every department (once per local day).
+unreviewed past the cutoff to its author, and then mails the rollups once per
+local day: one team rollup per manager, one department rollup per department
+head, one company rollup to the admins.
 
 Deploy alongside the API (one instance). Env:
   DATABASE_URL            Postgres URL (asyncpg-style, same as the API).
@@ -114,7 +115,7 @@ async def _tick() -> None:
             ).run_due(now)
             if generated or sent or digests or purged_activity or purged_shots:
                 log.info(
-                    "generated %d draft(s), auto-sent %d, mailed %d admin digest(s), "
+                    "generated %d draft(s), auto-sent %d, mailed %d rollup(s), "
                     "purged %d activity row(s), %d screenshot(s)",
                     generated,
                     sent,
