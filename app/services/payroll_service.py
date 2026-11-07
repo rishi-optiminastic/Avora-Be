@@ -887,7 +887,10 @@ class PayrollService:
         """HR/Admin releases a month: freeze each employee's slip into a `Payslip`
         snapshot and email everyone their PDF. Once released, employees can see and
         re-download that month. Re-running refreshes the snapshots (e.g. after an
-        attendance fix). Employees with no compensation on file are skipped."""
+        attendance fix) but emails only the slips whose figures changed, so a month
+        released again to pick up someone who was skipped the first time does not
+        send everyone else their identical slip twice. Employees with no
+        compensation on file are skipped."""
         if not _can_manage(caller):
             raise AuthorizationError()
         est = await self.estimate(caller, month)
@@ -1018,31 +1021,36 @@ class PayrollService:
             if line.missing_compensation:
                 skipped += 1
                 continue
-            snapshot = await self._payslips.upsert(
-                snapshot=PayslipSnapshot(
-                    employee_id=line.employee_id,
-                    period_month=est.month,
-                    employee_name=line.name,
-                    department=line.department,
-                    job_title=line.job_title,
-                    location=line.location,
-                    hire_date=line.hire_date,
-                    currency=line.currency,
-                    monthly_ctc_minor=line.monthly_ctc_minor,
-                    gross_minor=line.breakdown.gross_minor,
-                    net_minor=line.net_minor,
-                    reimbursement_minor=line.reimbursement_minor,
-                    breakdown=line.breakdown.model_dump(),
-                    prorated_breakdown=line.prorated.model_dump(),
-                    total_days=line.total_days,
-                    working_days=line.working_days,
-                    present_days=line.present_days,
-                    paid_leave_days=line.paid_leave_days,
-                    payable_days=line.payable_days,
-                    finalized_by=finalized_by,
-                )
+            fresh = PayslipSnapshot(
+                employee_id=line.employee_id,
+                period_month=est.month,
+                employee_name=line.name,
+                department=line.department,
+                job_title=line.job_title,
+                location=line.location,
+                hire_date=line.hire_date,
+                currency=line.currency,
+                monthly_ctc_minor=line.monthly_ctc_minor,
+                gross_minor=line.breakdown.gross_minor,
+                net_minor=line.net_minor,
+                reimbursement_minor=line.reimbursement_minor,
+                breakdown=line.breakdown.model_dump(),
+                prorated_breakdown=line.prorated.model_dump(),
+                total_days=line.total_days,
+                working_days=line.working_days,
+                present_days=line.present_days,
+                paid_leave_days=line.paid_leave_days,
+                payable_days=line.payable_days,
+                finalized_by=finalized_by,
             )
+            # Decided BEFORE the upsert: it rewrites this same row in place.
+            already_held = _already_holds(
+                await self._payslips.get(line.employee_id, est.month), fresh
+            )
+            snapshot = await self._payslips.upsert(snapshot=fresh)
             released += 1
+            if already_held:
+                continue  # the person has this exact slip in their inbox already
             employee = await self._employees.get(line.employee_id)
             if employee is None or not employee.work_email:
                 continue
@@ -1268,6 +1276,44 @@ class PayrollService:
                 total += weight
             out[emp_id] = total
         return out
+
+
+def _already_holds(existing: Payslip | None, fresh: PayslipSnapshot) -> bool:
+    """True when the person was already emailed a slip with exactly these figures.
+
+    A month is released again to pick up someone skipped the first time (no
+    compensation on file yet) or after one person's attendance was corrected.
+    Everyone whose slip did not move already has it in their inbox; sending it
+    twice reads as a correction that is not there. Only the money and the days
+    are compared: a retitled department or a new finalizer is not a new slip.
+    """
+    if existing is None or existing.emailed_at is None:
+        return False
+    return (
+        existing.monthly_ctc_minor,
+        existing.gross_minor,
+        existing.net_minor,
+        existing.reimbursement_minor,
+        existing.breakdown,
+        existing.prorated_breakdown,
+        existing.total_days,
+        existing.working_days,
+        existing.present_days,
+        existing.paid_leave_days,
+        existing.payable_days,
+    ) == (
+        fresh.monthly_ctc_minor,
+        fresh.gross_minor,
+        fresh.net_minor,
+        fresh.reimbursement_minor,
+        fresh.breakdown,
+        fresh.prorated_breakdown,
+        fresh.total_days,
+        fresh.working_days,
+        fresh.present_days,
+        fresh.paid_leave_days,
+        fresh.payable_days,
+    )
 
 
 def _present_days(summary: AttendanceMonthSummary | None) -> float:

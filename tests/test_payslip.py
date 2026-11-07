@@ -108,6 +108,40 @@ async def test_finalize_releases_and_employee_downloads_own_payslip(
     assert pdf.content.startswith(b"%PDF")
 
 
+async def test_releasing_a_month_again_emails_only_the_slips_that_changed(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """A month is re-released to pick up someone skipped the first time or after
+    one correction. Everyone whose figures did not move already holds that exact
+    slip, so they must not get it a second time."""
+    await _give_comp(client, settings, seed)
+    admin = auth_headers(settings, seed.admin)
+
+    first = (await client.post(f"/api/v1/payroll/finalize?month={_MONTH}", headers=admin)).json()
+    assert first["released_count"] >= 1 and first["emailed_count"] == first["released_count"]
+
+    again = (await client.post(f"/api/v1/payroll/finalize?month={_MONTH}", headers=admin)).json()
+    assert again["released_count"] == first["released_count"]
+    assert again["emailed_count"] == 0
+
+    # One person's slip changes: only they hear about it.
+    adjustment = await client.post(
+        "/api/v1/payroll/adjustments",
+        json={
+            "employee_id": str(seed.report.id),
+            "period_month": _MONTH,
+            "kind": "earning",
+            "label": "Bonus",
+            "amount_minor": 5_000_00,
+        },
+        headers=admin,
+    )
+    assert adjustment.status_code == 201
+    third = (await client.post(f"/api/v1/payroll/finalize?month={_MONTH}", headers=admin)).json()
+    assert third["released_count"] == first["released_count"]
+    assert third["emailed_count"] == 1
+
+
 async def test_unfinalized_month_is_not_visible_to_the_employee(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:
