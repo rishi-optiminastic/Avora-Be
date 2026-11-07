@@ -37,7 +37,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 from app.core.logging import get_logger
-from app.models.employee import Employee
+from app.models.employee import Employee, Role
 from app.models.notification import NotificationKind, NotificationLevel
 from app.models.task import Task
 from app.repositories.audit import AuditRepository
@@ -271,7 +271,16 @@ class TaskEscalationService:
         admins: Sequence[Employee] = []
         loads: dict[uuid.UUID, int] = {}
         if any(tier >= TIER_ADMIN for _, tier in targets):
-            admins = await self._employees.list_admins()
+            # The admin tier is about getting the business to unblock the work,
+            # so it goes to the org's admins (stored role ADMIN), never the IT
+            # admin - who holds admin rights for running the system, not for
+            # chasing a late warehouse task. With least-loaded dealing, the IT
+            # admin's near-empty board made them the pick for nearly every
+            # escalation. IT admins are the fallback only when no org admin
+            # exists, so the tier can never go nowhere.
+            admins = await self._employees.list_by_role(Role.ADMIN)
+            if not admins:
+                admins = await self._employees.list_admins()
             loads = await self._tasks.open_collaboration_counts([a.id for a in admins])
         return _Sweep(
             now=now,

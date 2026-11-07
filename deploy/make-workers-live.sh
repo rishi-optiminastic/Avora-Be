@@ -123,6 +123,20 @@ for entry in "${MISSING[@]}"; do
   container="avora-worker-${name}"
 
   docker rm -f "$container" >/dev/null 2>&1 || true
+  # Exactly one process may run a scheduler module against the live database.
+  # Two EOD schedulers on the same rows race on the "already sent" marker and
+  # can mail every manager twice; on 6 Nov 2026 a Coolify-managed copy on old
+  # code kept sending eight per-department rollups beside the new single
+  # digest. Anything else running this module - whatever it is called, however
+  # it was started - is stopped first. Reversible: `docker start <name>`.
+  for other in $(docker ps -q); do
+    case "$(docker inspect -f '{{json .Config.Cmd}} {{json .Config.Entrypoint}}' "$other")" in
+      *"$module"*)
+        echo "    stopping duplicate $(docker inspect -f '{{.Name}}' "$other" | sed 's#^/##') (also runs $module)"
+        docker stop "$other" >/dev/null
+        ;;
+    esac
+  done
   # --volumes-from is deliberately NOT used: a scheduler needs the api's
   # environment, not its filesystem.
   docker run -d \

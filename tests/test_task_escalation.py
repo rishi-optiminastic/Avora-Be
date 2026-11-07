@@ -716,6 +716,28 @@ async def test_admin_tier_is_spread_across_admins(db: AsyncSession, seed: _Seed)
     assert per_admin == {seed.admin.id: 2, second.id: 2}
 
 
+async def test_admin_tier_prefers_an_org_admin_over_the_it_admin(
+    db: AsyncSession, seed: _Seed
+) -> None:
+    """The IT admin runs the system, not the business. Even when their board is
+    the emptiest, a late task is escalated to an org admin."""
+    it_admin = await _admin(db, "it", role=Role.IT_ADMIN)
+    # Load the org admin so least-loaded dealing would otherwise pick the IT admin.
+    for _ in range(2):
+        busy = await _task(db, seed, days_overdue=0)
+        await TaskRepository(db).add_collaborator(busy.id, seed.admin.id)
+    task = await _task(db, seed, days_overdue=7)
+    task.assignee_id = seed.outsider.id  # no manager: only the admin tier acts
+    await db.commit()
+
+    outcome = await _service(db).run_due(NOW)
+    await db.refresh(task, attribute_names=["collaborators"])
+
+    assert outcome.admins_added == 1
+    assert {c.id for c in task.collaborators} == {seed.admin.id}
+    assert it_admin.id not in {c.id for c in task.collaborators}
+
+
 async def test_an_org_whose_only_admin_is_an_it_admin_still_escalates(
     db: AsyncSession, seed: _Seed
 ) -> None:
