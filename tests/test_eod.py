@@ -1503,3 +1503,129 @@ async def test_admin_who_manages_people_also_gets_a_team_rollup(
     (team,) = _rollups(email, "Team EOD · ", "admin@corp.test")
     assert "closed the quarter" in str(team["html"])
     assert "Olive Outsider" in str(team["html"])
+
+
+async def test_role_based_distribution_end_to_end(
+    db: AsyncSession, seed: _Seed, settings: Settings
+) -> None:
+    """The whole send, on an org with every role in play, pinned as a matrix.
+
+    Roster (seed: admin, manager with one report, outsider with no manager):
+      ira   IT admin, nobody reports to them
+      hema  senior manager heading Design; manages dia and lena
+      lena  manager in Design; manages devi
+      dia, devi  Design executives
+      omar  Sales executive reporting to the seed manager
+      sam   Sales executive reporting to the seed ADMIN
+      hana  HR, nothing to do with EOD
+      abe   marked absent
+    """
+    await _add_person(db, "ira", Role.IT_ADMIN)
+    hema = await _add_person(db, "hema", Role.SENIOR_MANAGER, "Design")
+    lena = await _add_person(db, "lena", Role.MANAGER, "Design")
+    dia, devi = await _add_department(db, "Design", "dia", "devi")
+    omar, sam = await _add_department(db, "Sales", "omar", "sam")
+    await _add_person(db, "hana", Role.HR)
+    abe = await _add_person(db, "abe", Role.EXECUTIVE, "Sales")
+    lena.manager_id = hema.id
+    dia.manager_id = hema.id
+    devi.manager_id = lena.id
+    omar.manager_id = seed.manager.id
+    sam.manager_id = seed.admin.id
+    for person in (seed.report, dia, devi, lena, omar, sam, hema):
+        db.add(
+            EodReport(
+                employee_id=person.id,
+                report_date=_DIGEST_DAY,
+                status=EodStatus.DRAFT,
+                summary=f"NARRATIVE-OF-{person.full_name.upper()}",
+                highlights={"tasks_completed": [f"Task by {person.full_name}"]},
+            )
+        )
+    db.add(EodReport(employee_id=abe.id, report_date=_DIGEST_DAY, status=EodStatus.SKIPPED_ABSENT))
+    await db.commit()
+    email = _CapturingEmail()
+    service = _build_service(db, settings, llm=_StubLlm(), email=email)
+
+    own = await service.auto_send_due(datetime.now(UTC), _EVENING)
+    rollups = await service.send_digests(datetime.now(UTC), _EVENING)
+
+    # Seven people had a report: each got exactly their own, nobody else's.
+    assert own == 7
+    own_mails = [m for m in email.messages if str(m["subject"]).startswith("Your end of day · ")]
+    assert sorted(str(m["to"]) for m in own_mails) == sorted(
+        f"{n}@corp.test" for n in ("report", "dia", "devi", "lena", "omar", "sam", "hema")
+    )
+    narrative_of = {
+        p.work_email: f"NARRATIVE-OF-{p.full_name.upper()}"
+        for p in (seed.report, dia, devi, lena, omar, sam, hema)
+    }
+    for m in own_mails:
+        assert narrative_of[str(m["to"])] in str(m["html"])
+        assert str(m["html"]).count("NARRATIVE-OF-") == 1
+
+    # Company rollup once, to both admins together, without a single narrative.
+    company = _admin_digest(email)
+    assert {company["to"], *company["cc"]} == {"admin@corp.test", "ira@corp.test"}
+    assert "NARRATIVE-OF-" not in str(company["html"])
+    assert "Task by Dia" in str(company["html"])
+
+    # Department rollup: the head, once, with every Design narrative, and no
+    # separate team rollup for the reports inside her own department.
+    (design,) = _rollups(email, "Design EOD · ", "hema@corp.test")
+    for name in ("DIA", "DEVI", "LENA", "HEMA"):
+        assert f"NARRATIVE-OF-{name}" in str(design["html"])
+    assert "NARRATIVE-OF-OMAR" not in str(design["html"])
+    assert _rollups(email, "Team EOD · ", "hema@corp.test") == []
+
+    # Team rollups: the seed manager (report + omar), lena (devi), the admin (sam).
+    (team,) = _rollups(email, "Team EOD · ", "manager@corp.test")
+    assert "NARRATIVE-OF-REMY REPORT" in str(team["html"]) and "NARRATIVE-OF-OMAR" in str(
+        team["html"]
+    )
+    assert "NARRATIVE-OF-DIA" not in str(team["html"])
+    (team,) = _rollups(email, "Team EOD · ", "lena@corp.test")
+    assert "NARRATIVE-OF-DEVI" in str(team["html"]) and "NARRATIVE-OF-LENA" not in str(team["html"])
+    (team,) = _rollups(email, "Team EOD · ", "admin@corp.test")
+    assert "NARRATIVE-OF-SAM" in str(team["html"])
+
+    # 1 company + 1 department + 3 teams; nothing to HR, the absent person, or
+    # the person with no manager beyond their own report.
+    assert rollups == 5
+    assert len(email.messages) == own + rollups
+    for address in ("hana@corp.test", "abe@corp.test"):
+        assert address not in email.sent
+    assert [m for m in email.messages if m["to"] == "outsider@corp.test"] == []
+
+
+async def test_the_scheduler_tick_sends_own_reports_then_rollups(
+    db: AsyncSession, seed: _Seed, settings: Settings
+) -> None:
+    """`run_due` chains the steps at the send time: own reports first, then the
+    rollups, so a draft flushed in this very tick already reads as reported in
+    every rollup's coverage figure."""
+    repo = EodSettingsRepository(db)
+    row = await repo.get() or await repo.create_default(settings)
+    row.enabled = True
+    db.add(
+        EodReport(
+            employee_id=seed.report.id,
+            report_date=_DIGEST_DAY,
+            status=EodStatus.DRAFT,
+            summary="Tick day.",
+            highlights={},
+        )
+    )
+    await db.commit()
+    email = _CapturingEmail()
+    service = _build_service(db, settings, llm=_StubLlm(), email=email)
+
+    _generated, sent, rollups, _purged, _shots = await service.run_due(_EVENING.astimezone(UTC))
+
+    assert sent == 1
+    assert rollups >= 2  # the company rollup and the seed manager's team rollup
+    own = [m for m in email.messages if str(m["subject"]).startswith("Your end of day · ")]
+    assert [m["to"] for m in own] == ["report@corp.test"]
+    assert f"1 of {await _headcount(db)} reported" in str(_admin_digest(email)["html"])
+    (team,) = _rollups(email, "Team EOD · ", "manager@corp.test")
+    assert "Tick day." in str(team["html"])

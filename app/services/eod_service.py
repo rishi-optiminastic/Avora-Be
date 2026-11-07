@@ -422,7 +422,8 @@ class EodService:
         by_id = {e.id: e for e in employees}
         teams: dict[uuid.UUID, list[Employee]] = defaultdict(list)
         for employee in employees:
-            if employee.manager_id is not None:
+            # A row pointing at itself is bad data, not a team of one.
+            if employee.manager_id is not None and employee.manager_id != employee.id:
                 teams[employee.manager_id].append(employee)
         for manager_id, team in teams.items():
             manager = by_id.get(manager_id)
