@@ -51,6 +51,9 @@ class TechAssetKind(StrEnum):
     HOSTING = "hosting"  # a server, database, deploy platform
     API_KEY = "api_key"
     PHONE = "phone"  # a number used for 2FA or recovery
+    # A physical thing handed to a person: laptop, monitor, keyboard, ID card.
+    # `details.ownership` says whether the company owns it or it is personal (BYOD).
+    DEVICE = "device"
 
 
 class AccessLevel(StrEnum):

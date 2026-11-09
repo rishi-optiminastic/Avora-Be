@@ -27,7 +27,7 @@ from datetime import UTC, datetime
 from app.core.access_crypto import decrypt_secret, encrypt_secret
 from app.core.config import Settings
 from app.core.exceptions import AuthorizationError, NotFoundError, ValidationError
-from app.models.access import AccessGrant, TechAsset
+from app.models.access import AccessGrant, TechAsset, TechAssetKind
 from app.models.employee import Employee, Role
 from app.models.notification import NotificationKind
 from app.repositories.access import AccessRepository
@@ -222,6 +222,8 @@ class AccessService:
         return (await self._views(caller, [asset]))[0]
 
     def _store_secret(self, asset: TechAsset, secret: str, caller: CurrentUser) -> None:
+        if _is_personal_device(asset):
+            raise ValidationError("Avora does not keep passwords for personal devices.")
         asset.secret_ciphertext = encrypt_secret(self._settings, secret)
         asset.secret_rotated_at = datetime.now(UTC)
         asset.secret_rotated_by = caller.employee_id
@@ -301,6 +303,13 @@ class AccessService:
             action="access.revoke",
             target=f"asset:{grant.asset_id}:employee:{grant.employee_id}",
         )
+
+
+def _is_personal_device(asset: TechAsset) -> bool:
+    """A device the person brought themselves. The company has no business
+    holding its password, so none is ever stored."""
+    ownership = str((asset.details or {}).get("ownership", "")).strip().lower()
+    return asset.kind is TechAssetKind.DEVICE and ownership == "personal"
 
 
 def _view(

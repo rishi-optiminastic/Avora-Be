@@ -106,6 +106,7 @@ from app.repositories.workspace_file import WorkspaceFileRepository
 from app.schemas.auth import AuthIdentity, CurrentDevice, CurrentUser, EnvPrincipal
 from app.services.access_request_service import AccessRequestService
 from app.services.access_service import AccessService
+from app.services.access_spend_service import AccessSpendService
 from app.services.activity_service import ActivityService
 from app.services.agent_nudge_service import AgentNudgeService
 from app.services.announcement_service import AnnouncementService
@@ -1711,3 +1712,14 @@ def get_access_request_service(
 
 AccessServiceDep = Annotated[AccessService, Depends(get_access_service)]
 AccessRequestServiceDep = Annotated[AccessRequestService, Depends(get_access_request_service)]
+
+
+def get_access_spend_service(
+    access: Annotated[AccessRepository, Depends(get_access_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> AccessSpendService:
+    return AccessSpendService(access, employees, audit)
+
+
+AccessSpendServiceDep = Annotated[AccessSpendService, Depends(get_access_spend_service)]

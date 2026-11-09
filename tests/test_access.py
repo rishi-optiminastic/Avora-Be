@@ -367,3 +367,49 @@ async def test_only_the_requester_cancels(
     assert (await client.post(url, headers=auth_headers(settings, seed.manager))).status_code == 404
     done = await client.post(url, headers=auth_headers(settings, seed.report))
     assert done.status_code == 200 and done.json()["status"] == "cancelled"
+
+
+# ---- devices -------------------------------------------------------------- #
+
+
+async def test_a_company_laptop_is_assigned_and_its_password_revealed(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    laptop = await _asset(
+        client,
+        settings,
+        seed,
+        kind="device",
+        name="MacBook Air M2",
+        category="Laptop",
+        cost_minor=None,
+        currency=None,
+        billing_cycle=None,
+        details={"device_type": "Laptop", "ownership": "Company", "serial_number": "C02XL0ABCD"},
+    )
+    await _grant(client, settings, seed.admin, laptop["id"], seed.report)
+    mine = (await client.get(f"{BASE}/me", headers=auth_headers(settings, seed.report))).json()
+    assert [g["asset"]["kind"] for g in mine] == ["device"]
+    shown = await client.post(
+        f"{BASE}/assets/{laptop['id']}/reveal", headers=auth_headers(settings, seed.report)
+    )
+    assert shown.status_code == 200 and shown.json()["secret"] == _SECRET
+
+
+async def test_no_password_is_ever_stored_for_a_personal_laptop(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    admin = auth_headers(settings, seed.admin)
+    body = {
+        "kind": "device",
+        "name": "Personal ThinkPad",
+        "details": {"device_type": "Laptop", "ownership": "Personal"},
+    }
+    refused = await client.post(f"{BASE}/assets", json={**body, "secret": "x"}, headers=admin)
+    assert refused.status_code == 422
+    created = await client.post(f"{BASE}/assets", json=body, headers=admin)
+    assert created.status_code == 201
+    rotate = await client.put(
+        f"{BASE}/assets/{created.json()['id']}/secret", json={"secret": "x"}, headers=admin
+    )
+    assert rotate.status_code == 422

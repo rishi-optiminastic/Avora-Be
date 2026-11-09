@@ -227,3 +227,55 @@ class AccessRequestRead(BaseModel):
     created_at: datetime
     # The server's verdict on whether THIS caller may decide THIS request.
     can_decide: bool
+
+
+# ---- spend (finance) -------------------------------------------------------- #
+
+
+class SpendTotalRead(BaseModel):
+    currency: str
+    monthly_minor: int
+    annual_minor: int
+
+
+class SpendGroupRead(BaseModel):
+    label: str
+    count: int
+    totals: list[SpendTotalRead]
+
+
+class SpendLineRead(BaseModel):
+    asset_id: uuid.UUID
+    name: str
+    kind: TechAssetKind
+    category: str
+    team: str
+    owner_name: str | None
+    billed_to: str | None
+    status: str
+    billing_cycle: str | None
+    currency: str
+    cost_minor: int
+    monthly_minor: int
+    annual_minor: int
+    renews_on: date | None
+    payment_method: str | None
+    card_last4: str | None
+    auto_renew: str | None
+    recurring: bool
+    estimated: bool
+    counted: bool
+
+
+class SpendSummaryRead(BaseModel):
+    """What the company spends on tech, for finance. Rupees and dollars are
+    totalled separately; nothing is converted on the server."""
+
+    generated_on: date
+    count: int
+    totals: list[SpendTotalRead]
+    by_team: list[SpendGroupRead]
+    by_category: list[SpendGroupRead]
+    by_kind: list[SpendGroupRead]
+    renewals: list[SpendLineRead]
+    lines: list[SpendLineRead]

@@ -6,9 +6,14 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Response, status
 
-from app.core.deps import AccessRequestServiceDep, AccessServiceDep, CurrentUserDep
+from app.core.deps import (
+    AccessRequestServiceDep,
+    AccessServiceDep,
+    AccessSpendServiceDep,
+    CurrentUserDep,
+)
 from app.schemas.access import (
     AccessRequestCreate,
     AccessRequestRead,
@@ -18,12 +23,15 @@ from app.schemas.access import (
     MyGrantRead,
     SecretRevealRead,
     SecretWrite,
+    SpendSummaryRead,
     TechAssetCreate,
     TechAssetRead,
     TechAssetUpdate,
 )
 
 router = APIRouter(prefix="/access", tags=["access"])
+
+_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 @router.get("/me", response_model=list[MyGrantRead])
@@ -123,3 +131,20 @@ async def review_request(
     service: AccessRequestServiceDep,
 ) -> AccessRequestRead:
     return await service.review(caller, request_id, payload)
+
+
+@router.get("/spend", response_model=SpendSummaryRead)
+async def spend_summary(caller: CurrentUserDep, service: AccessSpendServiceDep) -> SpendSummaryRead:
+    """Finance view: monthly and annual tech spend by team, category and kind."""
+    return await service.summary(caller)
+
+
+@router.get("/spend/export")
+async def spend_export(caller: CurrentUserDep, service: AccessSpendServiceDep) -> Response:
+    """The same spend as an .xlsx workbook (Summary, Line items, Renewals)."""
+    data, filename = await service.export(caller)
+    return Response(
+        content=data,
+        media_type=_XLSX,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
