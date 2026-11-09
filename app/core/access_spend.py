@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from datetime import date
 
 UNASSIGNED_TEAM = "Unassigned"
+NO_BRAND = "No brand"
 UNCATEGORISED = "Uncategorised"
 
 # Months covered by one bill of each cycle; None = does not recur.
@@ -54,6 +55,7 @@ class SpendInput:
     kind: str
     category: str | None
     team: str | None
+    brand: str | None
     owner_name: str | None
     billed_to: str | None
     status: str
@@ -70,6 +72,7 @@ class SpendInput:
 class SpendLine:
     item: SpendInput
     team: str
+    brand: str
     category: str
     monthly_minor: int  # 0 when it does not recur
     annual_minor: int
@@ -104,6 +107,7 @@ def to_line(item: SpendInput) -> SpendLine:
     return SpendLine(
         item=item,
         team=(item.team or "").strip() or UNASSIGNED_TEAM,
+        brand=(item.brand or "").strip() or NO_BRAND,
         category=(item.category or "").strip() or UNCATEGORISED,
         monthly_minor=monthly,
         annual_minor=annual,
@@ -127,7 +131,7 @@ def totals(lines: Iterable[SpendLine]) -> SpendTotals:
 
 
 def group_totals(lines: Sequence[SpendLine], key: str) -> list[tuple[str, SpendTotals]]:
-    """Totals per `team`, `category` or `kind`, biggest rupee spend first."""
+    """Totals per `brand`, `team`, `category` or `kind`, biggest rupee spend first."""
     groups: dict[str, list[SpendLine]] = defaultdict(list)
     for line in lines:
         label = line.item.kind if key == "kind" else getattr(line, key)

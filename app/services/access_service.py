@@ -26,14 +26,17 @@ from datetime import UTC, datetime
 
 from app.core.access_crypto import decrypt_secret, encrypt_secret
 from app.core.config import Settings
-from app.core.exceptions import AuthorizationError, NotFoundError, ValidationError
-from app.models.access import AccessGrant, TechAsset, TechAssetKind
+from app.core.exceptions import AuthorizationError, ConflictError, NotFoundError, ValidationError
+from app.models.access import AccessGrant, Brand, TechAsset, TechAssetKind
 from app.models.employee import Employee, Role
 from app.models.notification import NotificationKind
 from app.repositories.access import AccessRepository
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.schemas.access import (
+    BrandCreate,
+    BrandRead,
+    BrandUpdate,
     GrantCreate,
     HolderRead,
     MyGrantRead,
@@ -140,6 +143,7 @@ class AccessService:
         people_ids = {g.employee_id for gs in grants.values() for g in gs}
         people_ids |= {a.owner_id for a in assets if a.owner_id is not None}
         people = await self._employees.get_many(list(people_ids))
+        brands = {b.id: b for b in await self._access.list_brands()}
         return [
             _view(
                 a,
@@ -147,6 +151,7 @@ class AccessService:
                 viewer,
                 parents.get(a.parent_id) if a.parent_id is not None else None,
                 people,
+                brands.get(a.brand_id) if a.brand_id is not None else None,
             )
             for a in assets
         ]
@@ -156,6 +161,7 @@ class AccessService:
         if not can_grant(caller):
             raise AuthorizationError()
         await self._check_links(None, payload.parent_id, payload.owner_id)
+        await self._check_brand(payload.brand_id)
         fields = payload.model_dump(exclude={"secret"})
         asset = TechAsset(**fields)
         if payload.secret is not None:
@@ -181,6 +187,7 @@ class AccessService:
             raise AuthorizationError()  # archiving hides it from everyone: admins only
         if "parent_id" in changes or "owner_id" in changes:
             await self._check_links(asset.id, changes.get("parent_id"), changes.get("owner_id"))
+        await self._check_brand(changes.get("brand_id"))
         for key, value in changes.items():
             if key in ("name", "priority", "status", "details") and value is None:
                 continue  # required columns: null means "leave it"
@@ -238,6 +245,68 @@ class AccessService:
                 raise ValidationError("That parent account does not exist.")
         if owner_id is not None and await self._employees.get(owner_id) is None:
             raise ValidationError("That owner is not an employee.")
+
+    async def _check_brand(self, brand_id: uuid.UUID | None) -> None:
+        if brand_id is not None and await self._access.get_brand(brand_id) is None:
+            raise ValidationError("That brand does not exist.")
+
+    # ---- brands ---------------------------------------------------------- #
+    async def brands(self) -> list[BrandRead]:
+        counts = await self._access.brand_counts()
+        return [_brand_read(b, counts.get(b.id, 0)) for b in await self._access.list_brands()]
+
+    async def create_brand(self, caller: CurrentUser, payload: BrandCreate) -> BrandRead:
+        if not can_grant(caller):
+            raise AuthorizationError()
+        if await self._access.brand_named(payload.name) is not None:
+            raise ConflictError(f"A brand called {payload.name.strip()} already exists.")
+        brand = Brand(
+            name=payload.name.strip(),
+            website=payload.website,
+            color=payload.color,
+            notes=payload.notes,
+        )
+        self._access.add_brand(brand)
+        await self._access.flush()
+        await self._audit.append(
+            actor=str(caller.employee_id), action="access.brand.create", target=f"brand:{brand.id}"
+        )
+        return _brand_read(brand, 0)
+
+    async def update_brand(
+        self, caller: CurrentUser, brand_id: uuid.UUID, payload: BrandUpdate
+    ) -> BrandRead:
+        if not can_grant(caller):
+            raise AuthorizationError()
+        brand = await self._access.get_brand(brand_id)
+        if brand is None:
+            raise NotFoundError()
+        changes = payload.model_dump(exclude_unset=True)
+        name = changes.pop("name", None)
+        if name:
+            clash = await self._access.brand_named(name)
+            if clash is not None and clash.id != brand.id:
+                raise ConflictError(f"A brand called {name.strip()} already exists.")
+            brand.name = name.strip()
+        for key, value in changes.items():
+            setattr(brand, key, value)
+        await self._access.flush()
+        await self._audit.append(
+            actor=str(caller.employee_id), action="access.brand.update", target=f"brand:{brand.id}"
+        )
+        return _brand_read(brand, (await self._access.brand_counts()).get(brand.id, 0))
+
+    async def delete_brand(self, caller: CurrentUser, brand_id: uuid.UUID) -> None:
+        """Remove a brand. Its assets stay; they simply lose the brand."""
+        if not can_grant(caller):
+            raise AuthorizationError()
+        brand = await self._access.get_brand(brand_id)
+        if brand is None:
+            raise NotFoundError()
+        await self._access.delete_brand(brand)
+        await self._audit.append(
+            actor=str(caller.employee_id), action="access.brand.delete", target=f"brand:{brand_id}"
+        )
 
     # ---- reveal ---------------------------------------------------------- #
     async def reveal(self, caller: CurrentUser, asset_id: uuid.UUID) -> SecretRevealRead:
@@ -318,6 +387,7 @@ def _view(
     viewer: AccessViewer,
     parent: TechAsset | None,
     people: dict[uuid.UUID, Employee],
+    brand: Brand | None,
 ) -> TechAssetRead:
     mine = next((g for g in grants if g.employee_id == viewer.caller.employee_id), None)
     money = viewer.sees_money(grants)
@@ -333,6 +403,8 @@ def _view(
         parent_name=parent.name if parent is not None else None,
         owner_id=asset.owner_id,
         owner_name=owner.full_name if owner is not None else None,
+        brand_id=asset.brand_id,
+        brand_name=brand.name if brand is not None else None,
         login_url=asset.login_url,
         priority=asset.priority,
         status=asset.status,
@@ -352,6 +424,17 @@ def _view(
         cost_minor=asset.cost_minor if money else None,
         currency=asset.currency if money else None,
         billing_cycle=asset.billing_cycle if money else None,
+    )
+
+
+def _brand_read(brand: Brand, count: int) -> BrandRead:
+    return BrandRead(
+        id=brand.id,
+        name=brand.name,
+        website=brand.website,
+        color=brand.color,
+        notes=brand.notes,
+        asset_count=count,
     )
 
 

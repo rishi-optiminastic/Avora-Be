@@ -85,6 +85,7 @@ def _summary_sheet(ws: Worksheet, lines: Sequence[SpendLine], generated: date) -
     ws.cell(row=2, column=1, value=f"Generated {generated.isoformat()} from Avora Access")
     overall = totals(lines)
     row = _total_rows(ws, 4, "Total spend", [("All live subscriptions", overall)], cur)
+    row = _total_rows(ws, row, "Spend by brand", group_totals(lines, "brand"), cur)
     row = _total_rows(ws, row, "Spend by team", group_totals(lines, "team"), cur)
     _total_rows(ws, row, "Spend by category", group_totals(lines, "category"), cur)
     _widths(ws, [32, 8, *([18] * (2 * max(len(cur), 1)))])
@@ -92,6 +93,7 @@ def _summary_sheet(ws: Worksheet, lines: Sequence[SpendLine], generated: date) -
 
 _LINE_HEADERS = (
     "Name",
+    "Brand",
     "Kind",
     "Category",
     "Team",
@@ -116,6 +118,7 @@ def _line_values(line: SpendLine) -> list[Cell]:
     item = line.item
     return [
         item.name,
+        line.brand,
         item.kind,
         line.category,
         line.team,
@@ -142,13 +145,13 @@ def _lines_sheet(ws: Worksheet, title: str, lines: Sequence[SpendLine]) -> None:
     for row, line in enumerate(lines, start=2):
         for col, value in enumerate(_line_values(line), start=1):
             cell = ws.cell(row=row, column=col, value=value)
-            if col in (10, 11, 12):
+            if col in (11, 12, 13):
                 cell.number_format = _MONEY
-            elif col == 13 and value is not None:
+            elif col == 14 and value is not None:
                 cell.number_format = "dd-mmm-yyyy"
     ws.freeze_panes = "B2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(_LINE_HEADERS))}{max(len(lines) + 1, 1)}"
-    _widths(ws, [30, 12, 16, 18, 18, 30, 10, 14, 9, 13, 13, 13, 14, 16, 11, 10, 10, 9])
+    _widths(ws, [30, 20, 12, 16, 18, 18, 30, 10, 14, 9, 13, 13, 13, 14, 16, 11, 10, 10, 9])
 
 
 def build_spend_xlsx(

@@ -29,6 +29,7 @@ def _item(**over: object) -> SpendInput:
         "kind": "subscription",
         "category": "Hosting",
         "team": "Engineering",
+        "brand": None,
         "owner_name": None,
         "billed_to": None,
         "status": "active",

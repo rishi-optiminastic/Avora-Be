@@ -87,6 +87,21 @@ class AccessRequestStatus(StrEnum):
     CANCELLED = "cancelled"  # withdrawn by the requester before a decision
 
 
+class Brand(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """A brand the company runs (The 3D Printing Store, SCRN Studio ...). Tech
+    assets can belong to one, so the catalog, canvas and spend can be read per
+    brand. Deleting a brand only unlinks its assets (SET NULL)."""
+
+    __tablename__ = "brands"
+
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    # The brand's site, for its logo; no scheme required ("the3dprintingstore.in").
+    website: Mapped[str | None] = mapped_column(String(255), default=None)
+    # A tone key from the design system (violet, sage, pink, butter, orange, sky).
+    color: Mapped[str | None] = mapped_column(String(16), default=None)
+    notes: Mapped[str | None] = mapped_column(String(500), default=None)
+
+
 class TechAsset(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "tech_assets"
     __table_args__ = (Index("ix_tech_assets_kind_name", "kind", "name"),)
@@ -128,6 +143,10 @@ class TechAsset(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     secret_rotated_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("employees.id", ondelete="SET NULL"), default=None
+    )
+
+    brand_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("brands.id", ondelete="SET NULL"), default=None, index=True
     )
 
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)

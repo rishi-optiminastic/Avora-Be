@@ -18,6 +18,9 @@ from app.schemas.access import (
     AccessRequestCreate,
     AccessRequestRead,
     AccessRequestReview,
+    BrandCreate,
+    BrandRead,
+    BrandUpdate,
     GrantCreate,
     GrantRead,
     MyGrantRead,
@@ -38,6 +41,33 @@ _XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 async def my_access(caller: CurrentUserDep, service: AccessServiceDep) -> list[MyGrantRead]:
     """What the caller holds right now."""
     return await service.my_grants(caller)
+
+
+@router.get("/brands", response_model=list[BrandRead])
+async def list_brands(caller: CurrentUserDep, service: AccessServiceDep) -> list[BrandRead]:
+    """Every brand, with how many live assets carry it. Visible to everyone."""
+    return await service.brands()
+
+
+@router.post("/brands", response_model=BrandRead, status_code=status.HTTP_201_CREATED)
+async def create_brand(
+    payload: BrandCreate, caller: CurrentUserDep, service: AccessServiceDep
+) -> BrandRead:
+    return await service.create_brand(caller, payload)
+
+
+@router.patch("/brands/{brand_id}", response_model=BrandRead)
+async def update_brand(
+    brand_id: uuid.UUID, payload: BrandUpdate, caller: CurrentUserDep, service: AccessServiceDep
+) -> BrandRead:
+    return await service.update_brand(caller, brand_id, payload)
+
+
+@router.delete("/brands/{brand_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_brand(
+    brand_id: uuid.UUID, caller: CurrentUserDep, service: AccessServiceDep
+) -> None:
+    await service.delete_brand(caller, brand_id)
 
 
 @router.get("/assets", response_model=list[TechAssetRead])

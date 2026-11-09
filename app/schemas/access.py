@@ -68,6 +68,7 @@ class _AssetFields(BaseModel):
     category: str | None = Field(default=None, max_length=64)
     parent_id: uuid.UUID | None = None
     owner_id: uuid.UUID | None = None
+    brand_id: uuid.UUID | None = None
     login_url: str | None = Field(default=None, max_length=500)
     login_id: str | None = Field(default=None, max_length=320)
     two_factor_method: str | None = Field(default=None, max_length=64)
@@ -114,6 +115,42 @@ class TechAssetUpdate(_AssetFields):
         return None if value is None else _clean_details(value)
 
 
+# Tone keys the design system knows; a brand's colour must be one of them.
+BRAND_COLORS = ("violet", "sage", "pink", "butter", "orange", "sky")
+
+
+class _BrandFields(BaseModel):
+    website: str | None = Field(default=None, max_length=255)
+    color: str | None = None
+    notes: str | None = Field(default=None, max_length=500)
+
+    @field_validator("color")
+    @classmethod
+    def _tone(cls, value: str | None) -> str | None:
+        if value is None or value == "":
+            return None
+        if value not in BRAND_COLORS:
+            raise ValueError(f"color is one of {', '.join(BRAND_COLORS)}")
+        return value
+
+
+class BrandCreate(_BrandFields):
+    name: str = Field(min_length=1, max_length=120)
+
+
+class BrandUpdate(_BrandFields):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+
+
+class BrandRead(BaseModel):
+    id: uuid.UUID
+    name: str
+    website: str | None
+    color: str | None
+    notes: str | None
+    asset_count: int
+
+
 class SecretWrite(BaseModel):
     secret: str = Field(min_length=1, max_length=_MAX_SECRET)
 
@@ -144,6 +181,8 @@ class TechAssetRead(BaseModel):
     parent_name: str | None
     owner_id: uuid.UUID | None
     owner_name: str | None
+    brand_id: uuid.UUID | None
+    brand_name: str | None
     login_url: str | None
     priority: AssetPriority
     status: AssetStatus
@@ -247,6 +286,7 @@ class SpendGroupRead(BaseModel):
 class SpendLineRead(BaseModel):
     asset_id: uuid.UUID
     name: str
+    brand: str
     kind: TechAssetKind
     category: str
     team: str
@@ -274,6 +314,7 @@ class SpendSummaryRead(BaseModel):
     generated_on: date
     count: int
     totals: list[SpendTotalRead]
+    by_brand: list[SpendGroupRead]
     by_team: list[SpendGroupRead]
     by_category: list[SpendGroupRead]
     by_kind: list[SpendGroupRead]

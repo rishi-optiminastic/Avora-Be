@@ -61,6 +61,7 @@ class AccessSpendService:
             generated_on=today,
             count=totals(lines).count,
             totals=_totals(totals(lines)),
+            by_brand=_groups(lines, "brand"),
             by_team=_groups(lines, "team"),
             by_category=_groups(lines, "category"),
             by_kind=_groups(lines, "kind"),
@@ -86,7 +87,8 @@ class AccessSpendService:
         owners = await self._employees.get_many(
             list({a.owner_id for a in assets if a.owner_id is not None})
         )
-        lines = [to_line(_input(a, parents, owners)) for a in assets]
+        brands = {b.id: b.name for b in await self._access.list_brands()}
+        lines = [to_line(_input(a, parents, owners, brands)) for a in assets]
         lines.sort(key=lambda x: (-x.monthly_minor, x.item.name.lower()))
         return lines, datetime.now(UTC).astimezone(_OFFICE_TZ).date()
 
@@ -104,6 +106,7 @@ def _input(
     asset: TechAsset,
     parents: dict[uuid.UUID, TechAsset],
     owners: dict[uuid.UUID, Employee],
+    brands: dict[uuid.UUID, str],
 ) -> SpendInput:
     owner = owners.get(asset.owner_id) if asset.owner_id is not None else None
     parent = parents.get(asset.parent_id) if asset.parent_id is not None else None
@@ -113,6 +116,7 @@ def _input(
         kind=asset.kind.value,
         category=asset.category,
         team=_detail(asset, "team") or (owner.department if owner is not None else None),
+        brand=brands.get(asset.brand_id) if asset.brand_id is not None else None,
         owner_name=owner.full_name if owner is not None else None,
         billed_to=parent.name if parent is not None else None,
         status=asset.status.value,
@@ -146,6 +150,7 @@ def _line(line: SpendLine) -> SpendLineRead:
     return SpendLineRead(
         asset_id=uuid.UUID(item.asset_id),
         name=item.name,
+        brand=line.brand,
         kind=TechAssetKind(item.kind),
         category=line.category,
         team=line.team,

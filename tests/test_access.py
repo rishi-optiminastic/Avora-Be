@@ -413,3 +413,60 @@ async def test_no_password_is_ever_stored_for_a_personal_laptop(
         f"{BASE}/assets/{created.json()['id']}/secret", json={"secret": "x"}, headers=admin
     )
     assert rotate.status_code == 422
+
+
+# ---- brands --------------------------------------------------------------- #
+
+
+async def test_hr_and_admins_manage_brands_and_names_stay_unique(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    hr = await _hr(db)
+    denied = await client.post(
+        f"{BASE}/brands", json={"name": "SCRN Studio"}, headers=auth_headers(settings, seed.manager)
+    )
+    assert denied.status_code == 403
+    made = await client.post(
+        f"{BASE}/brands",
+        json={"name": "The 3D Printing Store", "website": "the3dprintingstore.in", "color": "sage"},
+        headers=auth_headers(settings, hr),
+    )
+    assert made.status_code == 201, made.text
+    dup = await client.post(
+        f"{BASE}/brands", json={"name": "the 3d printing store"}, headers=auth_headers(settings, hr)
+    )
+    assert dup.status_code == 409
+    bad = await client.post(
+        f"{BASE}/brands", json={"name": "X", "color": "#ff0000"}, headers=auth_headers(settings, hr)
+    )
+    assert bad.status_code == 422
+    listed = await client.get(f"{BASE}/brands", headers=auth_headers(settings, seed.report))
+    assert [b["name"] for b in listed.json()] == ["The 3D Printing Store"]
+
+
+async def test_an_asset_carries_its_brand_and_loses_it_when_the_brand_goes(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    admin = auth_headers(settings, seed.admin)
+    brand = (
+        await client.post(f"{BASE}/brands", json={"name": "SCRN Studio"}, headers=admin)
+    ).json()
+    asset = await _asset(client, settings, seed, brand_id=brand["id"])
+    assert asset["brand_name"] == "SCRN Studio"
+    counted = (await client.get(f"{BASE}/brands", headers=admin)).json()
+    assert counted[0]["asset_count"] == 1
+
+    spend = (await client.get(f"{BASE}/spend", headers=admin)).json()
+    assert [g["label"] for g in spend["by_brand"]] == ["SCRN Studio"]
+
+    gone = await client.delete(f"{BASE}/brands/{brand['id']}", headers=admin)
+    assert gone.status_code == 204
+    again = (await client.get(f"{BASE}/assets/{asset['id']}", headers=admin)).json()
+    assert again["brand_id"] is None and again["brand_name"] is None
+
+    unknown = await client.post(
+        f"{BASE}/assets",
+        json={"kind": "tool", "name": "Y", "brand_id": brand["id"]},
+        headers=admin,
+    )
+    assert unknown.status_code == 422

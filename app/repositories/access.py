@@ -12,7 +12,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.access import (
@@ -20,6 +20,7 @@ from app.models.access import (
     AccessLevel,
     AccessRequest,
     AccessRequestStatus,
+    Brand,
     TechAsset,
     TechAssetKind,
 )
@@ -52,6 +53,44 @@ class AccessRepository:
             return {}
         rows = await self._session.execute(select(TechAsset).where(TechAsset.id.in_(ids)))
         return {a.id: a for a in rows.scalars().all()}
+
+    # ---- brands ---------------------------------------------------------- #
+    async def list_brands(self) -> Sequence[Brand]:
+        rows = await self._session.execute(select(Brand).order_by(Brand.name))
+        return rows.scalars().all()
+
+    async def get_brand(self, brand_id: uuid.UUID) -> Brand | None:
+        return await self._session.get(Brand, brand_id)
+
+    async def brand_named(self, name: str) -> Brand | None:
+        found: Brand | None = await self._session.scalar(
+            select(Brand).where(func.lower(Brand.name) == name.strip().lower())
+        )
+        return found
+
+    def add_brand(self, brand: Brand) -> None:
+        self._session.add(brand)
+
+    async def delete_brand(self, brand: Brand) -> None:
+        """Unlink every asset from the brand, then remove it. Done explicitly
+        rather than leaning on the FK's SET NULL, so assets already loaded in
+        this session see the change too."""
+        await self._session.execute(
+            update(TechAsset)
+            .where(TechAsset.brand_id == brand.id)
+            .values(brand_id=None)
+            .execution_options(synchronize_session="fetch")
+        )
+        await self._session.delete(brand)
+        await self._session.flush()
+
+    async def brand_counts(self) -> dict[uuid.UUID, int]:
+        rows = await self._session.execute(
+            select(TechAsset.brand_id, func.count())
+            .where(TechAsset.brand_id.is_not(None), TechAsset.archived_at.is_(None))
+            .group_by(TechAsset.brand_id)
+        )
+        return {brand_id: int(count) for brand_id, count in rows.all() if brand_id is not None}
 
     # ---- grants ---------------------------------------------------------- #
     async def live_grants_for_assets(

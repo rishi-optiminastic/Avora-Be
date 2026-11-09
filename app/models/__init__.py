@@ -11,6 +11,7 @@ from app.models.access import (
     AccessRequestStatus,
     AssetPriority,
     AssetStatus,
+    Brand,
     TechAsset,
     TechAssetKind,
 )
@@ -131,6 +132,7 @@ __all__ = [
     "AttributionCorrection",
     "AuditLog",
     "Base",
+    "Brand",
     "BrowsingHiddenDomain",
     "CategoryRule",
     "CelebrationSettings",
