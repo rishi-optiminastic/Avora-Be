@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from app.api.v1.routes import (
+    access,
     activity,
     announcements,
     attendance,
@@ -110,3 +111,4 @@ api_router.include_router(eod.router)
 api_router.include_router(envsync.router)
 api_router.include_router(pat.router)
 api_router.include_router(llm_credit.router)
+api_router.include_router(access.router)

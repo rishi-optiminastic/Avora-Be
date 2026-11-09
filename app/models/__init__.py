@@ -4,6 +4,16 @@ Importing this package registers every model on `Base.metadata` so Alembic
 autogenerate can see them.
 """
 
+from app.models.access import (
+    AccessGrant,
+    AccessLevel,
+    AccessRequest,
+    AccessRequestStatus,
+    AssetPriority,
+    AssetStatus,
+    TechAsset,
+    TechAssetKind,
+)
 from app.models.activity import ActivitySample
 from app.models.announcement import Announcement, AnnouncementLevel
 from app.models.assignment_grant import AssignmentGrant
@@ -104,9 +114,15 @@ from app.models.workspace_file import (
 )
 
 __all__ = [
+    "AccessGrant",
+    "AccessLevel",
+    "AccessRequest",
+    "AccessRequestStatus",
     "ActivitySample",
     "Announcement",
     "AnnouncementLevel",
+    "AssetPriority",
+    "AssetStatus",
     "AssignmentGrant",
     "AssignmentStatus",
     "AttendanceOverride",
@@ -222,6 +238,8 @@ __all__ = [
     "TaskComment",
     "TaskPriority",
     "TaskStatus",
+    "TechAsset",
+    "TechAssetKind",
     "TrackingMode",
     "WorkEntity",
     "WorkSession",

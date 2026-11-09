@@ -10,8 +10,9 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,6 +48,8 @@ class PayslipSnapshot:
     paid_leave_days: float
     payable_days: float
     finalized_by: uuid.UUID | None
+    # Manual earnings/deductions by name: [{kind, label, amount_minor}].
+    adjustments: list[dict[str, Any]] = field(default_factory=list)
 
 
 class PayslipRepository:
@@ -109,6 +112,7 @@ class PayslipRepository:
         record.reimbursement_minor = snapshot.reimbursement_minor
         record.breakdown = snapshot.breakdown
         record.prorated_breakdown = snapshot.prorated_breakdown
+        record.adjustments = list(snapshot.adjustments)
         record.total_days = snapshot.total_days
         record.working_days = snapshot.working_days
         record.present_days = snapshot.present_days

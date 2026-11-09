@@ -14,6 +14,7 @@ from datetime import date, datetime
 from pydantic import BaseModel, Field, field_validator
 
 from app.core.payroll import payable_base_days
+from app.models.payroll_adjustment import PayrollAdjustmentKind
 from app.models.payroll_run import PayrollRun, PayrollRunSource
 from app.models.payroll_settings import PayCycle, PayrollSettings
 from app.models.payslip import Payslip
@@ -120,6 +121,28 @@ class SalaryBreakdownRead(BaseModel):
     net_minor: int
 
 
+class PayslipAdjustmentRead(BaseModel):
+    """One manual, labelled amount on a month's slip - a bonus, an arrear, an
+    advance recovery - so the slip can say what the money was instead of
+    hiding it inside net. Only earnings and deductions are listed: an override
+    changes a figure that is already on the slip, so it has no line of its own.
+    """
+
+    kind: PayrollAdjustmentKind
+    label: str
+    amount_minor: int
+
+
+def payslip_adjustment_lines(m: Payslip) -> list[PayslipAdjustmentRead]:
+    """The itemised adjustments frozen on a released slip (none before the
+    column existed, which is right: those months had no way to carry them)."""
+    return [PayslipAdjustmentRead.model_validate(item) for item in m.adjustments or []]
+
+
+def adjustment_total(lines: list[PayslipAdjustmentRead], kind: PayrollAdjustmentKind) -> int:
+    return sum(line.amount_minor for line in lines if line.kind is kind)
+
+
 class PayrollLineRead(BaseModel):
     """One employee's payroll for the month (full slip + attendance proration).
 
@@ -156,6 +179,8 @@ class PayrollLineRead(BaseModel):
     # Manual HR/Admin adjustments folded into net_minor (0 when none).
     adjustment_earnings_minor: int = 0
     adjustment_deductions_minor: int = 0
+    # The same adjustments itemised by name ("Diwali Bonus"), earnings first.
+    adjustments: list[PayslipAdjustmentRead] = Field(default_factory=list)
     # Fully-approved expense claims for this month, paid with the salary. Added to
     # `net_minor` but deliberately NOT to `breakdown`/`prorated`: a reimbursement
     # repays money already spent, so it must not inflate gross, PF or tax. The
@@ -202,6 +227,8 @@ class PayslipRead(BaseModel):
     payable_base_days: int = 0
     adjustment_earnings_minor: int = 0
     adjustment_deductions_minor: int = 0
+    # The same adjustments itemised by name ("Diwali Bonus"), earnings first.
+    adjustments: list[PayslipAdjustmentRead] = Field(default_factory=list)
     # Approved expense claims paid out with this month's salary. Included in
     # `net_minor` but kept out of `prorated`, so the slip can name the extra
     # money instead of leaving an unexplained gap against the gross.
@@ -273,6 +300,11 @@ class ReleasedPayslipRead(BaseModel):
     net_payable_minor: int  # prorated take-home
     # Approved expense claims paid with this month's salary, frozen at release.
     reimbursement_minor: int = 0
+    # Manual earnings and deductions frozen with the slip, itemised by name,
+    # plus their totals so a reader can reconcile gross and net without summing.
+    adjustments: list[PayslipAdjustmentRead] = Field(default_factory=list)
+    adjustment_earnings_minor: int = 0
+    adjustment_deductions_minor: int = 0
     # Days this person was on the payroll that month. Not stored on the snapshot
     # — recomputed from the frozen hire date, exactly as the PDF does, so a
     # released slip and its PDF can never disagree about the joining window.
@@ -282,6 +314,7 @@ class ReleasedPayslipRead(BaseModel):
 
     @classmethod
     def from_model(cls, m: Payslip) -> ReleasedPayslipRead:
+        lines = payslip_adjustment_lines(m)
         return cls(
             month=m.period_month,
             employee_id=m.employee_id,
@@ -301,6 +334,9 @@ class ReleasedPayslipRead(BaseModel):
             payable_days=m.payable_days,
             net_payable_minor=m.net_minor,
             reimbursement_minor=m.reimbursement_minor,
+            adjustments=lines,
+            adjustment_earnings_minor=adjustment_total(lines, PayrollAdjustmentKind.EARNING),
+            adjustment_deductions_minor=adjustment_total(lines, PayrollAdjustmentKind.DEDUCTION),
             payable_base_days=_base_days_for(m),
             released_at=m.released_at,
             emailed=m.emailed_at is not None,

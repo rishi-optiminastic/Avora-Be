@@ -14,6 +14,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, date, datetime
 from enum import StrEnum
+from typing import Any
 
 from sqlalchemy import (
     JSON,
@@ -71,6 +72,10 @@ class Payslip(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # SalaryBreakdownRead fields), frozen at release time.
     breakdown: Mapped[dict[str, int]] = mapped_column(JSON, default=dict)
     prorated_breakdown: Mapped[dict[str, int]] = mapped_column(JSON, default=dict)
+    # Manual, labelled earnings and deductions applied to this month (a bonus,
+    # an advance recovery), frozen as [{kind, label, amount_minor}] so the slip
+    # can name them and its Gross minus Deductions still lands on Net.
+    adjustments: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
 
     total_days: Mapped[int] = mapped_column(default=0)  # calendar days (proration base)
     working_days: Mapped[int] = mapped_column(default=0)  # weekdays minus holidays

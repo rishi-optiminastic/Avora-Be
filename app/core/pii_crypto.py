@@ -9,9 +9,10 @@ so a `MultiFernet` keeps decrypting old rows after a key rotation.
 
 from __future__ import annotations
 
-from cryptography.fernet import Fernet, MultiFernet
+from cryptography.fernet import MultiFernet
 
 from app.core.config import Settings
+from app.core.fernet_keys import KeyConfigError, multi_fernet
 
 
 class PiiCryptoError(RuntimeError):
@@ -19,17 +20,12 @@ class PiiCryptoError(RuntimeError):
 
 
 def _cipher(settings: Settings) -> MultiFernet:
-    raw = settings.bank_crypto_key
-    if not raw:
-        raise PiiCryptoError(
-            "No PII encryption key configured. Set BANK_FERNET_KEY (or "
-            "ENVSYNC_FERNET_KEY) to a Fernet key before storing bank details."
-        )
-    keys = [k.strip() for k in raw.replace(",", " ").split() if k.strip()]
     try:
-        return MultiFernet([Fernet(k.encode()) for k in keys])
-    except (ValueError, TypeError) as exc:  # malformed key material
-        raise PiiCryptoError("The PII encryption key is malformed.") from exc
+        return multi_fernet(
+            settings.bank_crypto_key, setting="BANK_FERNET_KEY (or ENVSYNC_FERNET_KEY)"
+        )
+    except KeyConfigError as exc:
+        raise PiiCryptoError(str(exc)) from exc
 
 
 def encrypt_pii(settings: Settings, plaintext: str) -> str:

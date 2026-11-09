@@ -147,6 +147,17 @@ class Settings(BaseSettings):
         """The active PII key: the dedicated one, else the Env Sync key."""
         return self.bank_fernet_key.strip() or self.envsync_fernet_key.strip()
 
+    # Access (tech asset passwords and API keys) -----------------------------
+    # Fernet key(s) encrypting the secrets HR and admins store against a tech
+    # asset. Same format and rotation rules as `envsync_fernet_key`; empty falls
+    # back to it, so a deployment that already runs Env Sync works at once.
+    access_fernet_key: str = ""
+
+    @property
+    def access_crypto_key(self) -> str:
+        """The active Access key: the dedicated one, else the Env Sync key."""
+        return self.access_fernet_key.strip() or self.envsync_fernet_key.strip()
+
     # Transactional email + invitations --------------------------------------
     # Provider switch: "sendgrid" (HTTP API) or "smtp" (e.g. Gmail). The SMTP_*
     # fields apply only when email_provider == "smtp"; sendgrid_api_key only when

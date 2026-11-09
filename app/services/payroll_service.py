@@ -35,7 +35,7 @@ from app.core.payroll import (
     weekdays_in_month,
 )
 from app.core.payroll_export import PayrollExportRow, build_payroll_xlsx, fmt_register_date
-from app.core.payslip_pdf import PayslipPdfData, render_payslip_pdf
+from app.core.payslip_pdf import PayslipLineItem, PayslipPdfData, render_payslip_pdf
 from app.core.pii_crypto import decrypt_pii
 from app.models.compensation import Compensation, PayPeriod
 from app.models.employee import Employee, Role
@@ -68,11 +68,13 @@ from app.schemas.payroll import (
     PayrollRunRead,
     PayrollSettingsRead,
     PayrollSettingsUpdate,
+    PayslipAdjustmentRead,
     PayslipRead,
     PayslipSummaryRead,
     ReleasedPayslipRead,
     SalaryBreakdownRead,
     parse_recipients,
+    payslip_adjustment_lines,
 )
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.attendance_service import AttendanceService
@@ -276,6 +278,29 @@ def _apply_adjustments(
         net_minor=base_net + earnings - deductions,
     )
     return adjusted, earnings, deductions
+
+
+def _slip_lines(adjustments: Sequence[PayrollAdjustment]) -> list[PayslipAdjustmentRead]:
+    """The manual earnings and deductions to name on the slip: earnings first,
+    each kind in the order HR added them. Overrides stay off the list, because
+    an override changes a figure the slip already shows."""
+    named = [a for a in adjustments if a.kind is not PayrollAdjustmentKind.OVERRIDE]
+    named.sort(key=lambda a: (a.kind is PayrollAdjustmentKind.DEDUCTION, a.created_at))
+    return [
+        PayslipAdjustmentRead(kind=a.kind, label=a.label, amount_minor=a.amount_minor)
+        for a in named
+    ]
+
+
+def _pdf_line_items(lines: Sequence[PayslipAdjustmentRead]) -> tuple[PayslipLineItem, ...]:
+    return tuple(
+        PayslipLineItem(
+            label=line.label,
+            amount_minor=line.amount_minor,
+            deduction=line.kind is PayrollAdjustmentKind.DEDUCTION,
+        )
+        for line in lines
+    )
 
 
 class PayrollService:
@@ -788,6 +813,7 @@ class PayrollService:
             payable_base_days=base_days,
             adjustment_earnings_minor=adj_earnings,
             adjustment_deductions_minor=adj_deductions,
+            adjustments=_slip_lines(adjustments),
             reimbursement_minor=reimbursement_minor,
             # Added after PF and tax: an expense repayment is not earnings, so it
             # must not be taxed. `prorated.net_minor` stays the salary-only figure
@@ -866,6 +892,7 @@ class PayrollService:
             payable_base_days=line.payable_base_days,
             adjustment_earnings_minor=line.adjustment_earnings_minor,
             adjustment_deductions_minor=line.adjustment_deductions_minor,
+            adjustments=line.adjustments,
             reimbursement_minor=line.reimbursement_minor,
             net_minor=line.net_minor,
             missing_compensation=line.missing_compensation,
@@ -991,6 +1018,7 @@ class PayrollService:
             prorated=prorated,
             net_payable_minor=slip.net_minor,
             reimbursement_minor=slip.reimbursement_minor,
+            adjustments=_pdf_line_items(slip.adjustments),
             payable_base_days=payable_base_days(year, m, employee.hire_date),
             total_days=slip.total_days,
             working_days=slip.working_days,
@@ -1044,6 +1072,7 @@ class PayrollService:
                 paid_leave_days=line.paid_leave_days,
                 payable_days=line.payable_days,
                 finalized_by=finalized_by,
+                adjustments=[a.model_dump(mode="json") for a in line.adjustments],
             )
             # Decided BEFORE the upsert: it rewrites this same row in place.
             already_held = _already_holds(
@@ -1121,6 +1150,7 @@ class PayrollService:
             prorated=m.prorated_breakdown or m.breakdown,
             net_payable_minor=m.net_minor,
             reimbursement_minor=m.reimbursement_minor,
+            adjustments=_pdf_line_items(payslip_adjustment_lines(m)),
             payable_base_days=payable_base_days(year, month, m.hire_date),
             total_days=m.total_days,
             working_days=m.working_days,
@@ -1296,6 +1326,7 @@ def _already_holds(existing: Payslip | None, fresh: PayslipSnapshot) -> bool:
         existing.gross_minor,
         existing.net_minor,
         existing.reimbursement_minor,
+        existing.adjustments,
         existing.breakdown,
         existing.prorated_breakdown,
         existing.total_days,
@@ -1308,6 +1339,7 @@ def _already_holds(existing: Payslip | None, fresh: PayslipSnapshot) -> bool:
         fresh.gross_minor,
         fresh.net_minor,
         fresh.reimbursement_minor,
+        fresh.adjustments,
         fresh.breakdown,
         fresh.prorated_breakdown,
         fresh.total_days,

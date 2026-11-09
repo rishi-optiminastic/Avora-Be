@@ -4,7 +4,9 @@ Given a frozen `PayslipPdfData` snapshot, render a single-page A4 salary slip in
 familiar Indian-payroll layout: a company masthead (name + address + optional
 logo), a Pay Summary (identity on the left, a Total-Net-Pay hero on the right),
 side-by-side Earnings and Deductions ledgers with an Amount + YTD column, and a
-"Total Net Payable" banner with the amount spelled out in words.
+"Total Net Payable" banner with the amount spelled out in words. Anything HR
+added by hand for the month (a Diwali bonus, an advance recovery) is printed as
+its own named line, so Gross minus Deductions always lands on the net.
 
 The rupee sign needs a Unicode font — built-in Helvetica has no ₹ glyph. We
 register the first DejaVu/Noto/Arial-Unicode TTF we can find at import time and
@@ -45,6 +47,17 @@ _FONT, _FONT_BOLD = PDF_FONTS.regular, PDF_FONTS.bold
 # Helvetica has no rupee glyph, so the fallback spells it out.
 _RUPEE = "₹" if PDF_FONTS.unicode else "Rs "
 _SYMBOLS = {"INR": _RUPEE, "USD": "$", "EUR": "€", "GBP": "£"}
+
+
+@dataclass(frozen=True)
+class PayslipLineItem:
+    """A labelled amount HR added to this month by hand - a bonus, an arrear, an
+    advance recovery. Printed under Earnings (or Deductions) by its own name, so
+    the slip's Gross and Net still add up and the person can see what it was."""
+
+    label: str
+    amount_minor: int
+    deduction: bool = False
 
 
 @dataclass(frozen=True)
@@ -91,6 +104,9 @@ class PayslipPdfData:
     bank_account: str | None = None
     logo_png: bytes | None = None
     ytd: dict[str, int] = field(default_factory=dict)
+    # Manual earnings and deductions for the month, each printed by name.
+    # Earnings join Gross Earnings, deductions join Total Deductions.
+    adjustments: tuple[PayslipLineItem, ...] = ()
 
 
 def payslip_lop_days(data: PayslipPdfData) -> float:
@@ -105,6 +121,20 @@ def payslip_lop_days(data: PayslipPdfData) -> float:
     """
     base = data.payable_base_days or data.total_days
     return max(0.0, base - data.payable_days)
+
+
+def gross_earnings_minor(data: PayslipPdfData) -> int:
+    """Everything paid out this month: the prorated salary plus every manual
+    earning and reimbursement. The Earnings ledger totals to this."""
+    extras = sum(item.amount_minor for item in data.adjustments if not item.deduction)
+    return data.prorated.get("gross_minor", 0) + data.reimbursement_minor + extras
+
+
+def total_deductions_minor(data: PayslipPdfData) -> int:
+    """Statutory deductions plus every manual deduction. The Deductions ledger
+    totals to this, so Gross Earnings - Total Deductions is the net payable."""
+    extras = sum(item.amount_minor for item in data.adjustments if item.deduction)
+    return data.prorated.get("total_deduction_minor", 0) + extras
 
 
 def _money(minor: int, currency: str) -> str:
@@ -365,6 +395,7 @@ def _earnings_rows(data: PayslipPdfData) -> list[tuple[str, int, int | None]]:
         ("Basic", pro.get("basic_minor", 0), ytd.get("basic_minor") if ytd else None),
         ("Fixed Allowance", fixed, fixed_ytd if ytd else None),
     ]
+    rows.extend((i.label, i.amount_minor, None) for i in data.adjustments if not i.deduction)
     if data.reimbursement_minor > 0:
         rows.append(("Reimbursements", data.reimbursement_minor, None))
     return rows
@@ -392,6 +423,7 @@ def _deduction_rows(data: PayslipPdfData) -> list[tuple[str, int, int | None]]:
                 ytd.get("income_tax_minor") if ytd else None,
             )
         )
+    rows.extend((i.label, i.amount_minor, None) for i in data.adjustments if i.deduction)
     return rows
 
 
@@ -453,14 +485,14 @@ def render_payslip_pdf(data: PayslipPdfData) -> bytes:
         "Earnings",
         _earnings_rows(data),
         "Gross Earnings",
-        data.prorated.get("gross_minor", 0) + data.reimbursement_minor,
+        gross_earnings_minor(data),
         data,
     )
     deductions = _ledger(
         "Deductions",
         _deduction_rows(data),
         "Total Deductions",
-        data.prorated.get("total_deduction_minor", 0),
+        total_deductions_minor(data),
         data,
     )
     grid = Table([[earnings, deductions]], colWidths=[87 * mm, 87 * mm])

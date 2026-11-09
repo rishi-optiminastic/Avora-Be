@@ -35,6 +35,7 @@ from app.core.tenancy import (
 )
 from app.db.session import get_session
 from app.models.employee import Role
+from app.repositories.access import AccessRepository
 from app.repositories.activity import ActivityRepository
 from app.repositories.announcement import AnnouncementRepository
 from app.repositories.assignment_grant import AssignmentGrantRepository
@@ -103,6 +104,8 @@ from app.repositories.worker_heartbeat import WorkerHeartbeatRepository
 from app.repositories.workspace import WorkspaceRepository
 from app.repositories.workspace_file import WorkspaceFileRepository
 from app.schemas.auth import AuthIdentity, CurrentDevice, CurrentUser, EnvPrincipal
+from app.services.access_request_service import AccessRequestService
+from app.services.access_service import AccessService
 from app.services.activity_service import ActivityService
 from app.services.agent_nudge_service import AgentNudgeService
 from app.services.announcement_service import AnnouncementService
@@ -1680,3 +1683,31 @@ EventServiceDep = Annotated[EventService, Depends(get_event_service)]
 ProbationFormPanelServiceDep = Annotated[
     ProbationFormPanelService, Depends(get_probation_form_panel_service)
 ]
+
+
+# ---- Access (tech assets, grants, requests) -------------------------------- #
+def get_access_repo(db: DbDep) -> AccessRepository:
+    return AccessRepository(db)
+
+
+def get_access_service(
+    access: Annotated[AccessRepository, Depends(get_access_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    notifications: Annotated[NotificationService, Depends(get_notification_service)],
+    settings: SettingsDep,
+) -> AccessService:
+    return AccessService(access, employees, audit, notifications, settings)
+
+
+def get_access_request_service(
+    access: Annotated[AccessRepository, Depends(get_access_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+    notifications: Annotated[NotificationService, Depends(get_notification_service)],
+) -> AccessRequestService:
+    return AccessRequestService(access, employees, audit, notifications)
+
+
+AccessServiceDep = Annotated[AccessService, Depends(get_access_service)]
+AccessRequestServiceDep = Annotated[AccessRequestService, Depends(get_access_request_service)]

@@ -11,7 +11,14 @@ from __future__ import annotations
 from httpx import AsyncClient
 
 from app.core.config import Settings
-from app.core.payslip_pdf import PayslipPdfData, payslip_lop_days, render_payslip_pdf
+from app.core.payslip_pdf import (
+    PayslipLineItem,
+    PayslipPdfData,
+    gross_earnings_minor,
+    payslip_lop_days,
+    render_payslip_pdf,
+    total_deductions_minor,
+)
 from tests.conftest import _Seed, auth_headers
 
 _COMP = {"amount_minor": 50_000_00, "currency": "inr", "period": "monthly"}
@@ -173,6 +180,60 @@ async def test_nothing_to_pay_means_no_payslip(
     assert slip.status_code == 404
 
 
+async def test_a_bonus_is_named_on_the_slip(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """A Diwali bonus used to vanish into net: the slip's ledgers came from the
+    salary formula alone, so Gross - Deductions stopped equalling Net and nothing
+    said why. Every manual earning and deduction now has its own named line on
+    the live slip and on the released snapshot. An override is not a line: it
+    changes a figure the slip already shows."""
+    await _give_comp(client, settings, seed)
+    admin = auth_headers(settings, seed.admin)
+    for body in (
+        {"kind": "earning", "label": "Diwali Bonus", "amount_minor": 3_135_00},
+        {"kind": "deduction", "label": "Advance recovery", "amount_minor": 579_00},
+        {"kind": "override", "target": "professional_tax", "label": "No PT", "amount_minor": 0},
+    ):
+        created = await client.post(
+            "/api/v1/payroll/adjustments",
+            json={"employee_id": str(seed.report.id), "period_month": _MONTH, **body},
+            headers=admin,
+        )
+        assert created.status_code == 201
+    named = [
+        {"kind": "earning", "label": "Diwali Bonus", "amount_minor": 3_135_00},
+        {"kind": "deduction", "label": "Advance recovery", "amount_minor": 579_00},
+    ]
+
+    live = await client.get(
+        f"/api/v1/payroll/me?employee_id={seed.report.id}&month={_MONTH}", headers=admin
+    )
+    assert live.status_code == 200
+    assert live.json()["adjustments"] == named
+
+    release = await client.post(f"/api/v1/payroll/finalize?month={_MONTH}", headers=admin)
+    assert release.status_code == 200
+    released = await client.get(
+        f"/api/v1/payroll/payslips/{_MONTH}", headers=auth_headers(settings, seed.report)
+    )
+    assert released.status_code == 200
+    slip = released.json()
+    assert slip["adjustments"] == named
+    assert slip["adjustment_earnings_minor"] == 3_135_00
+    assert slip["adjustment_deductions_minor"] == 579_00
+    assert slip["prorated"]["professional_tax_minor"] == 0
+    # With the lines named, the slip adds up again.
+    gross = slip["prorated"]["gross_minor"] + slip["reimbursement_minor"] + 3_135_00
+    deductions = slip["prorated"]["total_deduction_minor"] + 579_00
+    assert slip["net_payable_minor"] == gross - deductions
+
+    pdf = await client.get(
+        f"/api/v1/payroll/payslips/{_MONTH}/pdf", headers=auth_headers(settings, seed.report)
+    )
+    assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF")
+
+
 async def test_unfinalized_month_is_not_visible_to_the_employee(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:
@@ -274,6 +335,27 @@ def _pdf_data(**over: object) -> PayslipPdfData:
     }
     base.update(over)
     return PayslipPdfData(**base)  # type: ignore[arg-type]
+
+
+def test_a_bonus_is_its_own_line_on_the_pdf() -> None:
+    """Rishi's October: gross 50,450 less PF 1,881 and PT 200, plus a 3,135
+    Diwali bonus, less a 579 recovery, is the 50,925 the bank paid. The ledgers
+    must total to figures that meet at that net."""
+    plain = _pdf_data()
+    data = _pdf_data(
+        prorated={**plain.prorated, "gross_minor": 50_450_00, "total_deduction_minor": 2_081_00},
+        net_payable_minor=50_925_00,
+        adjustments=(
+            PayslipLineItem("Diwali Bonus", 3_135_00),
+            PayslipLineItem("Advance recovery", 579_00, deduction=True),
+        ),
+    )
+    assert gross_earnings_minor(data) == 53_585_00
+    assert total_deductions_minor(data) == 2_660_00
+    assert gross_earnings_minor(data) - total_deductions_minor(data) == data.net_payable_minor
+    assert render_payslip_pdf(data).startswith(b"%PDF")
+    # Without any manual lines the totals are the plain prorated figures.
+    assert gross_earnings_minor(plain) == 0 and total_deductions_minor(plain) == 0
 
 
 def test_a_mid_month_joiner_is_not_shown_phantom_loss_of_pay() -> None:

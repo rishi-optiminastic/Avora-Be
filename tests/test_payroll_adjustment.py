@@ -128,6 +128,11 @@ async def test_earning_and_deduction_move_net(
     assert line["adjustment_earnings_minor"] == 1_000_00
     assert line["adjustment_deductions_minor"] == 300_00
     assert line["net_minor"] == base_net + 1_000_00 - 300_00
+    # Each one is also named on the line, earnings first, so a slip can show it.
+    assert [(a["kind"], a["label"], a["amount_minor"]) for a in line["adjustments"]] == [
+        ("earning", line["adjustments"][0]["label"], 1_000_00),
+        ("deduction", "Advance recovery", 300_00),
+    ]
 
 
 async def test_net_override_forces_net(
