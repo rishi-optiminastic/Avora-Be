@@ -50,10 +50,12 @@ from app.repositories.employee import EmployeeRepository
 from app.repositories.form import FormAssignmentRepository, FormRepository, FormResponseRepository
 from app.schemas.auth import CurrentUser
 from app.schemas.form import (
+    PROBATION_TRIGGER_ORDER,
     PROBATION_TRIGGERS,
     AssignmentCreate,
     AssignmentDetail,
     AssignmentRead,
+    ProbationRestartResult,
     SubmissionWrite,
 )
 from app.services.audience import AudienceResolver
@@ -431,13 +433,7 @@ class FormAssignmentService:
             raise ConflictError(
                 "This person has no probation end date, so there is no review to send."
             )
-        manager = (
-            await self._employees.get(subject.manager_id)
-            if subject.manager_id is not None
-            else None
-        )
-        values = probation_values(form, subject, manager, ends_on, today)
-        assignment = await self._assignments.add(**values)
+        assignment = await self._issue_probation_form(form, subject, ends_on, today)
         # Ticks the checklist step this form owns, as Avora rather than as the
         # person who pressed the button - it was the form going out that
         # settled the step, not a human judgement.
@@ -451,6 +447,136 @@ class FormAssignmentService:
         # would leave links to an assignment that does not exist. The forms
         # scheduler tells them on its next run; it is already in their list.
         return await self._read(assignment.id)
+
+    async def _issue_probation_form(
+        self, form: Form, subject: Employee, ends_on: date, today: date
+    ) -> FormAssignment:
+        """Create one probation assignment. The caller ticks the checklist.
+
+        `stage` is NOT optional, and this is the one place that could forget
+        it. On a two-stage form a null stage does not mean "start at the first
+        stage" - it means "this form has no stages", so `fields_for_stage`
+        hands the assignee BOTH halves and `next_stage` returns None, finishing
+        the whole review on their submit with no handover to the reporting
+        manager at all. The review merged into one two-stage form, so every
+        probation assignment now needs one.
+        """
+        manager = (
+            await self._employees.get(subject.manager_id)
+            if subject.manager_id is not None
+            else None
+        )
+        values = probation_values(form, subject, manager, ends_on, today)
+        opening = first_stage(await self._forms.fields_of(form.id))
+        return await self._assignments.add(**values, stage=opening)
+
+    async def restart_probation_review(
+        self, caller: CurrentUser, employee_id: uuid.UUID
+    ) -> ProbationRestartResult:
+        """Run this person's probation review again, from the top.
+
+        For a review stuck in a state nobody can finish: forms that went out
+        before the review was restructured, a reporting manager only put on
+        file afterwards, a form that reached the wrong person. Sending another
+        copy is refused by design - `uq_form_assignments_trigger_subject` is
+        unique on (trigger, subject) for every non-manual form - so before
+        this the only way out was editing the database by hand.
+
+        Each existing probation form is REUSED rather than withdrawn and
+        replaced, because that index does not exclude cancelled rows: a
+        restart puts the row itself back to the start, which is also the
+        honest shape, since it is the same review being run again. `stage`
+        comes back as the form's first stage and `notified_at` is cleared, so
+        the scheduler tells the assignee about it again on its next run.
+
+        Triggers with nothing published are skipped rather than issued empty -
+        after the manager evaluation merged into the self-assessment there is
+        no separate manager form to send, and a restart that claimed to send
+        one would put a tick on the checklist for something that never
+        happened.
+
+        Refused when any part of the review has been answered, or a decision
+        is recorded: both are real work. A restart must not discard somebody's
+        written answers, nor quietly un-decide an outcome they may already
+        hold a letter for.
+        """
+        if not can_manage_forms(caller):
+            raise NotFoundError()
+        subject = await self._employees.get(employee_id)
+        if subject is None or not subject.is_active:
+            raise NotFoundError()
+        if await self._probation.has_decision(employee_id):
+            raise ConflictError(
+                "This review already has a decision recorded. Change the decision "
+                "instead of restarting the review."
+            )
+
+        # Everything that could refuse is checked BEFORE anything is written,
+        # so a refusal never leaves a half-restarted review behind.
+        today = await self._today()
+        ends_on = (await self._probation.end_dates([subject])).get(subject.id)
+        if ends_on is None:
+            raise ConflictError(
+                "This person has no probation end date, so there is no review to restart."
+            )
+        existing = {
+            row.trigger: row
+            for row in await self._assignments.probation_for_subject(
+                employee_id, PROBATION_TRIGGER_ORDER
+            )
+        }
+        for row in existing.values():
+            if await self._responses.for_assignment(row.id) is not None:
+                raise ConflictError(
+                    "Part of this review has already been answered. Restarting it "
+                    "would discard those answers."
+                )
+
+        # The checklist is cleared FIRST: `on_opened` below re-ticks what is
+        # true of the forms that actually go out, and clearing afterwards
+        # would wipe the ticks it had just written.
+        steps_cleared = await self._probation.reset_checklist(employee_id)
+
+        reset = 0
+        issued: list[FormAssignment] = []
+        for trigger in PROBATION_TRIGGER_ORDER:
+            live = await self._forms.published_for_trigger(trigger)
+            if not live:
+                continue
+            form = live[0]
+            current = existing.get(trigger)
+            if current is None:
+                issued.append(await self._issue_probation_form(form, subject, ends_on, today))
+                continue
+            manager = (
+                await self._employees.get(subject.manager_id)
+                if subject.manager_id is not None
+                else None
+            )
+            _back_to_the_start(
+                current,
+                probation_values(form, subject, manager, ends_on, today),
+                first_stage(await self._forms.fields_of(form.id)),
+            )
+            issued.append(current)
+            reset += 1
+        for row in issued:
+            await self._probation.on_opened(row)
+
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="form.probation_restart",
+            target=(
+                f"employee:{employee_id}:reset:{reset}"
+                f":issued:{len(issued) - reset}:steps:{steps_cleared}"
+            ),
+        )
+        return ProbationRestartResult(
+            reset=reset,
+            issued=len(issued) - reset,
+            steps_cleared=steps_cleared,
+            forms=[await self._read(row.id) for row in issued],
+        )
 
     # --- the daily job ---------------------------------------------------- #
     async def run_due(self, today: date) -> RunResult:
@@ -669,9 +795,7 @@ class FormAssignmentService:
             assignment.hr_alerted_at = None
 
     # --- helpers ---------------------------------------------------------- #
-    async def _oversees_probation(
-        self, caller: CurrentUser, assignment: FormAssignment
-    ) -> bool:
+    async def _oversees_probation(self, caller: CurrentUser, assignment: FormAssignment) -> bool:
         """Read-only oversight of a probation review, for the line above it.
 
         Deliberately NOT part of `_may_open`: that one also guards submitting,
@@ -823,3 +947,29 @@ def _may_claim(caller: CurrentUser, assignment: FormAssignment) -> bool:
         and can_manage_forms(caller)
         and assignment.subject_id != caller.employee_id
     )
+
+
+def _back_to_the_start(
+    row: FormAssignment, values: dict[str, object], opening: FormStage | None
+) -> None:
+    """Put one probation assignment back to the state a fresh send would give it.
+
+    Every field a run through the review can move has to be named here. An
+    unreset `submitted_at` or `handed_over_at` would leave the panel showing a
+    form as finished while the questions sat open again, and an unreset
+    `notified_at` would mean nobody is ever told the form is back - a review
+    that looks restarted and moves nothing.
+    """
+    row.form_id = values["form_id"]  # type: ignore[assignment]
+    row.trigger = values["trigger"]  # type: ignore[assignment]
+    row.status = values["status"]  # type: ignore[assignment]
+    row.available_on = values["available_on"]  # type: ignore[assignment]
+    row.due_on = values["due_on"]  # type: ignore[assignment]
+    # Absent for the HR pool, which nobody holds until someone submits it, so
+    # a stale assignee from the last run has to be cleared rather than kept.
+    row.assignee_id = values.get("assignee_id")  # type: ignore[assignment]
+    row.stage = opening
+    row.handed_over_at = None
+    row.submitted_at = None
+    row.notified_at = None
+    row.hr_alerted_at = None

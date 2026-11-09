@@ -104,6 +104,7 @@ from app.repositories.worker_heartbeat import WorkerHeartbeatRepository
 from app.repositories.workspace import WorkspaceRepository
 from app.repositories.workspace_file import WorkspaceFileRepository
 from app.schemas.auth import AuthIdentity, CurrentDevice, CurrentUser, EnvPrincipal
+from app.services.access_people_service import AccessPeopleService
 from app.services.access_request_service import AccessRequestService
 from app.services.access_service import AccessService
 from app.services.access_spend_service import AccessSpendService
@@ -1622,8 +1623,9 @@ def get_probation_form_link(
     leave_policy: Annotated[LeavePolicyRepository, Depends(get_leave_policy_repo)],
     attendance_policy: Annotated[AttendancePolicyRepository, Depends(get_attendance_policy_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    decisions: Annotated[ProbationDecisionRepository, Depends(get_probation_decision_repo)],
 ) -> ProbationFormLink:
-    return ProbationFormLink(checklist, leave_policy, attendance_policy, employees)
+    return ProbationFormLink(checklist, leave_policy, attendance_policy, employees, decisions)
 
 
 def get_form_service(
@@ -1723,3 +1725,14 @@ def get_access_spend_service(
 
 
 AccessSpendServiceDep = Annotated[AccessSpendService, Depends(get_access_spend_service)]
+
+
+def get_access_people_service(
+    access: Annotated[AccessRepository, Depends(get_access_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> AccessPeopleService:
+    return AccessPeopleService(access, employees, audit)
+
+
+AccessPeopleServiceDep = Annotated[AccessPeopleService, Depends(get_access_people_service)]

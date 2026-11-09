@@ -19,7 +19,7 @@ from app.core.exceptions import ValidationError
 from app.core.uploads import detect_media_type
 from app.models.form import FormTrigger
 from app.models.probation_decision import ProbationOutcome
-from app.schemas.form import AssignmentRead
+from app.schemas.form import AssignmentRead, ProbationRestartResult
 from app.schemas.probation import (
     MyProbationRead,
     ProbationChecklistRead,
@@ -168,6 +168,28 @@ async def send_probation_form(
     already gone out for this person, or when they have no probation end date.
     """
     return await service.send_probation_form(caller, employee_id, trigger)
+
+
+@router.post("/{employee_id}/review/restart", response_model=ProbationRestartResult)
+async def restart_probation_review(
+    employee_id: uuid.UUID,
+    caller: CurrentUserDep,
+    service: FormAssignmentServiceDep,
+) -> ProbationRestartResult:
+    """Start this person's probation review again, from the top.
+
+    For a review nobody can finish: forms issued before the review was
+    restructured, a reporting manager put on file after they went out, a form
+    that reached the wrong person. Every probation form goes back to its
+    opening state and the checklist back to pending, then the forms that have
+    a published version go out again - the same act as the scheduler's, so
+    the checklist ticks tell the truth about what was actually sent.
+
+    HR and admins only. 409 when any part of the review has been answered,
+    when a decision is already recorded, or when the person has no probation
+    end date.
+    """
+    return await service.restart_probation_review(caller, employee_id)
 
 
 @router.post("/me/acknowledge", response_model=MyProbationRead | None)

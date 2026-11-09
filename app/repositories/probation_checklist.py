@@ -6,7 +6,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.probation_checklist import ProbationChecklistItem, ProbationStepStatus
@@ -66,6 +66,22 @@ class ProbationChecklistRepository:
 
     async def flush(self) -> None:
         await self._session.flush()
+
+    async def clear_for_employee(self, employee_id: uuid.UUID) -> int:
+        """Drop every stored step for this person. Returns rows removed.
+
+        A missing row IS pending (see the model), so deleting is how a review
+        goes back to the start - there is no "untick" state to write instead.
+        Deliberately destructive and therefore audited by the caller: the ticks
+        carry who signed off what, and a restart says that trail no longer
+        describes the review being run.
+        """
+        removed = await self._session.scalars(
+            delete(ProbationChecklistItem)
+            .where(ProbationChecklistItem.employee_id == employee_id)
+            .returning(ProbationChecklistItem.id)
+        )
+        return len(list(removed))
 
     async def mark_done_by_system(
         self, employee_id: uuid.UUID, notes: Mapping[int, str], at: datetime

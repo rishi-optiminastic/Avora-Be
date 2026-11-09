@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from app.core.access_crypto import decrypt_secret, encrypt_secret
+from app.core.access_reach import Reach, reach_for_asset
 from app.core.config import Settings
 from app.core.exceptions import AuthorizationError, ConflictError, NotFoundError, ValidationError
 from app.models.access import AccessGrant, Brand, TechAsset, TechAssetKind
@@ -39,6 +40,7 @@ from app.schemas.access import (
     BrandUpdate,
     GrantCreate,
     HolderRead,
+    InheritedHolderRead,
     MyGrantRead,
     SecretRevealRead,
     TechAssetCreate,
@@ -135,26 +137,26 @@ class AccessService:
 
     async def _views(self, caller: CurrentUser, assets: Sequence[TechAsset]) -> list[TechAssetRead]:
         """Build read shapes for many assets with a fixed number of queries."""
+        ctx = await self._context(caller, assets)
+        return [_view(a, ctx) for a in assets]
+
+    async def _context(self, caller: CurrentUser, assets: Sequence[TechAsset]) -> _ViewContext:
+        """Everything the read shapes need, loaded once. Grants are read for the
+        whole catalog because access to an account flows down to its children."""
         viewer = await viewer_for(self._employees, caller)
-        grants = await self._access.live_grants_for_assets([a.id for a in assets])
-        parents = await self._access.assets_by_id(
-            list({a.parent_id for a in assets if a.parent_id is not None})
-        )
+        everything = await self._access.list_assets(include_archived=True)
+        by_id = {a.id: a for a in [*everything, *assets]}
+        grants = await self._access.live_grants_for_assets(list(by_id))
         people_ids = {g.employee_id for gs in grants.values() for g in gs}
         people_ids |= {a.owner_id for a in assets if a.owner_id is not None}
-        people = await self._employees.get_many(list(people_ids))
-        brands = {b.id: b for b in await self._access.list_brands()}
-        return [
-            _view(
-                a,
-                grants.get(a.id, []),
-                viewer,
-                parents.get(a.parent_id) if a.parent_id is not None else None,
-                people,
-                brands.get(a.brand_id) if a.brand_id is not None else None,
-            )
-            for a in assets
-        ]
+        return _ViewContext(
+            viewer=viewer,
+            assets=by_id,
+            parent_of={a.id: a.parent_id for a in by_id.values()},
+            grants=grants,
+            people=await self._employees.get_many(list(people_ids)),
+            brands={b.id: b for b in await self._access.list_brands()},
+        )
 
     # ---- HR / admin: assets ---------------------------------------------- #
     async def create(self, caller: CurrentUser, payload: TechAssetCreate) -> TechAssetRead:
@@ -381,26 +383,36 @@ def _is_personal_device(asset: TechAsset) -> bool:
     return asset.kind is TechAssetKind.DEVICE and ownership == "personal"
 
 
-def _view(
-    asset: TechAsset,
-    grants: Sequence[AccessGrant],
-    viewer: AccessViewer,
-    parent: TechAsset | None,
-    people: dict[uuid.UUID, Employee],
-    brand: Brand | None,
-) -> TechAssetRead:
-    mine = next((g for g in grants if g.employee_id == viewer.caller.employee_id), None)
-    money = viewer.sees_money(grants)
+@dataclass(frozen=True)
+class _ViewContext:
+    viewer: AccessViewer
+    assets: dict[uuid.UUID, TechAsset]
+    parent_of: dict[uuid.UUID, uuid.UUID | None]
+    grants: dict[uuid.UUID, list[AccessGrant]]
+    people: dict[uuid.UUID, Employee]
+    brands: dict[uuid.UUID, Brand]
+
+    def name_of(self, asset_id: uuid.UUID | None) -> str | None:
+        found = self.assets.get(asset_id) if asset_id is not None else None
+        return found.name if found is not None else None
+
+
+def _view(asset: TechAsset, ctx: _ViewContext) -> TechAssetRead:
+    viewer = ctx.viewer
+    reach = reach_for_asset(asset.id, ctx.parent_of, ctx.grants)
+    direct = [r.grant for r in reach if r.direct]
+    mine = next((r for r in reach if r.employee_id == viewer.caller.employee_id), None)
+    money = viewer.sees_money([r.grant for r in reach])
     detail = money or mine is not None
-    owner = people.get(asset.owner_id) if asset.owner_id is not None else None
-    holders = [_holder(g, people.get(g.employee_id)) for g in grants if viewer.sees(g.employee_id)]
+    owner = ctx.people.get(asset.owner_id) if asset.owner_id is not None else None
+    brand = ctx.brands.get(asset.brand_id) if asset.brand_id is not None else None
     return TechAssetRead(
         id=asset.id,
         kind=asset.kind,
         name=asset.name,
         category=asset.category,
         parent_id=asset.parent_id,
-        parent_name=parent.name if parent is not None else None,
+        parent_name=ctx.name_of(asset.parent_id),
         owner_id=asset.owner_id,
         owner_name=owner.full_name if owner is not None else None,
         brand_id=asset.brand_id,
@@ -413,9 +425,16 @@ def _view(
         secret_rotated_at=asset.secret_rotated_at,
         renews_on=asset.renews_on,
         archived=asset.archived_at is not None,
-        holder_count=len(grants),
-        holders=holders,
-        my_level=mine.level if mine is not None else None,
+        holder_count=len(direct),
+        holders=[
+            _holder(g, ctx.people.get(g.employee_id)) for g in direct if viewer.sees(g.employee_id)
+        ],
+        inherited_holders=[
+            _inherited(r, ctx) for r in reach if not r.direct and viewer.sees(r.employee_id)
+        ],
+        reach_count=len(reach),
+        my_level=mine.grant.level if mine is not None else None,
+        my_via=ctx.name_of(mine.via_asset_id) if mine is not None else None,
         details_visible=detail,
         login_id=asset.login_id if detail else None,
         details=dict(asset.details or {}) if detail else None,
@@ -424,6 +443,18 @@ def _view(
         cost_minor=asset.cost_minor if money else None,
         currency=asset.currency if money else None,
         billing_cycle=asset.billing_cycle if money else None,
+    )
+
+
+def _inherited(reach: Reach, ctx: _ViewContext) -> InheritedHolderRead:
+    person = ctx.people.get(reach.employee_id)
+    return InheritedHolderRead(
+        employee_id=reach.employee_id,
+        name=person.full_name if person is not None else "Former employee",
+        department=person.department if person is not None else None,
+        level=reach.grant.level,
+        via_asset_id=reach.via_asset_id or reach.asset_id,
+        via_name=ctx.name_of(reach.via_asset_id) or "an account",
     )
 
 

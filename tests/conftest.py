@@ -49,6 +49,7 @@ from app.repositories.attendance_policy import AttendancePolicyRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.leave_policy import LeavePolicyRepository
 from app.repositories.probation_checklist import ProbationChecklistRepository
+from app.repositories.probation_decision import ProbationDecisionRepository
 from app.services.probation_forms import ProbationFormLink
 
 TEST_DB_URL = "sqlite+aiosqlite:///:memory:"
@@ -431,4 +432,5 @@ def probation_link(db: AsyncSession) -> ProbationFormLink:
         LeavePolicyRepository(db),
         AttendancePolicyRepository(db),
         EmployeeRepository(db),
+        ProbationDecisionRepository(db),
     )

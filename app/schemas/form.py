@@ -41,9 +41,15 @@ WEIGHT_MIN = 1
 WEIGHT_TOTAL = 100
 
 # Probation forms count `trigger_days` back from the probation end date.
-PROBATION_TRIGGERS = frozenset(
-    {FormTrigger.PROBATION_SELF, FormTrigger.PROBATION_MANAGER, FormTrigger.PROBATION_HR}
+# Ordered, because anything issuing the whole review at once must do it the
+# same way every time: the self-assessment starts the sequence and the
+# checklist notes its ticks leave read as a sequence too.
+PROBATION_TRIGGER_ORDER = (
+    FormTrigger.PROBATION_SELF,
+    FormTrigger.PROBATION_MANAGER,
+    FormTrigger.PROBATION_HR,
 )
+PROBATION_TRIGGERS = frozenset(PROBATION_TRIGGER_ORDER)
 
 # Control characters. Postgres refuses NUL outright (a 500, not a 422), and a
 # CR/LF in a title would break every email subject the title goes into.
@@ -328,3 +334,17 @@ class ProbationFormStatus(BaseModel):
 class ProbationForms(BaseModel):
     employee_id: uuid.UUID
     forms: list[ProbationFormStatus]
+
+
+class ProbationRestartResult(BaseModel):
+    """What a restarted probation review actually did.
+
+    Counted rather than described, because the honest answer varies: a review
+    whose manager form was retired issues two forms, not three, and saying so
+    is better than a UI that claims three went out.
+    """
+
+    reset: int  # forms put back to the start
+    issued: int  # forms this person did not have at all
+    steps_cleared: int  # checklist ticks removed
+    forms: list[AssignmentRead]

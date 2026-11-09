@@ -46,6 +46,7 @@ from app.repositories.attendance_policy import AttendancePolicyRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.leave_policy import LeavePolicyRepository
 from app.repositories.probation_checklist import ProbationChecklistRepository
+from app.repositories.probation_decision import ProbationDecisionRepository
 from app.schemas.form import PROBATION_TRIGGERS, SubjectDetails
 
 # Checklist steps (stable `no` keys from app.core.probation) and the note each
@@ -115,9 +116,7 @@ def steps_on_submit(assignment: FormAssignment) -> dict[int, str]:
 # PROBATION_HR is deliberately NOT here. It is HR's own feedback on the same
 # person - a different judgement, kept to HR and admins, and widening it to
 # the reporting line is a privacy change nobody asked for.
-OVERSEEABLE_PROBATION = frozenset(
-    {FormTrigger.PROBATION_SELF, FormTrigger.PROBATION_MANAGER}
-)
+OVERSEEABLE_PROBATION = frozenset({FormTrigger.PROBATION_SELF, FormTrigger.PROBATION_MANAGER})
 
 
 def is_probation_form(trigger: FormTrigger) -> bool:
@@ -185,11 +184,13 @@ class ProbationFormLink:
         leave_policy: LeavePolicyRepository,
         attendance_policy: AttendancePolicyRepository,
         employees: EmployeeRepository,
+        decisions: ProbationDecisionRepository,
     ) -> None:
         self._checklist = checklist
         self._leave_policy = leave_policy
         self._attendance_policy = attendance_policy
         self._employees = employees
+        self._decisions = decisions
 
     async def org_today(self) -> date:
         """Today in the org's timezone, never the server's clock."""
@@ -256,6 +257,20 @@ class ProbationFormLink:
         if assignment.subject_id is None or not is_probation_form(assignment.trigger):
             return
         await self._tick(assignment.subject_id, steps_on_submit(assignment))
+
+    async def has_decision(self, employee_id: uuid.UUID) -> bool:
+        """Whether this review already reached a conclusion.
+
+        A restart refuses when it has. Recording an outcome can change the
+        person's employment (an extension moves their probation end date) and
+        may already have put a letter in their hands, so a restart must not
+        quietly erase it - re-deciding is its own deliberate action.
+        """
+        return await self._decisions.get(employee_id) is not None
+
+    async def reset_checklist(self, employee_id: uuid.UUID) -> int:
+        """Send every step back to pending. Returns how many were cleared."""
+        return await self._checklist.clear_for_employee(employee_id)
 
     async def _tick(self, employee_id: uuid.UUID, steps: dict[int, str]) -> None:
         await self._checklist.mark_done_by_system(employee_id, steps, datetime.now(UTC))

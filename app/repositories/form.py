@@ -321,6 +321,23 @@ class FormAssignmentRepository:
         )
         return {subject for subject in rows.scalars().all() if subject is not None}
 
+    async def probation_for_subject(
+        self, subject_id: uuid.UUID, triggers: Sequence[FormTrigger]
+    ) -> Sequence[FormAssignment]:
+        """This person's probation review assignments, oldest first.
+
+        Rows, not the display shape: the caller changes their status.
+        """
+        rows = await self._session.scalars(
+            select(FormAssignment)
+            .where(
+                FormAssignment.subject_id == subject_id,
+                FormAssignment.trigger.in_(triggers),
+            )
+            .order_by(FormAssignment.created_at)
+        )
+        return list(rows)
+
     async def raw_with_status(self, status: AssignmentStatus) -> Sequence[FormAssignment]:
         rows = await self._session.execute(
             select(FormAssignment).where(FormAssignment.status == status)

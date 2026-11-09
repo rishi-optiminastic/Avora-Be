@@ -172,6 +172,17 @@ class HolderRead(BaseModel):
     granted_at: datetime
 
 
+class InheritedHolderRead(BaseModel):
+    """Someone who reaches an asset through an account it sits under."""
+
+    employee_id: uuid.UUID
+    name: str
+    department: str | None
+    level: AccessLevel
+    via_asset_id: uuid.UUID
+    via_name: str
+
+
 class TechAssetRead(BaseModel):
     id: uuid.UUID
     kind: TechAssetKind
@@ -195,7 +206,13 @@ class TechAssetRead(BaseModel):
     # only the ones inside the caller's scope.
     holder_count: int
     holders: list[HolderRead]
+    # People who reach it through an account above it, within the caller's
+    # scope, and how many people can reach it in total (direct or inherited).
+    inherited_holders: list[InheritedHolderRead]
+    reach_count: int
     my_level: AccessLevel | None
+    # When the caller's access comes through an account, that account's name.
+    my_via: str | None
     # Gated: null unless the caller holds it, runs a team that does, or is HR/Admin.
     details_visible: bool
     login_id: str | None
@@ -212,6 +229,43 @@ class MyGrantRead(BaseModel):
     level: AccessLevel
     granted_at: datetime
     asset: TechAssetRead
+
+
+class PersonAccessItemRead(BaseModel):
+    """One thing a person can reach, and how."""
+
+    asset_id: uuid.UUID
+    name: str
+    kind: TechAssetKind
+    category: str | None
+    priority: AssetPriority
+    status: AssetStatus
+    login_url: str | None
+    # Only what the logo needs (website, brand, carrier, manage_url) - never
+    # billing or recovery details.
+    logo_details: dict[str, DetailValue]
+    level: AccessLevel
+    # The grant behind this access: the asset's own, or the account's when
+    # inherited. Revoking it removes the access.
+    grant_id: uuid.UUID
+    granted_at: datetime
+    via_asset_id: uuid.UUID | None
+    via_name: str | None
+
+
+class PersonAccessRead(BaseModel):
+    employee_id: uuid.UUID
+    name: str
+    department: str | None
+    job_title: str | None
+    direct_count: int
+    reach_count: int
+    critical_count: int
+    items: list[PersonAccessItemRead]
+
+
+class RevokeAllResult(BaseModel):
+    revoked: int
 
 
 class GrantCreate(BaseModel):

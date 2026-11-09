@@ -9,6 +9,7 @@ import uuid
 from fastapi import APIRouter, Response, status
 
 from app.core.deps import (
+    AccessPeopleServiceDep,
     AccessRequestServiceDep,
     AccessServiceDep,
     AccessSpendServiceDep,
@@ -24,6 +25,8 @@ from app.schemas.access import (
     GrantCreate,
     GrantRead,
     MyGrantRead,
+    PersonAccessRead,
+    RevokeAllResult,
     SecretRevealRead,
     SecretWrite,
     SpendSummaryRead,
@@ -178,3 +181,27 @@ async def spend_export(caller: CurrentUserDep, service: AccessSpendServiceDep) -
         media_type=_XLSX,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.get("/people", response_model=list[PersonAccessRead])
+async def access_by_person(
+    caller: CurrentUserDep, service: AccessPeopleServiceDep
+) -> list[PersonAccessRead]:
+    """Everyone in the caller's scope and everything they can reach, including
+    what comes through an account. An executive gets only themselves."""
+    return await service.people(caller)
+
+
+@router.get("/people/{employee_id}", response_model=PersonAccessRead)
+async def access_for_person(
+    employee_id: uuid.UUID, caller: CurrentUserDep, service: AccessPeopleServiceDep
+) -> PersonAccessRead:
+    return await service.person(caller, employee_id)
+
+
+@router.post("/people/{employee_id}/revoke-all", response_model=RevokeAllResult)
+async def revoke_all_access(
+    employee_id: uuid.UUID, caller: CurrentUserDep, service: AccessPeopleServiceDep
+) -> RevokeAllResult:
+    """HR/admin offboarding: end every direct grant this person holds."""
+    return await service.revoke_all(caller, employee_id)
