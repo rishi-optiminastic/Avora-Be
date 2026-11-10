@@ -348,19 +348,19 @@ async def test_a_restart_will_not_discard_written_answers(
     await _ends_in(db, seed.report, 10)
     await _send_by_hand(client, settings, seed.admin, seed.report)
     (row,) = await _rows(db, seed.report)
-    response = FormResponse(
-        assignment_id=row.id,
-        form_id=row.form_id,
-        respondent_id=seed.report.id,
-        subject_id=seed.report.id,
+    db.add(
+        FormResponse(
+            assignment_id=row.id,
+            form_id=row.form_id,
+            respondent_id=seed.report.id,
+            submitted_at=datetime.now(UTC),
+        )
     )
-    db.add(response)
-    await db.flush()
     await db.commit()
 
     res = await _restart(client, settings, seed.admin, seed.report)
     assert res.status_code == 409, res.text
-    assert "answered" in res.json()["detail"].lower()
+    assert "answered" in res.json()["error"]["message"].lower()
 
 
 async def test_a_restart_will_not_un_decide_a_review(
@@ -376,14 +376,14 @@ async def test_a_restart_will_not_un_decide_a_review(
             employee_id=seed.report.id,
             outcome=ProbationOutcome.CONFIRMED,
             effective_date=date.today(),
-            decided_by_id=seed.admin.id,
+            decided_by=seed.admin.id,
         )
     )
     await db.commit()
 
     res = await _restart(client, settings, seed.admin, seed.report)
     assert res.status_code == 409, res.text
-    assert "decision" in res.json()["detail"].lower()
+    assert "decision" in res.json()["error"]["message"].lower()
 
 
 async def test_a_restart_refuses_somebody_with_no_probation_end(
@@ -397,7 +397,7 @@ async def test_a_restart_refuses_somebody_with_no_probation_end(
 
     res = await _restart(client, settings, seed.admin, seed.report)
     assert res.status_code == 409, res.text
-    assert "probation end date" in res.json()["detail"].lower()
+    assert "probation end date" in res.json()["error"]["message"].lower()
 
 
 @pytest.mark.parametrize("reason", ["answers", "decision", "no_end_date"])
@@ -419,7 +419,7 @@ async def test_a_refused_restart_changes_nothing(
                 assignment_id=row.id,
                 form_id=row.form_id,
                 respondent_id=seed.report.id,
-                subject_id=seed.report.id,
+                submitted_at=datetime.now(UTC),
             )
         )
     elif reason == "decision":
@@ -428,7 +428,7 @@ async def test_a_refused_restart_changes_nothing(
                 employee_id=seed.report.id,
                 outcome=ProbationOutcome.CONFIRMED,
                 effective_date=date.today(),
-                decided_by_id=seed.admin.id,
+                decided_by=seed.admin.id,
             )
         )
     else:
