@@ -1,9 +1,15 @@
 """Employee recognition — awarding badges, the org-wide feed, and the threads.
 
-Authorization is the point (CLAUDE.md §9): a manager recognises their OWN
-reports, HR and admin recognise anyone, and nobody recognises themselves. The
-feed is deliberately org-wide, so the test for that is that an outsider CAN read
-it - the opposite of every other read in this codebase.
+Authorization is the point (CLAUDE.md §9). Awarding is now open to EVERYONE -
+it was limited to a recipient's own reporting line plus HR and admin, which on
+a 29-person org meant 8 possible givers and one recognition in the programme's
+lifetime. What differs is weight, not permission: an award from the recipient's
+line is MANAGER and carries the badge's full points, anyone else is PEER and
+carries half, and peer awards are rationed per month so points stay worth
+something. Nobody recognises themselves.
+
+The feed is deliberately org-wide, so the test for that is that an outsider CAN
+read it - the opposite of every other read in this codebase.
 """
 
 from __future__ import annotations
@@ -85,16 +91,45 @@ async def test_a_manager_recognises_their_own_report(
     assert body["awarded_by_name"] == seed.manager.full_name
 
 
-async def test_a_manager_cannot_recognise_someone_elses_report(
+async def test_a_colleague_outside_the_reporting_line_may_still_recognise(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:
-    """A badge from someone who never saw the work says nothing."""
+    """The rule this replaced returned 403 here.
+
+    It was the whole problem: the people who see the work most closely are
+    usually not the ones who sign it off, and 21 of 29 had no way to recognise
+    anybody at all.
+    """
     resp = await client.post(
         URL,
         json=_award_body(seed.report),
         headers=auth_headers(settings, seed.outsider),
     )
-    assert resp.status_code == 403
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["source"] == "peer", "and it is marked as what it is"
+
+
+async def test_a_peer_award_is_worth_half_a_manager_one(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """Both are real recognition; only one is from the person accountable."""
+    by_manager = await _award(client, settings, seed.manager, seed.report)
+    by_peer = await client.post(
+        URL, json=_award_body(seed.outsider), headers=auth_headers(settings, seed.admin)
+    )
+    peer = await client.post(
+        URL,
+        json=_award_body(seed.manager),
+        headers=auth_headers(settings, seed.report),
+    )
+
+    assert by_peer.status_code == 201
+    assert peer.status_code == 201, peer.text
+    assert by_manager["source"] == "manager"
+    assert by_manager["points"] == 20, "Win of the Week, in full"
+    assert peer.json()["source"] == "peer"
+    assert peer.json()["points"] == 10, "half, rounded down"
 
 
 async def test_you_cannot_recognise_yourself(

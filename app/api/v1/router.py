@@ -48,6 +48,7 @@ from app.api.v1.routes import (
     recognition,
     reimbursements,
     resignations,
+    rewards,
     room,
     screenshots,
     sheets,
@@ -70,6 +71,7 @@ api_router.include_router(targets.router)
 api_router.include_router(leaves.router)
 api_router.include_router(leave_allocation.router)
 api_router.include_router(recognition.router)
+api_router.include_router(rewards.router)
 api_router.include_router(room.router)
 api_router.include_router(reimbursements.router)
 api_router.include_router(worker_health.router)

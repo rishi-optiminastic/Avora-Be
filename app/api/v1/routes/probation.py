@@ -170,6 +170,25 @@ async def send_probation_form(
     return await service.send_probation_form(caller, employee_id, trigger)
 
 
+@router.post("/{employee_id}/forms/{trigger}/resend", response_model=AssignmentRead)
+async def resend_probation_form(
+    employee_id: uuid.UUID,
+    trigger: FormTrigger,
+    caller: CurrentUserDep,
+    service: FormAssignmentServiceDep,
+) -> AssignmentRead:
+    """Email a probation form that is already out to whoever owes it, now.
+
+    The other half of `/send`, which creates the assignment and refuses a
+    second copy. The scheduler mails an assignment exactly once, so without
+    this a form nobody acted on could never be chased.
+
+    HR and admins only. 409 when the form has not gone out yet, when it is
+    already submitted, or when nobody holds it.
+    """
+    return await service.resend_probation_form(caller, employee_id, trigger)
+
+
 @router.post("/{employee_id}/review/restart", response_model=ProbationRestartResult)
 async def restart_probation_review(
     employee_id: uuid.UUID,

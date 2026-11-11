@@ -36,6 +36,7 @@ async def list_badges(caller: CurrentUserDep) -> list[BadgeRead]:
             label=spec.label,
             cadence=spec.cadence,
             when_to_use=spec.when_to_use,
+            points=spec.points,
         )
         for spec in BADGES
     ]

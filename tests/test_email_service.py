@@ -77,10 +77,19 @@ async def _record(sink: list[str], name: str) -> None:
 # --------------------------------------------------------------------------- #
 # The shared HR mailbox copy (`hr_notification_email`)
 #
-# HR asked to hold a record of every HR-relevant communication the system
-# sends. The copy is a BCC decided inside the named `send_*` wrapper, so what
-# these tests pin down is not just the plumbing but WHICH mail carries it - the
-# part that would otherwise drift as new emails are added.
+# HR holds a record of every transactional email the system sends about a
+# person's employment. The copy is a VISIBLE CC decided inside the named
+# `send_*` wrapper, so what these tests pin down is not just the plumbing but
+# WHICH mail carries it - the part that would otherwise drift as new emails
+# are added, in both directions.
+#
+# Visible, not blind: a hidden copy of someone's own payslip or leave decision
+# is worse to discover later than to have been told plainly, and a CC lets
+# anyone on the thread reply-all to bring HR in.
+#
+# Broadcasts are the deliberate exception. They already go to the whole org,
+# HR included, and they are chunked, so a copy would arrive once per chunk on
+# top of the one HR already has.
 # --------------------------------------------------------------------------- #
 _HR_MAILBOX = "hr@avora.test"
 
@@ -93,11 +102,16 @@ def _smtp_service(
     return service
 
 
+def _addresses(message: EmailMessage, header: str) -> list[str]:
+    raw = message[header]
+    return [part.strip() for part in str(raw).split(",")] if raw else []
+
+
 @pytest.mark.asyncio
-async def test_an_hr_relevant_email_bccs_the_hr_mailbox(
+async def test_a_transactional_email_ccs_the_hr_mailbox_visibly(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A leave decision stands in for the whole HR-relevant set.
+    """A leave decision stands in for the whole transactional set.
 
     Asserted on the real wrapper rather than on `send(copy_hr=True)`: the flag
     working proves nothing if no email ever passes it.
@@ -118,39 +132,61 @@ async def test_an_hr_relevant_email_bccs_the_hr_mailbox(
 
     assert len(sent) == 1
     assert sent[0]["To"] == "person@avora.test"
-    assert sent[0]["Bcc"] == _HR_MAILBOX
-    # BCC, not CC: the employee must not see HR on their own decision mail.
-    assert sent[0]["Cc"] is None
+    # CC, not BCC: the recipient is told HR holds a copy.
+    assert _addresses(sent[0], "Cc") == [_HR_MAILBOX]
+    assert sent[0]["Bcc"] is None
 
 
 @pytest.mark.asyncio
-async def test_an_ordinary_email_does_not_reach_the_hr_mailbox(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("wrapper", "kwargs"),
+    [
+        (
+            "send_task_assigned",
+            {
+                "employee_name": "Remy",
+                "task_title": "Ship it",
+                "assigned_by": "Their Manager",
+                "due_label": None,
+                "link_path": "/dashboard/goals/tasks",
+            },
+        ),
+        (
+            "send_recognition_awarded",
+            {
+                "recipient_name": "Remy",
+                "awarded_by_name": "Their Manager",
+                "badge_label": "Above and beyond",
+                "note": "Nice work",
+                "link_path": "/dashboard/recognition",
+            },
+        ),
+    ],
+)
+async def test_every_transactional_wrapper_copies_hr(
+    monkeypatch: pytest.MonkeyPatch, wrapper: str, kwargs: dict[str, object]
 ) -> None:
-    """Task assignment is not HR's business, and the default has to be silence -
-    otherwise every email added later quietly lands in HR's inbox."""
+    """Transactional mail about one person reaches HR, whatever it is about.
+
+    Parametrised over wrappers that did NOT copy HR before, so this fails if
+    anyone reverts the decision one wrapper at a time.
+    """
     sent: list[EmailMessage] = []
     service = _smtp_service(monkeypatch, sent, hr_notification_email=_HR_MAILBOX)
 
-    await service.send_task_assigned(
-        to="person@avora.test",
-        employee_name="Remy",
-        task_title="Ship it",
-        assigned_by="Their Manager",
-        due_label=None,
-        link_path="/dashboard/goals/tasks",
-    )
+    await getattr(service, wrapper)(to="person@avora.test", **kwargs)
 
-    assert len(sent) == 1
-    assert sent[0]["Bcc"] is None
+    assert len(sent) == 1, wrapper
+    assert _addresses(sent[0], "Cc") == [_HR_MAILBOX], wrapper
 
 
 @pytest.mark.asyncio
 async def test_a_birthday_broadcast_does_not_reach_the_hr_mailbox(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Broadcasts go to the whole org, HR included, and they are chunked - so a
-    copy would arrive once per chunk on top of the one HR already gets."""
+    """The one exception, and it has to stay one: broadcasts already go to the
+    whole org, HR included, and they are chunked - so a copy would arrive once
+    per chunk on top of the one HR already gets."""
     sent: list[EmailMessage] = []
     service = _smtp_service(monkeypatch, sent, hr_notification_email=_HR_MAILBOX)
 
@@ -159,6 +195,7 @@ async def test_a_birthday_broadcast_does_not_reach_the_hr_mailbox(
     )
 
     assert len(sent) == 1
+    assert _HR_MAILBOX not in _addresses(sent[0], "Cc")
     assert sent[0]["Bcc"] is None
 
 
@@ -174,7 +211,7 @@ async def test_without_a_configured_mailbox_nothing_is_copied(
     await service.send(to="person@avora.test", subject="Hi", html="<p>body</p>", copy_hr=True)
 
     assert len(sent) == 1
-    assert sent[0]["Bcc"] is None
+    assert sent[0]["Cc"] is None
 
 
 @pytest.mark.asyncio
@@ -196,7 +233,29 @@ async def test_hr_is_not_copied_on_a_message_it_already_receives(
         copy_hr=True,
     )
 
-    assert [m["Bcc"] for m in sent] == [None, None]
+    assert _addresses(sent[0], "Cc") == []
+    assert _addresses(sent[1], "Cc") == ["HR@AVORA.TEST"], "the caller's own CC, not a second copy"
+
+
+@pytest.mark.asyncio
+async def test_the_hr_copy_is_added_after_the_callers_own_recipients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An escalation already CCs the manager's line. HR joins that list rather
+    than replacing it - the whole point of a CC is that everyone sees who else
+    is on it."""
+    sent: list[EmailMessage] = []
+    service = _smtp_service(monkeypatch, sent, hr_notification_email=_HR_MAILBOX)
+
+    await service.send(
+        to="person@avora.test",
+        subject="Hi",
+        html="<p>b</p>",
+        cc=["lead@avora.test"],
+        copy_hr=True,
+    )
+
+    assert _addresses(sent[0], "Cc") == ["lead@avora.test", _HR_MAILBOX]
 
 
 @pytest.mark.asyncio
@@ -210,7 +269,7 @@ async def test_whitespace_around_the_configured_address_is_ignored(
 
     await service.send(to="person@avora.test", subject="Hi", html="<p>b</p>", copy_hr=True)
 
-    assert sent[0]["Bcc"] is None
+    assert sent[0]["Cc"] is None
 
 
 @pytest.mark.asyncio
@@ -234,4 +293,4 @@ async def test_the_sendgrid_path_carries_the_copy_too(
     monkeypatch.setattr(service, "_send_sendgrid", capture)
     await service.send(to="person@avora.test", subject="Hi", html="<p>b</p>", copy_hr=True)
 
-    assert captured[0]["bcc"] == [_HR_MAILBOX]
+    assert captured[0]["cc"] == [_HR_MAILBOX]

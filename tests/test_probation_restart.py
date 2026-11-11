@@ -25,7 +25,7 @@ database allows. Restart therefore REUSES the row.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from httpx import AsyncClient
@@ -441,3 +441,125 @@ async def test_a_refused_restart_changes_nothing(
     assert set(await _steps(db, seed.report)) == set(before), "checklist untouched"
     (after,) = await _rows(db, seed.report)
     assert after.stage is None, "the broken review is left exactly as it was"
+
+
+# --------------------------------------------------------------------------- #
+# Sending a form that is already out
+#
+# `/send` CREATES the assignment and refuses a second copy, correctly:
+# `uq_form_assignments_trigger_subject` allows exactly one row per (trigger,
+# subject). But the scheduler mails an assignment exactly ONCE - `notified_at`
+# is the flag - so a form issued before somebody could act on it had no way to
+# be chased at all. `/resend` is the other half of sending.
+# --------------------------------------------------------------------------- #
+async def _resend(
+    client: AsyncClient,
+    settings: Settings,
+    who: Employee,
+    subject: Employee,
+    trigger: FormTrigger = FormTrigger.PROBATION_SELF,
+):
+    return await client.post(
+        f"/api/v1/probation/{subject.id}/forms/{trigger.value}/resend",
+        headers=auth_headers(settings, who),
+    )
+
+
+async def test_resend_is_rejected_unauthenticated(
+    client: AsyncClient, seed: _Seed, db: AsyncSession
+) -> None:
+    url = f"/api/v1/probation/{seed.report.id}/forms/probation_self/resend"
+    assert (await client.post(url)).status_code == 401
+
+
+async def test_only_hr_and_admins_can_resend(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """404 rather than 403, like every other door onto someone's probation."""
+    await _two_stage_form(db)
+    await _ends_in(db, seed.report, 10)
+    await _send_by_hand(client, settings, seed.admin, seed.report)
+
+    for actor in (seed.report, seed.manager, seed.outsider):
+        res = await _resend(client, settings, actor, seed.report)
+        assert res.status_code == 404, f"{actor.full_name}: {res.text}"
+
+
+async def test_resending_mails_the_assignee_again(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """The point of it: the scheduler stamps `notified_at` and never mails the
+    same assignment twice, so this is the only way to chase one."""
+    await _two_stage_form(db)
+    await _ends_in(db, seed.report, 10)
+    await _send_by_hand(client, settings, seed.admin, seed.report)
+    (row,) = await _rows(db, seed.report)
+    stale = datetime.now(UTC) - timedelta(days=3)
+    row.notified_at = stale
+    await db.commit()
+    before = (await _rows(db, seed.report))[0].notified_at
+
+    res = await _resend(client, settings, seed.admin, seed.report)
+    assert res.status_code == 200, res.text
+
+    (row,) = await _rows(db, seed.report)
+    assert row.notified_at is not None
+    # Compared to the previous stamp rather than to the clock: the suite runs
+    # on SQLite, which hands back naive datetimes.
+    assert row.notified_at != before, "stamped again, so the scheduler is not the only sender"
+    assert row.status is AssignmentStatus.PENDING, "chasing it does not change where it stands"
+
+
+async def test_resending_does_not_create_a_second_copy(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """The unique index would refuse one anyway; this proves the endpoint does
+    not try, so the caller gets a resend rather than a 500."""
+    await _two_stage_form(db)
+    await _ends_in(db, seed.report, 10)
+    await _send_by_hand(client, settings, seed.admin, seed.report)
+    (before,) = await _rows(db, seed.report)
+
+    assert (await _resend(client, settings, seed.admin, seed.report)).status_code == 200
+
+    rows = await _rows(db, seed.report)
+    assert len(rows) == 1
+    assert rows[0].id == before.id
+
+
+async def test_a_form_that_never_went_out_cannot_be_resent(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """ "Send it first" rather than silently creating one: /send is the action
+    that creates, and it ticks the checklist step the form owns."""
+    await _two_stage_form(db)
+    await _ends_in(db, seed.report, 10)
+
+    res = await _resend(client, settings, seed.admin, seed.report)
+    assert res.status_code == 409, res.text
+    assert "not gone out" in res.json()["error"]["message"].lower()
+
+
+async def test_a_submitted_form_is_not_chased(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    await _two_stage_form(db)
+    await _ends_in(db, seed.report, 10)
+    await _send_by_hand(client, settings, seed.admin, seed.report)
+    (row,) = await _rows(db, seed.report)
+    row.status = AssignmentStatus.SUBMITTED
+    row.submitted_at = datetime.now(UTC)
+    await db.commit()
+
+    res = await _resend(client, settings, seed.admin, seed.report)
+    assert res.status_code == 409, res.text
+    assert "already in" in res.json()["error"]["message"].lower()
+
+
+async def test_a_non_probation_form_cannot_be_resent_this_way(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """The same guard /send carries: this endpoint ticks probation checklist
+    steps, so it must never be pointed at an onboarding form."""
+    res = await _resend(client, settings, seed.admin, seed.report, trigger=FormTrigger.NEW_JOINER)
+    assert res.status_code == 422, res.text

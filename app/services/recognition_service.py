@@ -5,10 +5,19 @@ and can add to the thread.
 
 The rules that carry weight:
 
-* **You award your own reports.** HR and admin may award anyone. This is the same
-  shape as every other permission here - the `manager_id` edge grants the scope,
-  not the job title - and it keeps a badge meaningful: it comes from someone who
-  saw the work.
+* **Anyone may recognise anyone.** Awarding used to be limited to a recipient's
+  own reporting line plus HR and admin. On a 29-person org that was 8 possible
+  givers and 21 people with no way to recognise anybody, and the programme was
+  used once in its lifetime. The people who see the work most closely are
+  usually not the ones who sign it off.
+* **But not all awards weigh the same.** An award from the recipient's line
+  (their manager, HR, an admin) is MANAGER and carries the badge's full points;
+  anyone else is PEER and carries half. Both are real recognition; only one is
+  from the person accountable for the work.
+* **Peer awards are rationed, manager ones are not.** `PEER_AWARDS_PER_MONTH`
+  per giver per calendar month. Points buy real things, so the supply has to be
+  bounded or the catalogue prices itself out in a week. A manager recognising
+  their own reports is the job and is already visible to the whole org.
 * **Never yourself.** Self-awarded recognition is not recognition.
 * **The feed is org-wide.** Recognition only the recipient can see is a private
   message. Colleagues commenting on it is the point of the programme.
@@ -24,13 +33,25 @@ import uuid
 from collections.abc import Sequence
 
 from app.core.exceptions import AuthorizationError, NotFoundError, ValidationError
-from app.core.recognition_badges import BY_BADGE, label_for
+from app.core.recognition_badges import (
+    BY_BADGE,
+    PEER_AWARDS_PER_MONTH,
+    label_for,
+    month_start,
+    points_for,
+)
 from app.models.employee import Employee, Role
 from app.models.notification import NotificationKind
-from app.models.recognition import Recognition, RecognitionBadge, RecognitionComment
+from app.models.recognition import (
+    Recognition,
+    RecognitionBadge,
+    RecognitionComment,
+    RecognitionSource,
+)
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.recognition import RecognitionRepository
+from app.repositories.reward import RewardRepository
 from app.schemas.auth import CurrentUser
 from app.schemas.recognition import (
     RecognitionCommentCreate,
@@ -54,12 +75,18 @@ class RecognitionService:
         audit: AuditRepository,
         notifications: NotificationService,
         email: EmailService,
+        rewards: RewardRepository,
     ) -> None:
         self._recognitions = recognitions
         self._employees = employees
         self._audit = audit
         self._notifications = notifications
         self._email = email
+        # Required, not optional. `unaward` has to know what the recipient has
+        # already committed before it takes points away, and a default of None
+        # would have made that guard silently skip - the one failure mode that
+        # leaves somebody owing Avora points they were told they had.
+        self._rewards = rewards
 
     async def award(self, caller: CurrentUser, payload: RecognitionCreate) -> Recognition:
         recipient = await self._employees.get(payload.employee_id)
@@ -67,14 +94,20 @@ class RecognitionService:
             raise NotFoundError()
         if recipient.id == caller.employee_id:
             raise ValidationError("You can't recognise yourself.")
-        if not _may_award(caller, recipient):
-            raise AuthorizationError()
+        source = _award_source(caller, recipient)
+        if source is RecognitionSource.PEER:
+            await self._check_peer_allowance(caller.employee_id)
 
         row = await self._recognitions.create(
             employee_id=recipient.id,
             awarded_by_id=caller.employee_id,
             badge=payload.badge,
             note=payload.note.strip(),
+            source=source,
+            # Snapshot. Never read back from the badge: these are spent on real
+            # things, and repricing a badge must not move a balance behind
+            # somebody's back.
+            points=points_for(payload.badge, source),
         )
         await self._audit.append(
             actor=str(caller.employee_id),
@@ -83,6 +116,20 @@ class RecognitionService:
         )
         await self._announce(caller, row, recipient)
         return row
+
+    async def _check_peer_allowance(self, awarder_id: uuid.UUID) -> None:
+        """Refuse a peer award once this month's allowance is used up.
+
+        Counted from the first of the CALENDAR month rather than a rolling 30
+        days, so everyone's allowance refills on the same visible date and
+        nobody has to work out when their window reopens.
+        """
+        given = await self._recognitions.peer_awards_given_since(awarder_id, month_start())
+        if given >= PEER_AWARDS_PER_MONTH:
+            raise ValidationError(
+                f"You have used all {PEER_AWARDS_PER_MONTH} of your peer "
+                "recognitions this month. They refill on the 1st."
+            )
 
     async def _announce(self, caller: CurrentUser, row: Recognition, recipient: Employee) -> None:
         """In-app for the recipient, email for the recipient only.
@@ -228,6 +275,7 @@ class RecognitionService:
             raise NotFoundError()
         if not _may_unaward(caller, row):
             raise AuthorizationError()
+        await self._check_not_already_spent(row)
         await self._audit.append(
             actor=str(caller.employee_id),
             action="recognition.unaward",
@@ -235,19 +283,41 @@ class RecognitionService:
         )
         await self._recognitions.delete(row)
 
+    async def _check_not_already_spent(self, row: Recognition) -> None:
+        """Refuse to take back points the recipient has already committed.
 
-def _may_award(caller: CurrentUser, recipient: Employee) -> bool:
-    """HR and admin may recognise anyone; everyone else their own reports.
+        Recognition used to be free to delete because it was only a badge.
+        It now carries points that buy real things, so removing one has to
+        answer for the balance: taking back 50 points somebody has already
+        put towards a reward would leave them owing Avora money they were
+        told they had.
 
-    Being *a* manager is not the permission - being THEIR manager is. A badge
-    from someone who never saw the work says nothing, and this mirrors how leave,
-    regularization and out-of-office already decide scope.
+        The check is on what is LEFT, not on this award specifically - points
+        are fungible, and there is no way to say which 50 were spent.
+        """
+        earned = await self._recognitions.points_earned(row.employee_id)
+        spent = await self._rewards.points_spent_by(row.employee_id)
+        if earned - row.points < spent:
+            raise ValidationError(
+                "They have already put these points towards a reward. Decline "
+                "or cancel that redemption first, then take this back."
+            )
+
+
+def _award_source(caller: CurrentUser, recipient: Employee) -> RecognitionSource:
+    """How much standing this award carries - not whether it is allowed.
+
+    Everyone may recognise everyone; what differs is the weight. MANAGER means
+    the caller is accountable for this person's work: their reporting manager,
+    HR, or an admin. Anyone else is a PEER.
+
+    Being *a* manager is not what counts - being THEIR manager is, the same
+    `manager_id` edge that decides scope for leave, regularization and
+    out-of-office.
     """
-    if caller.employee_id == recipient.id:
-        return False
-    if caller.role in (Role.ADMIN, Role.HR):
-        return True
-    return recipient.manager_id == caller.employee_id
+    if caller.role in (Role.ADMIN, Role.HR) or recipient.manager_id == caller.employee_id:
+        return RecognitionSource.MANAGER
+    return RecognitionSource.PEER
 
 
 def _may_unaward(caller: CurrentUser, row: Recognition) -> bool:

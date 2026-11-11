@@ -15,7 +15,7 @@ from __future__ import annotations
 import uuid
 from enum import StrEnum
 
-from sqlalchemy import ForeignKey, Index, String
+from sqlalchemy import ForeignKey, Index, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -27,6 +27,20 @@ class RecognitionCadence(StrEnum):
 
     WEEKLY = "weekly"
     MONTHLY = "monthly"
+
+
+class RecognitionSource(StrEnum):
+    """Who gave it, in terms of standing rather than job title.
+
+    MANAGER is the recipient's own reporting line, HR or an admin - someone
+    accountable for the work. PEER is anyone else in the org. They are worth
+    different points on purpose: opening awarding to everyone is what makes the
+    programme usable at all, but a badge from the person who signs off your
+    work should not be worth the same as one from the desk next to you.
+    """
+
+    MANAGER = "manager"
+    PEER = "peer"
 
 
 class RecognitionBadge(StrEnum):
@@ -64,6 +78,18 @@ class Recognition(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # What earned it. Required - "you got a badge" with no reason is hollow, and
     # it is the part colleagues actually respond to.
     note: Mapped[str] = mapped_column(String(1000))
+
+    # Whether the awarder was the recipient's line or a colleague, decided at
+    # award time. Stored rather than re-derived, because `manager_id` moves:
+    # a reorg must not retroactively turn a manager's badge into a peer one.
+    source: Mapped[RecognitionSource] = mapped_column(default=RecognitionSource.MANAGER)
+    # What this award was worth, SNAPSHOT at award time.
+    #
+    # Never recomputed from the badge. The point values are editable policy and
+    # people spend these on real things - revaluing history would move somebody's
+    # balance under them, and a balance that changes without a transaction is
+    # the one thing a rewards programme cannot afford.
+    points: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class RecognitionComment(UUIDPrimaryKeyMixin, TimestampMixin, Base):

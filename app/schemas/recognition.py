@@ -12,7 +12,11 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models.recognition import RecognitionBadge, RecognitionCadence
+from app.models.recognition import (
+    RecognitionBadge,
+    RecognitionCadence,
+    RecognitionSource,
+)
 
 
 class BadgeRead(BaseModel):
@@ -23,6 +27,8 @@ class BadgeRead(BaseModel):
     label: str
     cadence: RecognitionCadence
     when_to_use: str
+    #: Full value. A peer award on this badge is worth half.
+    points: int
 
 
 def _meaningful(value: str) -> str:
@@ -81,6 +87,11 @@ class RecognitionRead(BaseModel):
     emoji: str = ""
     badge_label: str = ""
     note: str
+    #: Whether it came from the recipient's own line or a colleague. Shown, so
+    #: the feed does not flatten the two into one undifferentiated stream.
+    source: RecognitionSource
+    #: What it was worth, as snapshotted when it was given.
+    points: int
     created_at: datetime
     comments: list[RecognitionCommentRead] = []
     can_delete: bool = False

@@ -102,34 +102,30 @@ class EmailService:
         a hundred identical private emails, and (on Gmail SMTP) the difference
         between one send and a hundred against the daily cap.
 
-        `copy_hr` BCCs the shared HR mailbox (`hr_notification_email`). It
+        `copy_hr` CCs the shared HR mailbox (`hr_notification_email`). It
         defaults to False so a new email is private until someone decides HR
         should hold a copy, and the decision is made once in the named `send_*`
         wrapper below rather than at each call site.
+
+        VISIBLE, not a blind copy: the recipient sees that HR holds a copy of
+        anything about their employment, and anyone on the thread can reply-all
+        to bring HR in. A hidden copy of someone's own payslip or leave
+        decision is the kind of thing that is worse to discover later than to
+        have been told plainly.
         """
         recipients = _dedupe_cc(to, cc)
-        bcc = self._hr_bcc(to, recipients) if copy_hr else []
+        recipients = recipients + self._hr_copy(to, recipients) if copy_hr else recipients
         if self._settings.uses_smtp:
             await self._send_smtp(
-                to=to,
-                subject=subject,
-                html=html,
-                cc=recipients,
-                bcc=bcc,
-                attachments=attachments,
+                to=to, subject=subject, html=html, cc=recipients, attachments=attachments
             )
         else:
             await self._send_sendgrid(
-                to=to,
-                subject=subject,
-                html=html,
-                cc=recipients,
-                bcc=bcc,
-                attachments=attachments,
+                to=to, subject=subject, html=html, cc=recipients, attachments=attachments
             )
 
-    def _hr_bcc(self, to: str, cc: list[str]) -> list[str]:
-        """The HR mailbox as a BCC list, empty when there is nothing to add.
+    def _hr_copy(self, to: str, cc: list[str]) -> list[str]:
+        """The HR mailbox as a CC list, empty when there is nothing to add.
 
         Dropped when HR is already the To or a CC: the mailbox would otherwise
         receive the same message twice, which reads as a bug and makes a thread
@@ -173,14 +169,11 @@ class EmailService:
         subject: str,
         html: str,
         cc: list[str] | None = None,
-        bcc: list[str] | None = None,
         attachments: list[EmailAttachment] | None = None,
     ) -> None:
         personalization: dict[str, object] = {"to": [{"email": to}]}
         if cc:
             personalization["cc"] = [{"email": address} for address in cc]
-        if bcc:
-            personalization["bcc"] = [{"email": address} for address in bcc]
         payload: dict[str, object] = {
             "personalizations": [personalization],
             "from": {
@@ -220,7 +213,6 @@ class EmailService:
         subject: str,
         html: str,
         cc: list[str] | None = None,
-        bcc: list[str] | None = None,
         attachments: list[EmailAttachment] | None = None,
     ) -> None:
         message = EmailMessage()
@@ -230,11 +222,6 @@ class EmailService:
             # smtplib's send_message reads To/Cc off the headers, so setting the
             # header is what actually delivers to them — no separate envelope list.
             message["Cc"] = ", ".join(cc)
-        if bcc:
-            # Same mechanism, with one difference that matters: `send_message`
-            # reads Bcc for the envelope and then strips the header from what it
-            # transmits, so the copy stays hidden from the To and Cc lines.
-            message["Bcc"] = ", ".join(bcc)
         message["Subject"] = subject
         # HTML with a minimal plaintext fallback for non-HTML clients.
         message.set_content("This email requires an HTML-capable email client to view.")
@@ -355,7 +342,7 @@ class EmailService:
             due_label=due_label,
             task_url=self._absolute(link_path),
         )
-        await self.send(to=to, subject=subject, html=html)
+        await self.send(to=to, subject=subject, html=html, copy_hr=True)
 
     async def send_leave_request(
         self,
@@ -418,8 +405,12 @@ class EmailService:
         note: str,
         link_path: str,
     ) -> None:
-        """Tell someone they were recognised. Not copied to HR: this is a note
-        between a manager and their report, and the feed is already org-wide."""
+        """Tell someone they were recognised.
+
+        Copied to HR like every other transactional email, by org decision -
+        the shared mailbox holds a record of what the system sent about a
+        person, praise included. The feed is already org-wide anyway.
+        """
         subject, html = recognition_awarded_email(
             recipient_name=recipient_name,
             awarded_by_name=awarded_by_name,
@@ -427,7 +418,7 @@ class EmailService:
             note=note,
             recognition_url=self._absolute(link_path),
         )
-        await self.send(to=to, subject=subject, html=html)
+        await self.send(to=to, subject=subject, html=html, copy_hr=True)
 
     async def send_task_escalated(
         self,
@@ -450,7 +441,7 @@ class EmailService:
             blocked_reason=blocked_reason,
             task_url=self._absolute(link_path),
         )
-        await self.send(to=to, subject=subject, html=html, cc=cc)
+        await self.send(to=to, subject=subject, html=html, cc=cc, copy_hr=True)
 
     async def send_forgot_checkout(
         self, *, to: str, employee_name: str, day_label: str, checkout_label: str
@@ -460,14 +451,14 @@ class EmailService:
             day_label=day_label,
             checkout_label=checkout_label,
         )
-        await self.send(to=to, subject=subject, html=html)
+        await self.send(to=to, subject=subject, html=html, copy_hr=True)
 
     async def send_agent_reinstall(self, *, to: str, employee_name: str, link_path: str) -> None:
         subject, html = agent_reinstall_email(
             employee_name=employee_name,
             install_url=self._absolute(link_path),
         )
-        await self.send(to=to, subject=subject, html=html)
+        await self.send(to=to, subject=subject, html=html, copy_hr=True)
 
     async def send_resignation_submitted(
         self,

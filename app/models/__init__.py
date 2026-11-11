@@ -89,6 +89,7 @@ from app.models.recognition import (
     RecognitionBadge,
     RecognitionCadence,
     RecognitionComment,
+    RecognitionSource,
 )
 from app.models.regularization import Regularization, RegularizationStatus
 from app.models.reimbursement import (
@@ -97,6 +98,11 @@ from app.models.reimbursement import (
     ReimbursementStatus,
 )
 from app.models.resignation import Resignation, ResignationStatus
+from app.models.reward import (
+    RedemptionStatus,
+    RewardItem,
+    RewardRedemption,
+)
 from app.models.room import EventRsvp, RoomMessage, RoomTopicKind
 from app.models.screenshot import OcrStatus, Screenshot
 from app.models.target import Target, TargetPeriod, TargetStatus
@@ -220,6 +226,8 @@ __all__ = [
     "RecognitionBadge",
     "RecognitionCadence",
     "RecognitionComment",
+    "RecognitionSource",
+    "RedemptionStatus",
     "Regularization",
     "RegularizationStatus",
     "Reimbursement",
@@ -227,6 +235,8 @@ __all__ = [
     "ReimbursementStatus",
     "Resignation",
     "ResignationStatus",
+    "RewardItem",
+    "RewardRedemption",
     "Role",
     "RoomMessage",
     "RoomTopicKind",

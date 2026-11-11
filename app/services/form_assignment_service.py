@@ -448,6 +448,63 @@ class FormAssignmentService:
         # scheduler tells them on its next run; it is already in their list.
         return await self._read(assignment.id)
 
+    async def resend_probation_form(
+        self, caller: CurrentUser, employee_id: uuid.UUID, trigger: FormTrigger
+    ) -> AssignmentRead:
+        """Email a probation form that is already out to whoever owes it, now.
+
+        The other half of sending. `send_probation_form` CREATES the
+        assignment and refuses a second copy - correctly, since
+        `uq_form_assignments_trigger_subject` allows only one. But a form that
+        exists and has not been answered had no way to be chased: the
+        scheduler mails an assignment exactly ONCE (`notified_at`), so a form
+        issued before someone could act on it was never mentioned again.
+
+        Goes through the scheduler's own path - same template, same in-app
+        notification, same `notified_at` stamp - so a chase and an automatic
+        send are the same email, and the HR mailbox holds a copy of both.
+        """
+        if not can_manage_forms(caller):
+            raise NotFoundError()
+        if trigger not in PROBATION_TRIGGERS:
+            raise ValidationError("That is not a probation review form.")
+        subject = await self._employees.get(employee_id)
+        if subject is None or not subject.is_active:
+            raise NotFoundError()
+
+        rows = [
+            row
+            for row in await self._assignments.probation_for_subject(employee_id, (trigger,))
+            if row.status is not AssignmentStatus.CANCELLED
+        ]
+        if not rows:
+            raise ConflictError("That form has not gone out yet. Send it first.")
+        assignment = rows[0]
+        if assignment.status is AssignmentStatus.SUBMITTED:
+            raise ConflictError("That form is already in - there is nothing to send again.")
+        form = await self._forms.get(assignment.form_id)
+        if form is None:  # pragma: no cover - the FK makes this unreachable
+            raise ConflictError("The form behind this assignment no longer exists.")
+        if assignment.assignee_id is None and not is_pool(assignment):
+            raise ConflictError("Nobody holds this form yet, so there is nobody to send it to.")
+
+        told = (
+            await self._tell_pool(assignment, form)
+            if is_pool(assignment)
+            else await self._tell(assignment, form)
+        )
+        if not told:
+            raise ConflictError(
+                "That email could not be sent. Check the recipient is still active "
+                "and has a work email on file."
+            )
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="form.probation_resend",
+            target=f"employee:{employee_id}:{trigger.value}",
+        )
+        return await self._read(assignment.id)
+
     async def _issue_probation_form(
         self, form: Form, subject: Employee, ends_on: date, today: date
     ) -> FormAssignment:
