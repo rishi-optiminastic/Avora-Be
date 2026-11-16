@@ -42,6 +42,7 @@ from app.repositories.form import FormAssignmentRepository, FormRepository, Form
 from app.repositories.leave_policy import LeavePolicyRepository
 from app.repositories.notification import NotificationRepository
 from app.repositories.probation_checklist import ProbationChecklistRepository
+from app.repositories.probation_decision import ProbationDecisionRepository
 from app.services.email_service import EmailService
 from app.services.form_assignment_service import FormAssignmentService
 from app.services.notification_service import NotificationService
@@ -74,6 +75,7 @@ def _build_service(session: AsyncSession) -> FormAssignmentService:
             LeavePolicyRepository(session),
             AttendancePolicyRepository(session),
             EmployeeRepository(session),
+            ProbationDecisionRepository(session),
         ),
     )
 

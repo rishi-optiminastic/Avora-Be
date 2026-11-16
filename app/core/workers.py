@@ -68,6 +68,13 @@ EXPECTED_WORKERS: tuple[WorkerSpec, ...] = (
         "Overdue tasks are not escalated to managers.",
     ),
     WorkerSpec(
+        "task-recurrence",
+        "Task recurrence",
+        "worker.task_recurrence_scheduler",
+        180,
+        "Daily, weekly and monthly tasks stop regenerating.",
+    ),
+    WorkerSpec(
         "circle-documents",
         "Circle documents",
         "worker.circle_documents_scheduler",

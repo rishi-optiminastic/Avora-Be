@@ -121,6 +121,15 @@ services:
     <<: *app-image
     command: ["python", "-m", "worker.task_escalation_scheduler"]
 
+  # Regenerates daily, weekly and monthly tasks. `cadence` described these for
+  # years and nothing acted on it, so 509 tasks carried one while somebody
+  # re-created the work by hand. Idle until TASK_RECURRENCE_ENABLED=true. ONE
+  # instance only - two would race and could double-create the same instance
+  # before either had written the first.
+  scheduler-task-recurrence:
+    <<: *app-image
+    command: ["python", "-m", "worker.task_recurrence_scheduler"]
+
   # Copies employees' Circle documents into Avora and keeps the fields Circle
   # owns (pay, bank, personal details, appraisals, assets) in step (idle until
   # CIRCLE_API_URL / CIRCLE_API_SECRET are set). Never changes anything in Circle.

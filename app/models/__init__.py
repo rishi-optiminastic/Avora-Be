@@ -17,6 +17,15 @@ from app.models.access import (
 )
 from app.models.activity import ActivitySample
 from app.models.announcement import Announcement, AnnouncementLevel
+from app.models.assessment import (
+    Assessment,
+    AssessmentAnswer,
+    AssessmentAttempt,
+    AssessmentQuestion,
+    AssessmentStatus,
+    AttemptStatus,
+    QuestionKind,
+)
 from app.models.assignment_grant import AssignmentGrant
 from app.models.attendance_override import AttendanceOverride, AttendanceOverrideStatus
 from app.models.attendance_policy import AttendancePolicy
@@ -128,10 +137,16 @@ __all__ = [
     "ActivitySample",
     "Announcement",
     "AnnouncementLevel",
+    "Assessment",
+    "AssessmentAnswer",
+    "AssessmentAttempt",
+    "AssessmentQuestion",
+    "AssessmentStatus",
     "AssetPriority",
     "AssetStatus",
     "AssignmentGrant",
     "AssignmentStatus",
+    "AttemptStatus",
     "AttendanceOverride",
     "AttendanceOverrideStatus",
     "AttendancePolicy",
@@ -221,6 +236,7 @@ __all__ = [
     "ProbationDecision",
     "ProbationOutcome",
     "ProbationStepStatus",
+    "QuestionKind",
     "QuickMeetDefault",
     "Recognition",
     "RecognitionBadge",

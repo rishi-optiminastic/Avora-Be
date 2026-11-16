@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, date, datetime, time, timedelta
 
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -242,6 +242,43 @@ class LeaveRepository:
         if exclude_id is not None:
             stmt = stmt.where(Leave.id != exclude_id)
         return (await self._session.execute(stmt)).scalars().all()
+
+    async def days_off_for(
+        self, employee_ids: Sequence[uuid.UUID], start: date, end: date
+    ) -> dict[uuid.UUID, set[date]]:
+        """Approved full days off per person within [start, end] inclusive.
+
+        For the recurrence sweep, which must not generate a daily task onto a
+        day its assignee is away: five tasks nobody can do all go overdue,
+        escalate to their manager and then to an admin - noise the system
+        created for itself.
+
+        HALF_DAY is deliberately EXCLUDED. The person is in for half the day,
+        and skipping their work because they left at lunch would be wrong.
+
+        One query for every assignee rather than one per task.
+        """
+        if not employee_ids:
+            return {}
+        rows = await self._session.execute(
+            select(Leave.employee_id, Leave.start_date, Leave.end_date).where(
+                Leave.employee_id.in_(list(dict.fromkeys(employee_ids))),
+                Leave.status == LeaveStatus.APPROVED,
+                Leave.leave_type != LeaveType.HALF_DAY,
+                Leave.start_date <= datetime.combine(end, time.max, tzinfo=UTC),
+                Leave.end_date >= datetime.combine(start, time.min, tzinfo=UTC),
+            )
+        )
+        off: dict[uuid.UUID, set[date]] = {}
+        for employee_id, begins, ends in rows.all():
+            # Expanded to individual dates: the caller asks "is this ONE day
+            # workable", and a range would make every check a comparison.
+            day = max(begins.date(), start)
+            last = min(ends.date(), end)
+            while day <= last:
+                off.setdefault(employee_id, set()).add(day)
+                day += timedelta(days=1)
+        return off
 
     async def count_on_leave(
         self, employee_ids: Sequence[uuid.UUID], start: datetime, end: datetime

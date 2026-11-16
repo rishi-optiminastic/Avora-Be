@@ -8,7 +8,7 @@ client, so it is absent from Create.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Literal
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator
@@ -78,6 +78,11 @@ class TaskUpdate(BaseModel):
     priority: TaskPriority | None = None
     status: TaskStatus | None = None
     cadence: TaskCadence | None = None
+    #: Pause or resume the series this task belongs to. Separate from
+    #: `status`: a paused series whose current task is still open is an
+    #: ordinary situation, and completing a task must not end its series.
+    recurrence_active: bool | None = None
+    recurs_until: date | None = None
     start_date: datetime | None = None
     due_date: datetime | None = None
     remarks: str | None = Field(default=None, max_length=2000)
@@ -107,6 +112,14 @@ class TaskRead(ORMModel):
     priority: TaskPriority
     status: TaskStatus
     cadence: TaskCadence
+    #: Which recurring series this instance belongs to, if any. Null on a
+    #: one-time task AND on the first instance of a series, which is its own
+    #: head - see the recurrence migration.
+    series_id: uuid.UUID | None = None
+    #: Whether the series is still generating. False means somebody paused it
+    #: or it ended; the task itself is unaffected.
+    recurrence_active: bool = True
+    recurs_until: date | None = None
     start_date: datetime | None
     due_date: datetime | None
     remarks: str | None

@@ -38,6 +38,7 @@ from app.models.employee import Role
 from app.repositories.access import AccessRepository
 from app.repositories.activity import ActivityRepository
 from app.repositories.announcement import AnnouncementRepository
+from app.repositories.assessment import AssessmentRepository
 from app.repositories.assignment_grant import AssignmentGrantRepository
 from app.repositories.attendance_override import AttendanceOverrideRepository
 from app.repositories.attendance_policy import AttendancePolicyRepository
@@ -112,6 +113,7 @@ from app.services.access_spend_service import AccessSpendService
 from app.services.activity_service import ActivityService
 from app.services.agent_nudge_service import AgentNudgeService
 from app.services.announcement_service import AnnouncementService
+from app.services.assessment_service import AssessmentService
 from app.services.attendance_override_service import AttendanceOverrideService
 from app.services.attendance_policy_service import AttendancePolicyService
 from app.services.attendance_service import AttendanceService
@@ -723,6 +725,19 @@ def get_recognition_repo(db: Annotated[AsyncSession, Depends(get_db)]) -> Recogn
     return RecognitionRepository(db)
 
 
+def get_assessment_repo(db: DbDep) -> AssessmentRepository:
+    return AssessmentRepository(db)
+
+
+def get_assessment_service(
+    assessments: Annotated[AssessmentRepository, Depends(get_assessment_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    notifications: Annotated[NotificationService, Depends(get_notification_service)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> AssessmentService:
+    return AssessmentService(assessments, employees, notifications, audit)
+
+
 def get_reward_repo(db: DbDep) -> RewardRepository:
     return RewardRepository(db)
 
@@ -1273,6 +1288,7 @@ RegularizationServiceDep = Annotated[RegularizationService, Depends(get_regulari
 OutOfOfficeServiceDep = Annotated[OutOfOfficeService, Depends(get_out_of_office_service)]
 RecognitionServiceDep = Annotated[RecognitionService, Depends(get_recognition_service)]
 RewardServiceDep = Annotated[RewardService, Depends(get_reward_service)]
+AssessmentServiceDep = Annotated[AssessmentService, Depends(get_assessment_service)]
 RoomServiceDep = Annotated[RoomService, Depends(get_room_service)]
 WorkerHealthServiceDep = Annotated[WorkerHealthService, Depends(get_worker_health_service)]
 ScreenshotServiceDep = Annotated[ScreenshotService, Depends(get_screenshot_service)]

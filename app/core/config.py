@@ -282,6 +282,13 @@ class Settings(BaseSettings):
     task_escalation_manager_after_days: int = 3  # ⇒ add the reporting manager
     task_escalation_admin_after_days: int = 6  # ⇒ add an admin
 
+    # Task recurrence (worker/task_recurrence_scheduler.py): regenerates daily,
+    # weekly and monthly tasks, which `cadence` has described but nothing has
+    # ever acted on. Off by default: switching it on against 509 existing
+    # recurring tasks starts creating work, so it is a deliberate act.
+    task_recurrence_enabled: bool = False
+    task_recurrence_tick_seconds: int = 3600  # hourly; the dates are day-grained
+
     # Forms scheduler (worker/forms_scheduler.py): sends the onboarding forms on
     # their day and chases buddy forms still waiting for a buddy. Day-grained,
     # so hourly is plenty; re-running is harmless.

@@ -9,11 +9,11 @@ anything you assigned (Security rule 5.3 — scope enforced in the repository).
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, String
+from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -39,8 +39,10 @@ class TaskStatus(StrEnum):
 
 class TaskCadence(StrEnum):
     # A one-time task is done once and never expected to recur — the default, and
-    # what most tasks actually are. daily/weekly/monthly are recurring cadences
-    # (labels only; the system does not auto-regenerate them).
+    # what most tasks actually are. daily/weekly/monthly DO regenerate, via
+    # `worker/task_recurrence_scheduler.py`: for years these were labels the
+    # system ignored, and 509 tasks carried one while somebody re-created the
+    # work by hand every morning.
     ONE_TIME = "one_time"
     DAILY = "daily"
     WEEKLY = "weekly"
@@ -117,6 +119,23 @@ class Task(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     depends_on_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("tasks.id", ondelete="SET NULL"), default=None, index=True
     )
+
+    # --- recurrence ------------------------------------------------------- #
+    # Every instance of one recurring task shares this. Deliberately NOT
+    # `parent_task_id`, which already means sub-task: overloading it would
+    # make "show me the sub-tasks" start returning last week's copy.
+    #
+    # SET NULL rather than CASCADE: deleting the first instance of a series
+    # must not delete a year of completed work behind it.
+    series_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tasks.id", ondelete="SET NULL"), default=None, index=True
+    )
+    # None = forever. A date stops the series without deleting its history,
+    # which deleting the task would.
+    recurs_until: Mapped[date | None] = mapped_column(Date, default=None)
+    # Pause without losing the series. A task whose assignee is on leave for a
+    # month should stop generating, not be recreated from scratch afterwards.
+    recurrence_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     # Collaborators get view + comment-level access (the task enters their scope
     # and they may report progress). Read-only on the Task — membership lives in

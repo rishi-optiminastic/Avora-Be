@@ -11,9 +11,9 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
@@ -379,6 +379,87 @@ class TaskRepository:
             for assignee, open_n, late in rows.all()
             if assignee is not None
         }
+
+    def add(self, task: Task) -> None:
+        """Persist an already-built Task.
+
+        `create` builds one from a `TaskCreate`; a recurring instance is
+        built from the task before it instead, so it needs this door rather
+        than a schema round-trip that would drop the series id.
+        """
+        self._session.add(task)
+
+    # --- recurrence --------------------------------------------------------- #
+    async def recurring_due(self, cadences: Sequence[TaskCadence]) -> Sequence[Task]:
+        """Live recurring tasks that might owe a next instance.
+
+        The newest instance of each series only - an older one is history and
+        must never seed a second copy. `series_id` is null on the 509 tasks
+        that predate this, so those group by their own id and become the first
+        instance of their own series the first time one is generated.
+        """
+        newest = (
+            select(
+                func.coalesce(Task.series_id, Task.id).label("series"),
+                func.max(Task.due_date).label("latest"),
+            )
+            .where(
+                Task.cadence.in_(cadences),
+                Task.recurrence_active.is_(True),
+                Task.due_date.is_not(None),
+            )
+            .group_by(func.coalesce(Task.series_id, Task.id))
+            .subquery()
+        )
+        rows = await self._session.scalars(
+            select(Task)
+            .join(
+                newest,
+                and_(
+                    func.coalesce(Task.series_id, Task.id) == newest.c.series,
+                    Task.due_date == newest.c.latest,
+                ),
+            )
+            .where(
+                Task.cadence.in_(cadences),
+                Task.recurrence_active.is_(True),
+            )
+        )
+        return list(rows)
+
+    async def recurring_without_a_due_date(self, cadences: Sequence[TaskCadence]) -> Sequence[Task]:
+        """Recurring tasks that can never generate, because nothing says when.
+
+        391 of the 509 live recurring tasks are in this state. The sweep has
+        to skip them - there is no date to step from, and inventing one would
+        create 391 tasks out of a guess - but skipping SILENTLY is how
+        `cadence` became a label nothing read in the first place.
+        """
+        rows = await self._session.scalars(
+            select(Task).where(
+                Task.cadence.in_(cadences),
+                Task.recurrence_active.is_(True),
+                Task.due_date.is_(None),
+            )
+        )
+        return list(rows)
+
+    async def series_has_due_on_or_after(self, series: uuid.UUID, on_or_after: date) -> bool:
+        """Whether this series already has an instance due at or after a date.
+
+        THE idempotency check. Without it a sweep that runs hourly creates a
+        task an hour; with it, running ten times a day or re-running after an
+        outage produces exactly one.
+        """
+        found = await self._session.scalar(
+            select(Task.id)
+            .where(
+                func.coalesce(Task.series_id, Task.id) == series,
+                Task.due_date >= on_or_after,
+            )
+            .limit(1)
+        )
+        return found is not None
 
     async def flush(self) -> None:
         """Persist in-place mutations the service made on a fetched Task."""
