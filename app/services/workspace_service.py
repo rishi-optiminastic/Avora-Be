@@ -210,20 +210,27 @@ class WorkspaceService:
         # written with different capitalisation. An exact lookup would miss it
         # and the create below would then hit the unique index as a 500.
         existing = await self._employees.find_by_work_email_insensitive(address)
-        if existing is not None and not existing.is_guest:
-            # Never convert a real employee record into a guest from here. That
-            # row may carry payslips, attendance and leave produced while this
-            # workspace employed them, and flipping the flag would quietly take
-            # all of it out of the figures those records belong to - including
-            # for somebody long offboarded, whose history is exactly what the
-            # soft delete exists to keep.
+        if existing is not None and not existing.is_guest and existing.is_active:
+            # Employed here right now: not an outsider. Their role is changed on
+            # their profile, by the admin path that owns privilege.
             raise ConflictError(
                 "They already have an employee record in this workspace, so they are not an "
                 "outsider here. Change their role on their profile instead."
             )
         task_lead = payload.role is GuestRole.TASK_LEAD
         role = Role.EXECUTIVE if task_lead else Role(payload.role.value)
-        if existing is None:
+        if existing is not None and not existing.is_guest:
+            # A FORMER employee (typically transferred to a sister workspace).
+            # Never convert the row into a guest: it carries payslips,
+            # attendance and leave from when this workspace employed them, and
+            # the guest flag would take all of it out of these figures. The row
+            # stays inactive, so they are still not personnel; `outside_access`
+            # alone lets them sign in with the role chosen here.
+            guest = existing
+            guest.role = role
+            guest.assigns_org_wide = task_lead
+            guest.outside_access = True
+        elif existing is None:
             guest = await self._employees.create_direct(
                 work_email=address,
                 full_name=clean_display_name(payload.name) or placeholder_name_from_email(address),
@@ -279,10 +286,18 @@ class WorkspaceService:
             # leaves it with one fewer admin and no way back in from the app.
             raise ConflictError("You cannot remove your own access to this workspace.")
         guest = await self._employees.find_by_work_email_insensitive(address)
-        if guest is None or not guest.is_guest or not guest.is_active:
+        if guest is None:
             raise NotFoundError()
-        guest.is_active = False
-        guest.status = EmployeeStatus.INACTIVE
+        if guest.outside_access:
+            # A former employee: their row was already inactive, so ending the
+            # outside access is all there is to undo.
+            guest.outside_access = False
+            guest.assigns_org_wide = False
+        elif guest.is_guest and guest.is_active:
+            guest.is_active = False
+            guest.status = EmployeeStatus.INACTIVE
+        else:
+            raise NotFoundError()
         await self._session.flush()
         if await self._workspaces.is_member(workspace.id, address):
             await self._workspaces.revoke(workspace.id, address)

@@ -244,26 +244,96 @@ async def test_an_existing_employee_cannot_be_turned_into_a_guest(
     assert staff.role is Role.EXECUTIVE
 
 
-async def test_an_offboarded_employee_cannot_be_reopened_as_a_guest(
-    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
-) -> None:
-    """The inactive case is the dangerous one: that row is kept precisely
-    because its history matters, and reviving it as a guest would quietly
-    reclassify everything it produced while they worked here."""
-    await _register_this_workspace(db, settings)
+async def _leaver(db: AsyncSession) -> Employee:
+    """Somebody who used to work here - the usual case is a transfer to a sister
+    workspace - and whose row is kept for the history it carries."""
     leaver = await _add_person(db, "dev", Role.EXECUTIVE)
     leaver.is_active = False
     leaver.status = EmployeeStatus.INACTIVE
     await db.commit()
+    return leaver
+
+
+async def test_a_former_employee_gets_outside_access_without_becoming_a_guest(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    """Reviving the row as a guest would quietly reclassify everything it
+    produced while they worked here, so it is never flipped. The row stays
+    inactive (not personnel, not in the payroll run) and only gains the right to
+    sign in with the role chosen here."""
+    workspace = await _register_this_workspace(db, settings)
+    leaver = await _leaver(db)
     res = await client.post(
         "/api/v1/workspaces/guests",
-        json=_invite(email=leaver.work_email),
+        json=_invite(email=leaver.work_email, role="task_lead"),
         headers=auth_headers(settings, seed.admin),
     )
-    assert res.status_code == 409, res.text
+    assert res.status_code == 201, res.text
     await db.refresh(leaver)
-    assert leaver.is_guest is False
-    assert leaver.is_active is False
+    assert leaver.is_guest is False, "history stays in this workspace's figures"
+    assert leaver.is_active is False, "still not employed here"
+    assert leaver.outside_access is True
+    assert leaver.assigns_org_wide is True
+    assert await WorkspaceRepository(db).is_member(workspace.id, leaver.work_email)
+    roster = await EmployeeRepository(db).list_all_active()
+    assert leaver.id not in {e.id for e in roster}, "never back on the payroll run"
+    assert leaver.id in {e.id for e in await EmployeeRepository(db).list_guests()}
+
+
+async def test_a_former_employee_with_outside_access_can_sign_in(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    await _register_this_workspace(db, settings)
+    leaver = await _leaver(db)
+    assert (
+        await client.get("/api/v1/employees/me", headers=auth_headers(settings, leaver))
+    ).status_code == 401, "an ordinary leaver stays locked out"
+    await client.post(
+        "/api/v1/workspaces/guests",
+        json=_invite(email=leaver.work_email, role="task_lead"),
+        headers=auth_headers(settings, seed.admin),
+    )
+    me = await client.get("/api/v1/employees/me", headers=auth_headers(settings, leaver))
+    assert me.status_code == 200, me.text
+    tasks = await client.get("/api/v1/tasks", headers=auth_headers(settings, leaver))
+    assert tasks.status_code == 200, tasks.text
+
+
+async def test_removing_a_former_employee_s_outside_access_locks_them_out(
+    client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
+) -> None:
+    workspace = await _register_this_workspace(db, settings)
+    leaver = await _leaver(db)
+    await client.post(
+        "/api/v1/workspaces/guests",
+        json=_invite(email=leaver.work_email, role="task_lead"),
+        headers=auth_headers(settings, seed.admin),
+    )
+    res = await client.delete(
+        f"/api/v1/workspaces/guests/{leaver.work_email}",
+        headers=auth_headers(settings, seed.admin),
+    )
+    assert res.status_code == 204, res.text
+    await db.refresh(leaver)
+    assert leaver.outside_access is False
+    assert leaver.assigns_org_wide is False
+    assert leaver.is_active is False and leaver.is_guest is False
+    assert not await WorkspaceRepository(db).is_member(workspace.id, leaver.work_email)
+    assert (
+        await client.get("/api/v1/employees/me", headers=auth_headers(settings, leaver))
+    ).status_code == 401
+
+
+async def test_a_rehire_ends_outside_access(db: AsyncSession) -> None:
+    """Otherwise a LATER offboard would leave the flag behind and the leaver
+    could still sign in."""
+    leaver = await _leaver(db)
+    leaver.outside_access = True
+    await db.commit()
+    leaver.is_active = True
+    assert leaver.outside_access is False
+    leaver.is_active = False
+    assert leaver.can_sign_in is False
 
 
 async def test_a_differently_cased_email_finds_the_same_person(

@@ -12,7 +12,7 @@ from datetime import date, datetime
 from enum import StrEnum
 
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, LargeBinary, String, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
@@ -159,6 +159,13 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Exempt from the office geofence on clock-in (genuine remote / field staff).
     # Admin-set; only meaningful when the org requires location for clock-in.
     location_check_exempt: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Outside access for a FORMER employee here: someone who left (usually by a
+    # transfer to a sister workspace) and now administers or leads work here on
+    # behalf of it. The row stays inactive and never becomes a guest, so the
+    # payslips, attendance and leave it carries from when it WAS employed stay
+    # in this workspace's figures; this flag only lets the person sign in with
+    # the role an admin chose. Cleared whenever the row is reactivated.
+    outside_access: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Access without employment (orthogonal to both `role` and `is_active`).
     #
@@ -206,3 +213,17 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     @property
     def circle_linked(self) -> bool:
         return self.circle_linked_at is not None
+
+    @validates("is_active")
+    def _rehire_ends_outside_access(self, _key: str, active: bool) -> bool:
+        """Back on the payroll means back to normal employment: outside access
+        must not outlive a rehire, or a LATER offboard would leave a former
+        employee still able to sign in."""
+        if active:
+            self.outside_access = False
+        return active
+
+    @property
+    def can_sign_in(self) -> bool:
+        """Employed here, or a former employee holding outside access."""
+        return self.is_active or self.outside_access

@@ -1446,7 +1446,9 @@ async def get_current_user(
     # fresh self-signup) is authenticated but NOT authorized — employees are
     # provisioned by HR or by accepting an admin invite, never by self-signup.
     employee = await employees.get_by_work_email(identity.email)
-    if employee is None or not employee.is_active:
+    # `can_sign_in`, not `is_active`: a former employee given outside access
+    # signs in with an inactive row, so their old history stays where it is.
+    if employee is None or not employee.can_sign_in:
         raise AuthenticationError()
 
     # Backfill a real display name from the provider on login. Guarded inside the

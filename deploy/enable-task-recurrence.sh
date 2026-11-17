@@ -150,11 +150,34 @@ docker rm -f "$WORKER" >/dev/null 2>&1 || true
 # From the API's OWN image and env, so the code and the database match by
 # construction rather than by a copied connection string. ONE instance:
 # two would race on the same series and could double-create.
+# Env through a FILE, not a splatted command line.
+#
+# This was `$(docker inspect -f '{{range .Config.Env}}--env {{.}} {{end}}')`,
+# copied from make-workers-live.sh. It is unquoted command substitution, so the
+# shell word-splits every value: one env var holding a space is enough to shift
+# every later argument along and make docker read a fragment as the image name.
+# On this box it failed with
+#
+#     invalid reference format: repository name (library/PRIVATE) must be lowercase
+#
+# because a value contains "... PRIVATE ...". `--env-file` takes everything
+# after the first `=` as the value, so spaces are safe.
+#
+# The file holds live secrets: 0600, and removed on exit even if this fails.
+ENV_FILE="$(mktemp)"
+chmod 600 "$ENV_FILE"
+trap 'rm -f "$ENV_FILE"' EXIT
+# One var per line; keep only well-formed KEY=... lines, because a value with
+# an embedded newline would otherwise become a junk line docker rejects.
+docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$API" \
+  | grep -E '^[A-Za-z_][A-Za-z0-9_]*=' > "$ENV_FILE"
+echo "    passing $(wc -l < "$ENV_FILE" | tr -d ' ') environment variables"
+
 docker run -d \
   --name "$WORKER" \
   --network "$NETWORK" \
   --restart unless-stopped \
-  $(docker inspect -f '{{range .Config.Env}}--env {{.}} {{end}}' "$API") \
+  --env-file "$ENV_FILE" \
   --env TASK_RECURRENCE_ENABLED=true \
   "$IMAGE" python -m worker.task_recurrence_scheduler >/dev/null
 

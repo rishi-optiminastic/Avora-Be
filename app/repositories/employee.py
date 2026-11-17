@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 
-from sqlalchemy import ColumnElement, Select, exists, func, or_, select
+from sqlalchemy import ColumnElement, Select, and_, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError
@@ -610,7 +610,14 @@ class EmployeeRepository:
         """
         rows = await self._session.execute(
             select(Employee)
-            .where(Employee.is_active.is_(True), Employee.is_guest.is_(True))
+            .where(
+                or_(
+                    and_(Employee.is_active.is_(True), Employee.is_guest.is_(True)),
+                    # A former employee back with outside access: still inactive
+                    # (still not personnel), but very much able to read things.
+                    Employee.outside_access.is_(True),
+                )
+            )
             .order_by(Employee.full_name)
         )
         return rows.scalars().all()
