@@ -54,11 +54,16 @@ class GuestRole(StrEnum):
     are the two whose scope is the workspace itself, which is the only kind of
     access that means anything to a visitor.
 
-    Values match `Role` exactly, so `Role(value)` converts without a mapping.
+    `hr` and `admin` match `Role` exactly, so `Role(value)` converts them;
+    `task_lead` is the one exception, stored as described beside it.
     """
 
     HR = "hr"
     ADMIN = "admin"
+    # A visiting Head of Business: assigns tasks to anyone here and follows them
+    # up, with no HR or admin access. Stored as an executive carrying the
+    # org-wide assign grant, so it needs no place in this workspace's org chart.
+    TASK_LEAD = "task_lead"
 
 
 class WorkspaceGuestInvite(BaseModel):

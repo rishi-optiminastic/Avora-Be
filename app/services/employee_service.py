@@ -139,7 +139,11 @@ class EmployeeService:
         carry bought nothing and cost a lead carrying the `employee`/`executive`
         role their entire team - an empty picker, and an empty team view.
         """
-        in_scope = await self._employees.all_in_scope(caller)
+        # A Head of Business assigns across every department: the whole staff list.
+        if caller.assigns_org_wide:
+            in_scope = await self._employees.list_all_active()
+        else:
+            in_scope = await self._employees.all_in_scope(caller)
         granted = await self._grants.assignees_for(caller.employee_id)
         by_id = {e.id: e for e in (*in_scope, *granted)}
         if caller.employee_id not in by_id:
@@ -580,6 +584,23 @@ class EmployeeService:
         await self._audit.append(
             actor=str(caller.employee_id),
             action="employee.payroll_manager_change",
+            target=f"employee:{target_id}:{granted}",
+        )
+        return updated
+
+    async def set_assigns_org_wide(
+        self, caller: CurrentUser, target_id: uuid.UUID, granted: bool
+    ) -> Employee:
+        # A capability grant is a privilege change - admin-only (rule 5.5).
+        if not caller.is_admin:
+            raise AuthorizationError()
+        employee = await self._employees.get(target_id)
+        if employee is None:
+            raise NotFoundError()
+        updated = await self._employees.set_assigns_org_wide(employee, granted)
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="employee.assigns_org_wide_change",
             target=f"employee:{target_id}:{granted}",
         )
         return updated

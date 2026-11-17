@@ -1426,6 +1426,7 @@ async def get_current_user(
         role=employee.role,
         manager_id=employee.manager_id,
         payroll_manager=employee.payroll_manager,
+        assigns_org_wide=employee.assigns_org_wide,
     )
 
 

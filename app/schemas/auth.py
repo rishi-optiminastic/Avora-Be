@@ -18,6 +18,9 @@ class CurrentUser(BaseModel):
     # Capability grant, re-derived from the DB (never the token). Lets a non-HR
     # finance person manage the payroll cluster (payroll, adjustments, comp).
     payroll_manager: bool = False
+    # Capability grant ("task lead": Head of Business, Founder's Office): see every
+    # task in the workspace and assign to anyone, with no HR or admin access.
+    assigns_org_wide: bool = False
 
     @field_validator("role")
     @classmethod

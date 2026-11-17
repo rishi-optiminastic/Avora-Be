@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 
 from app.core.exceptions import AuthorizationError, NotFoundError, ValidationError
 from app.core.logging import get_logger
+from app.models.employee import Role
 from app.models.notification import NotificationKind, NotificationLevel
 from app.models.task import Task, TaskCadence, TaskStatus
 from app.models.task_comment import TaskComment
@@ -115,7 +116,22 @@ class TaskService:
         # role could see their reports but not put a task on one.
         if await self._employees.can_read(caller, assignee_id):
             return True
+        if caller.assigns_org_wide and await self._is_staff(assignee_id):
+            return True
         return await self._grants.exists(caller.employee_id, assignee_id)
+
+    async def _is_staff(self, employee_id: uuid.UUID) -> bool:
+        """An active member of this workspace's own staff (never a visiting
+        guest), which is everyone an org-wide assigner may put work on."""
+        person = await self._employees.get(employee_id)
+        return person is not None and person.is_active and not person.is_guest
+
+    @staticmethod
+    def _assigned_it(caller: CurrentUser, task: Task) -> bool:
+        """An org-wide assigner fully manages the tasks they handed out, even for
+        people they do not manage: without this a Head of Business could create
+        a task for anyone but not fix its title or move its deadline."""
+        return caller.assigns_org_wide and task.assigned_by_id == caller.employee_id
 
     async def _validate_project(self, project_id: uuid.UUID | None) -> None:
         if project_id is None:
@@ -156,6 +172,7 @@ class TaskService:
         status: TaskStatus | None = None,
         cadence: TaskCadence | None = None,
         assignee_id: uuid.UUID | None = None,
+        assigned_by_me: bool = False,
     ) -> tuple[Sequence[Task], int]:
         return await self._tasks.list_for_scope(
             caller,
@@ -164,6 +181,7 @@ class TaskService:
             status=status,
             cadence=cadence,
             assignee_id=assignee_id,
+            assigned_by=caller.employee_id if assigned_by_me else None,
         )
 
     async def my_overdue(self, caller: CurrentUser, now: datetime) -> Sequence[Task]:
@@ -325,7 +343,7 @@ class TaskService:
         #
         # Everyone else can only report progress (status/remarks/…) on a task they
         # own OR collaborate on - never retitle, reassign, or change the project.
-        if not await self._leads(caller, task.assignee_id):
+        if not (await self._leads(caller, task.assignee_id) or self._assigned_it(caller, task)):
             may_report = (
                 task.assignee_id == caller.employee_id
                 or await self._tasks.is_collaborator(task_id, caller.employee_id)
@@ -392,7 +410,14 @@ class TaskService:
         else's task still gets nothing.
         """
         if caller.is_manager:
-            return True
+            # A manager's task scope used to be their employee scope, so the role
+            # alone was enough. A task lead sees EVERY task, so a manager-role
+            # task lead must still run the assignee, or the grant would hand out
+            # edit rights to the whole company. HR/admin already read everyone.
+            if not caller.assigns_org_wide or caller.role in (Role.ADMIN, Role.HR):
+                return True
+            if await self._employees.can_read(caller, assignee_id):
+                return True
         assignee = await self._employees.get(assignee_id)
         return assignee is not None and assignee.manager_id == caller.employee_id
 
@@ -412,7 +437,7 @@ class TaskService:
         task = await self._tasks.get_in_scope(caller, task_id)
         if task is None:
             raise NotFoundError()
-        if not await self._leads(caller, task.assignee_id):
+        if not (await self._leads(caller, task.assignee_id) or self._assigned_it(caller, task)):
             raise AuthorizationError()
         task.escalated = True
         await self._tasks.flush()
@@ -557,8 +582,12 @@ class TaskService:
         self, caller: CurrentUser, task_id: uuid.UUID, employee_id: uuid.UUID
     ) -> Task:
         task = await self._task_for_collaborator_change(caller, task_id)
-        # The person added must be someone the caller can see.
-        if not await self._employees.can_read(caller, employee_id):
+        # The person added must be someone the caller can see, or, for a task
+        # lead, anyone on staff: they may already assign to that whole roster.
+        if not (
+            await self._employees.can_read(caller, employee_id)
+            or (caller.assigns_org_wide and await self._is_staff(employee_id))
+        ):
             raise AuthorizationError()
         await self._tasks.add_collaborator(task_id, employee_id)
         await self._tasks.reload_collaborators(task)

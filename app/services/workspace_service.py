@@ -52,6 +52,7 @@ from app.repositories.workspace import WorkspaceRepository, normalize_email
 from app.schemas.auth import CurrentUser
 from app.schemas.workspace import (
     EmployeeTransfer,
+    GuestRole,
     TransferResult,
     WorkspaceAccessGrant,
     WorkspaceGuestInvite,
@@ -220,7 +221,8 @@ class WorkspaceService:
                 "They already have an employee record in this workspace, so they are not an "
                 "outsider here. Change their role on their profile instead."
             )
-        role = Role(payload.role.value)
+        task_lead = payload.role is GuestRole.TASK_LEAD
+        role = Role.EXECUTIVE if task_lead else Role(payload.role.value)
         if existing is None:
             guest = await self._employees.create_direct(
                 work_email=address,
@@ -232,11 +234,13 @@ class WorkspaceService:
             # for a hand-entered EMPLOYEE; guest status is this method's
             # business, not something to widen that signature for.
             guest.is_guest = True
+            guest.assigns_org_wide = task_lead
         else:
             # Re-granting an existing guest: fixes their role, and brings them
             # back if their access was removed earlier.
             guest = existing
             guest.role = role
+            guest.assigns_org_wide = task_lead
             guest.is_active = True
             guest.status = EmployeeStatus.ACTIVE
         await self._session.flush()
@@ -250,7 +254,7 @@ class WorkspaceService:
         await self._audit.append(
             actor=str(caller.employee_id),
             action="workspace.guest.add",
-            target=f"workspace:{workspace.slug}:{address}:{role.value}",
+            target=f"workspace:{workspace.slug}:{address}:{payload.role.value}",
         )
         return guest
 

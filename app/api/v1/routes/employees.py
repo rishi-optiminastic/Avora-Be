@@ -33,6 +33,7 @@ from app.schemas.employee import (
     EmployeeRead,
     EmployeeRoleUpdate,
     EmployeeStatusUpdate,
+    OrgWideAssignUpdate,
     PayrollManagerUpdate,
     SelfProfileUpdate,
     WorkEmailUpdate,
@@ -199,6 +200,19 @@ async def set_employee_payroll_manager(
     """Admin-only: grant/revoke payroll-cluster management for one person (a
     finance executive doing salary processing) — orthogonal to their role."""
     employee = await service.set_payroll_manager(admin, employee_id, payload.payroll_manager)
+    return EmployeeRead.model_validate(employee)
+
+
+@router.put("/{employee_id}/org-wide-assign", response_model=EmployeeRead)
+async def set_employee_org_wide_assign(
+    employee_id: uuid.UUID,
+    payload: OrgWideAssignUpdate,
+    admin: AdminDep,
+    service: EmployeeServiceDep,
+) -> EmployeeRead:
+    """Admin-only: let one person assign tasks to anyone in the workspace, across
+    every department (a Head of Business), with no HR or admin access."""
+    employee = await service.set_assigns_org_wide(admin, employee_id, payload.assigns_org_wide)
     return EmployeeRead.model_validate(employee)
 
 

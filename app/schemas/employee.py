@@ -30,6 +30,7 @@ class EmployeeRead(ORMModel):
     buddy_id: uuid.UUID | None = None
     role: Role
     payroll_manager: bool = False
+    assigns_org_wide: bool = False
     location_check_exempt: bool = False
     # Holds an account here on behalf of another workspace: full role, but not
     # this workspace's personnel. Defaulted so existing callers are unaffected.
@@ -67,6 +68,13 @@ class PayrollManagerUpdate(BaseModel):
     person (e.g. a finance executive doing salary processing)."""
 
     payroll_manager: bool
+
+
+class OrgWideAssignUpdate(BaseModel):
+    """Admin-only capability grant: let one person assign tasks to anyone in the
+    workspace (a Head of Business), without HR or admin access."""
+
+    assigns_org_wide: bool
 
 
 class AssignmentGrantsUpdate(BaseModel):

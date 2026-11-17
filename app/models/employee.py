@@ -151,6 +151,11 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # executive) manage payroll, payroll/attendance adjustments, and compensation
     # for salary processing, without granting org-wide HR access. Admin-set only.
     payroll_manager: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Capability grant ("task lead"): sees every task in this workspace and may
+    # assign to anyone, across every department, without HR or admin access to
+    # anything else. For a Head of Business or the Founder's Office, who lead the
+    # work but have no business reading salaries. Admin-set only.
+    assigns_org_wide: Mapped[bool] = mapped_column(Boolean, default=False)
     # Exempt from the office geofence on clock-in (genuine remote / field staff).
     # Admin-set; only meaningful when the org requires location for clock-in.
     location_check_exempt: Mapped[bool] = mapped_column(Boolean, default=False)

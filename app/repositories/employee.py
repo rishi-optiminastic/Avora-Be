@@ -692,6 +692,12 @@ class EmployeeRepository:
         await self._session.flush()
         return employee
 
+    async def set_assigns_org_wide(self, employee: Employee, granted: bool) -> Employee:
+        """Admin-only capability grant: assign tasks to anyone in the workspace."""
+        employee.assigns_org_wide = granted
+        await self._session.flush()
+        return employee
+
     async def set_location_check_exempt(self, employee: Employee, exempt: bool) -> Employee:
         """Admin-only: exempt an employee from the clock-in office geofence."""
         employee.location_check_exempt = exempt

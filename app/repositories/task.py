@@ -52,7 +52,9 @@ class TaskRepository:
         Everyone additionally sees any task they collaborate on (view +
         comment-level access) — that membership is OR-ed into every role's clause.
         """
-        if caller.role in (Role.ADMIN, Role.HR):
+        # A task lead (Head of Business, Founder's Office) follows the whole
+        # workspace's work: every task, read access, whoever it belongs to.
+        if caller.role in (Role.ADMIN, Role.HR) or caller.assigns_org_wide:
             return None
 
         assigned_by_me = Task.assigned_by_id == caller.employee_id
@@ -213,6 +215,7 @@ class TaskRepository:
         status: TaskStatus | None = None,
         cadence: TaskCadence | None = None,
         assignee_id: uuid.UUID | None = None,
+        assigned_by: uuid.UUID | None = None,
     ) -> tuple[Sequence[Task], int]:
         stmt = select(Task)
         clause = self._scope_clause(caller)
@@ -224,6 +227,8 @@ class TaskRepository:
             stmt = stmt.where(Task.cadence == cadence)
         if assignee_id is not None:
             stmt = stmt.where(Task.assignee_id == assignee_id)
+        if assigned_by is not None:
+            stmt = stmt.where(Task.assigned_by_id == assigned_by)
 
         total = await self._session.scalar(select(func.count()).select_from(stmt.subquery()))
         rows = await self._session.execute(
