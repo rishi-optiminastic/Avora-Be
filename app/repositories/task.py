@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 
-from sqlalchemy import ColumnElement, and_, func, select
+from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
@@ -431,6 +431,28 @@ class TaskRepository:
             )
         )
         return list(rows)
+
+    async def entities_with_recent_task(
+        self, assignee_id: uuid.UUID, since: date
+    ) -> frozenset[uuid.UUID]:
+        """Work entities this person already has a task against.
+
+        THE dedupe for the untracked-work detector, and it needs no table of
+        its own: a task the detector raised is open and points at the entity,
+        so the next sweep sees that entity as tracked and says nothing.
+
+        Open tasks OR anything created since `since`, which is what extends
+        the silence past completion. Without the second half, finishing
+        today's detected task would earn another one tomorrow, forever.
+        """
+        rows = await self._session.scalars(
+            select(Task.project_id).where(
+                Task.assignee_id == assignee_id,
+                Task.project_id.is_not(None),
+                or_(Task.status != TaskStatus.DONE, Task.created_at >= since),
+            )
+        )
+        return frozenset(entity_id for entity_id in rows.all() if entity_id is not None)
 
     async def recurring_without_a_due_date(self, cadences: Sequence[TaskCadence]) -> Sequence[Task]:
         """Recurring tasks that can never generate, because nothing says when.

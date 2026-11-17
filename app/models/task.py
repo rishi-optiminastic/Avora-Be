@@ -137,6 +137,23 @@ class Task(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # month should stop generating, not be recreated from scratch afterwards.
     recurrence_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    # Which playbook run stamped this task out, if any - see
+    # `app/models/playbook.py`. The second way a task can arrive without
+    # anybody typing it, alongside `series_id`, and the UI badges both.
+    #
+    # SET NULL, not CASCADE: cancelling a run deletes its tasks deliberately
+    # and only while they are untouched. A task somebody has since worked on
+    # must survive losing its provenance, not vanish with it.
+    playbook_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("playbook_runs.id", ondelete="SET NULL"), default=None, index=True
+    )
+
+    # The THIRD way a task can arrive with nobody's name on it: the detector
+    # saw sustained work on a project with no task behind it. A boolean, not a
+    # foreign key, because the referent is the work entity and `project_id`
+    # already carries it - see migration e4f6a8b0c2d5.
+    auto_detected: Mapped[bool] = mapped_column(Boolean, default=False)
+
     # Collaborators get view + comment-level access (the task enters their scope
     # and they may report progress). Read-only on the Task — membership lives in
     # task_collaborators and is managed via the repository. selectin-loaded so a

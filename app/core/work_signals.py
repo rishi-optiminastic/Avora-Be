@@ -25,6 +25,17 @@ def _tokens(text: str) -> set[str]:
     return set(_TOKEN_RE.findall(text.lower()))
 
 
+def matchable_terms(text: str) -> set[str]:
+    """Tokens from `text` long enough for the matcher to use.
+
+    The public form of the tokeniser, so a caller proposing new keywords
+    (`scripts/propose_work_entities.py`) is guaranteed to propose terms this
+    matcher can actually match - rather than suggesting "o2", which is below
+    the length floor and can never score.
+    """
+    return {token for token in _tokens(text) if len(token) >= 3}
+
+
 def _term_set(*phrases: str) -> set[str]:
     """Split phrases into matchable terms (len ≥ 3 to avoid noise like 'go')."""
     terms: set[str] = set()

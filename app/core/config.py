@@ -289,6 +289,19 @@ class Settings(BaseSettings):
     task_recurrence_enabled: bool = False
     task_recurrence_tick_seconds: int = 3600  # hourly; the dates are day-grained
 
+    # Untracked-work detection (app/services/untracked_work_service.py): reads
+    # OCR'd screen text, matches it against the work-entity catalog, and raises
+    # a task where somebody is demonstrably working on a project with nothing
+    # tracking it.
+    #
+    # OFF BY DEFAULT, and this flag matters more than the others here: it is
+    # the only thing in Avora that writes a task into somebody's list with no
+    # human in the loop. Measured on the live catalog, 3 of 8 entities cannot
+    # be matched at all and 35% of matches are ambiguous, so switching this on
+    # before the catalog is filled in would mostly produce silence punctuated
+    # by the occasional wrong guess.
+    untracked_detection_enabled: bool = False
+
     # Forms scheduler (worker/forms_scheduler.py): sends the onboarding forms on
     # their day and chases buddy forms still waiting for a buddy. Day-grained,
     # so hourly is plenty; re-running is harmless.

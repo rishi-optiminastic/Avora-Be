@@ -90,6 +90,15 @@ from app.models.payroll_settings import PayCycle, PayrollSettings
 from app.models.payslip import Payslip, PayslipStatus
 from app.models.personal_access_token import PersonalAccessToken
 from app.models.ping import Ping
+from app.models.playbook import (
+    AssigneeRule,
+    Playbook,
+    PlaybookRun,
+    PlaybookRunStatus,
+    PlaybookStatus,
+    PlaybookStep,
+    PlaybookTrigger,
+)
 from app.models.probation_checklist import ProbationChecklistItem, ProbationStepStatus
 from app.models.probation_decision import ProbationDecision, ProbationOutcome
 from app.models.quick_meet_default import QuickMeetDefault
@@ -144,6 +153,7 @@ __all__ = [
     "AssessmentStatus",
     "AssetPriority",
     "AssetStatus",
+    "AssigneeRule",
     "AssignmentGrant",
     "AssignmentStatus",
     "AttemptStatus",
@@ -232,6 +242,12 @@ __all__ = [
     "PayslipStatus",
     "PersonalAccessToken",
     "Ping",
+    "Playbook",
+    "PlaybookRun",
+    "PlaybookRunStatus",
+    "PlaybookStatus",
+    "PlaybookStep",
+    "PlaybookTrigger",
     "ProbationChecklistItem",
     "ProbationDecision",
     "ProbationOutcome",

@@ -45,6 +45,7 @@ from app.api.v1.routes import (
     payroll_adjustments,
     payroll_payouts,
     pings,
+    playbooks,
     probation,
     recognition,
     reimbursements,
@@ -55,6 +56,7 @@ from app.api.v1.routes import (
     sheets,
     targets,
     tasks,
+    untracked,
     work_entities,
     worker_health,
     workspace_files,
@@ -74,6 +76,8 @@ api_router.include_router(leave_allocation.router)
 api_router.include_router(recognition.router)
 api_router.include_router(rewards.router)
 api_router.include_router(assessments.router)
+api_router.include_router(playbooks.router)
+api_router.include_router(untracked.router)
 api_router.include_router(room.router)
 api_router.include_router(reimbursements.router)
 api_router.include_router(worker_health.router)

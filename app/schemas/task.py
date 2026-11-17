@@ -120,6 +120,14 @@ class TaskRead(ORMModel):
     #: or it ended; the task itself is unaffected.
     recurrence_active: bool = True
     recurs_until: date | None = None
+    #: Which playbook run stamped this task out, if any. The second way a task
+    #: can arrive without anybody typing it, alongside `series_id` - the UI
+    #: badges both, because a row nobody typed should say so.
+    playbook_run_id: uuid.UUID | None = None
+    #: The third way: the detector saw sustained work on `project_id` with no
+    #: task behind it. A flag rather than an id because `project_id` already
+    #: carries the referent.
+    auto_detected: bool = False
     start_date: datetime | None
     due_date: datetime | None
     remarks: str | None

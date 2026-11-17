@@ -86,6 +86,7 @@ from app.repositories.payroll_settings import PayrollSettingsRepository
 from app.repositories.payslip import PayslipRepository
 from app.repositories.personal_access_token import PersonalAccessTokenRepository
 from app.repositories.ping import PingRepository
+from app.repositories.playbook import PlaybookRepository, PlaybookRunRepository
 from app.repositories.probation_checklist import ProbationChecklistRepository
 from app.repositories.probation_decision import ProbationDecisionRepository
 from app.repositories.quick_meet import QuickMeetRepository
@@ -164,6 +165,7 @@ from app.services.payroll_adjustment_service import PayrollAdjustmentService
 from app.services.payroll_receipt_service import PayrollReceiptService
 from app.services.payroll_service import PayrollService
 from app.services.ping_service import PingService
+from app.services.playbook_service import PlaybookService
 from app.services.probation_form_panel import ProbationFormPanelService
 from app.services.probation_forms import ProbationFormLink
 from app.services.probation_service import ProbationService
@@ -177,6 +179,7 @@ from app.services.room_service import RoomService
 from app.services.screenshot_service import ScreenshotService
 from app.services.target_service import TargetService
 from app.services.task_service import TaskService
+from app.services.untracked_work_service import UntrackedWorkService
 from app.services.work_entity_service import WorkEntityService
 from app.services.work_session_service import WorkSessionService
 from app.services.workbook_service import WorkbookService
@@ -738,6 +741,34 @@ def get_assessment_service(
     return AssessmentService(assessments, employees, notifications, audit)
 
 
+def get_playbook_repo(db: DbDep) -> PlaybookRepository:
+    return PlaybookRepository(db)
+
+
+def get_playbook_run_repo(db: DbDep) -> PlaybookRunRepository:
+    return PlaybookRunRepository(db)
+
+
+def get_playbook_service(
+    playbooks: Annotated[PlaybookRepository, Depends(get_playbook_repo)],
+    runs: Annotated[PlaybookRunRepository, Depends(get_playbook_run_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> PlaybookService:
+    return PlaybookService(playbooks, runs, employees, audit)
+
+
+def get_untracked_work_service(
+    activity: Annotated[ActivityRepository, Depends(get_activity_repo)],
+    screenshots: Annotated[ScreenshotRepository, Depends(get_screenshot_repo)],
+    entities: Annotated[WorkEntityRepository, Depends(get_work_entity_repo)],
+    tasks: Annotated[TaskRepository, Depends(get_task_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> UntrackedWorkService:
+    return UntrackedWorkService(activity, screenshots, entities, tasks, employees, audit)
+
+
 def get_reward_repo(db: DbDep) -> RewardRepository:
     return RewardRepository(db)
 
@@ -1289,6 +1320,8 @@ OutOfOfficeServiceDep = Annotated[OutOfOfficeService, Depends(get_out_of_office_
 RecognitionServiceDep = Annotated[RecognitionService, Depends(get_recognition_service)]
 RewardServiceDep = Annotated[RewardService, Depends(get_reward_service)]
 AssessmentServiceDep = Annotated[AssessmentService, Depends(get_assessment_service)]
+PlaybookServiceDep = Annotated[PlaybookService, Depends(get_playbook_service)]
+UntrackedWorkServiceDep = Annotated[UntrackedWorkService, Depends(get_untracked_work_service)]
 RoomServiceDep = Annotated[RoomService, Depends(get_room_service)]
 WorkerHealthServiceDep = Annotated[WorkerHealthService, Depends(get_worker_health_service)]
 ScreenshotServiceDep = Annotated[ScreenshotService, Depends(get_screenshot_service)]

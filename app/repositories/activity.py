@@ -198,6 +198,52 @@ class ActivityRepository:
         )
         return rows.scalars().all()
 
+    async def work_signals(
+        self, employee_ids: Sequence[uuid.UUID], since: datetime, cap: int = 3000
+    ) -> dict[uuid.UUID, list[tuple[str, str | None, datetime]]]:
+        """Window titles and domains per employee, for work attribution.
+
+        A far stronger signal than full-screen OCR, and the live numbers say
+        why: over 30 days there are 213,581 samples carrying an
+        `active_window` (99%) and 140,207 carrying a `domain` (65%), against
+        OCR text that names a known entity in 45% of screenshots and is
+        ambiguous in a third of those.
+
+        The reason is what each one captures. OCR reads EVERYTHING on screen,
+        including a sidebar that happens to mention another project - which is
+        exactly how an Avora dashboard produced a confident-looking match for
+        Circle. A window title is what the person actually has in front of
+        them, and a domain is decisive: the matcher scores a domain hit at 3,
+        its whole confidence floor, on its own.
+
+        Returns (text, domain, when) so the caller can require that sightings
+        are SPREAD over time rather than clustered in one minute.
+        """
+        if not employee_ids:
+            return {}
+        rows = await self._session.execute(
+            select(
+                ActivitySample.employee_id,
+                ActivitySample.active_window,
+                ActivitySample.page_title,
+                ActivitySample.domain,
+                ActivitySample.received_at,
+            )
+            .where(
+                ActivitySample.employee_id.in_(employee_ids),
+                ActivitySample.received_at >= since,
+            )
+            .order_by(ActivitySample.received_at.desc())
+            .limit(cap)
+        )
+        out: dict[uuid.UUID, list[tuple[str, str | None, datetime]]] = {}
+        for employee_id, window, title, domain, when in rows.all():
+            text = " ".join(part for part in (window, title) if part)
+            if not text and not domain:
+                continue
+            out.setdefault(employee_id, []).append((text, domain, when))
+        return out
+
     async def reassign_device_rows(
         self, device_id: uuid.UUID, employee_id: uuid.UUID, since: datetime | None
     ) -> int:

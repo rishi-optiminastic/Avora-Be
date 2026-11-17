@@ -121,6 +121,45 @@ class ScreenshotRepository:
         await self._session.delete(shot)
         await self._session.flush()
 
+    async def ocr_samples(
+        self, employee_ids: Sequence[uuid.UUID], since: datetime, cap: int = 400
+    ) -> dict[uuid.UUID, list[tuple[str, datetime]]]:
+        """SEVERAL OCR texts per employee, for judging sustained work.
+
+        `latest_ocr_text` answers "what are they on right now" with one
+        sample, which cannot tell a glance from an afternoon. The detector
+        needs the run of them.
+
+        Capped, and the cap is load-bearing: one query over a day is a few
+        hundred rows across the roster today, but an agent sampling more
+        often, or a sweep that falls behind, must not pull an unbounded
+        result into memory.
+
+        Returns the timestamp with each text. An earlier version did not, and
+        the consequence was severe: every OCR sighting shared one time bucket,
+        so OCR evidence could never satisfy the spread gate and a dry run
+        against live data dropped from 4 tasks to ZERO. The timestamp was
+        always in the column; not selecting it was the bug.
+        """
+        if not employee_ids:
+            return {}
+        rows = await self._session.execute(
+            select(Screenshot.employee_id, Screenshot.ocr_text, Screenshot.received_at)
+            .where(
+                Screenshot.employee_id.in_(employee_ids),
+                Screenshot.received_at >= since,
+                Screenshot.ocr_status == OcrStatus.DONE,
+                Screenshot.ocr_text.is_not(None),
+            )
+            .order_by(Screenshot.received_at.desc())
+            .limit(cap)
+        )
+        out: dict[uuid.UUID, list[tuple[str, datetime]]] = {}
+        for employee_id, text, when in rows.all():
+            if text:
+                out.setdefault(employee_id, []).append((text, when))
+        return out
+
     async def latest_ocr_text(
         self, employee_ids: Sequence[uuid.UUID], since: datetime
     ) -> dict[uuid.UUID, str]:
