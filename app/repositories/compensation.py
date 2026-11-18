@@ -18,16 +18,15 @@ from app.schemas.compensation import CompensationWrite
 
 # The columns Circle owns (plus the effective date it may fill). The Circle
 # sync may set these and nothing else; HR may not edit them in Avora once the
-# person is in Circle (see CompensationService).
+# person is in Circle (see CompensationService). Bank details are NOT here:
+# Circle holds the person's personal account, Avora the corporate salary
+# account payroll pays into, and the two are deliberately different.
 CIRCLE_OWNED_FIELDS = frozenset(
     {
         "amount_minor",
         "currency",
         "period",
         "pf_enabled",
-        "bank_name",
-        "account_number_encrypted",
-        "ifsc_code",
         "effective_date",
     }
 )

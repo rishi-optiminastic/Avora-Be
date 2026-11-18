@@ -15,7 +15,8 @@ Aadhaar and UAN. Rules:
   number is never stored even if Circle ever sent one.
 
 The first time Circle knows the person, they are marked Circle-linked: from
-then on these fields, pay and bank are read-only in Avora. The caller
+then on these fields and pay are read-only in Avora (bank details stay
+Avora's: Circle has the personal account, Avora the corporate one). The caller
 (`CircleProfileSync`) audits the changed field names and commits.
 """
 

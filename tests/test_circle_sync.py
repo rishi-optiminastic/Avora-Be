@@ -78,24 +78,25 @@ async def _audits(db: AsyncSession, action: str) -> list[AuditLog]:
     return list((await db.scalars(select(AuditLog).where(AuditLog.action == action))).all())
 
 
-# --- pay and bank ----------------------------------------------------------------
+# --- pay (bank is never synced) ----------------------------------------------------------------
 
 
-async def test_circle_wins_for_pay_and_bank(
+async def test_circle_wins_for_pay_but_never_touches_bank(
     scheduler: Scheduler, seed: _Seed, db: AsyncSession, settings: Settings
 ) -> None:
     module, fake = scheduler
     await _seed_pay(db, settings, seed.report.id)
     fake.compensation = _circle_pay()
     changed = await module.sync_records_for(seed.report.id)
-    assert set(changed) >= {"amount_minor", "currency", "period", "pf_enabled", "account_number"}
+    assert not set(changed) & {"bank_name", "account_number", "ifsc_code"}
+    assert set(changed) >= {"amount_minor", "currency", "period", "pf_enabled"}
     comp = await _comp(db, seed.report.id)
     assert comp is not None
     assert (comp.amount_minor, comp.currency, comp.period) == (60_000_000, "INR", PayPeriod.ANNUAL)
     assert comp.pf_enabled is False
-    assert (comp.bank_name, comp.ifsc_code) == ("HDFC", "HDFC0001234")
-    assert comp.account_number_encrypted and comp.account_number_encrypted != _ACCOUNT
-    assert decrypt_pii(settings, comp.account_number_encrypted) == _ACCOUNT
+    # Circle's bank block is the personal account; Avora keeps the corporate one.
+    assert (comp.bank_name, comp.ifsc_code) == ("Old Bank", "SBIN0000001")
+    assert decrypt_pii(settings, comp.account_number_encrypted or "") == "999999999"
     # Avora's own fields are untouched.
     assert (comp.bonus_minor, comp.note) == (500, "kept by Avora")
     [audit] = await _audits(db, "compensation.circle_sync")

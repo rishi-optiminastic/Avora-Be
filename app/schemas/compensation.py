@@ -93,8 +93,8 @@ class CompensationRead(ORMModel):
     updated_by: uuid.UUID | None
     updated_at: datetime
     # True once the person is in Circle: pay (amount, currency, period, PF)
-    # and bank (bank name, account number, IFSC) are then edited in Circle,
-    # and `circle_url` is where.
+    # is then edited in Circle, and `circle_url` is where. Bank details stay
+    # editable in Avora (the corporate salary account, not Circle's personal one).
     circle_managed: bool = False
     circle_url: str | None = None
 

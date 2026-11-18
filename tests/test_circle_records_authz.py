@@ -2,8 +2,9 @@
 cannot be edited in Avora once the person is in Circle.
 
 Reads (circle-profile, appraisals, assets): the person, HR/Admin and payroll
-only - a manager gets 403 even for their own report. Writes: pay, bank and work
-location of a Circle-linked person are refused with "Edit this in Circle".
+only - a manager gets 403 even for their own report. Writes: pay and work
+location of a Circle-linked person are refused with "Edit this in Circle";
+bank details stay Avora's (the corporate account, not Circle's personal one).
 """
 
 from __future__ import annotations
@@ -185,24 +186,18 @@ async def test_pay_change_is_refused_for_a_linked_person(
 
 
 @pytest.mark.parametrize("who", ["admin", "report"])
-async def test_bank_change_is_refused_for_a_linked_person(
+async def test_bank_change_is_allowed_for_a_linked_person(
     client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession, who: str
 ) -> None:
     await _link(db, settings, seed.report)
     headers = auth_headers(settings, getattr(seed, who))
     resp = await client.put(
         _url(seed.report, "compensation/bank"),
-        json={**_BANK, "account_number": "987654321"},
+        json={**_BANK, "account_number": "987654321", "bank_name": "Kotak Mahindra Bank"},
         headers=headers,
     )
-    assert resp.status_code == 409 and "Edit this in Circle" in resp.text
-    # Holder name and account type stay Avora's.
-    ok = await client.put(
-        _url(seed.report, "compensation/bank"),
-        json={**_BANK, "account_holder_name": "Remy Report", "account_type": "savings"},
-        headers=headers,
-    )
-    assert ok.status_code == 200
+    assert resp.status_code == 200
+    assert resp.json()["account_number"] == "987654321"
 
 
 async def test_unlinked_person_is_edited_in_avora_as_before(

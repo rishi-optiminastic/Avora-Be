@@ -1,9 +1,10 @@
-"""Keep Avora's copy of pay and bank details in step with Circle.
+"""Keep Avora's copy of pay in step with Circle.
 
-Circle wins: HR edits pay and bank only in Circle, and payroll runs off the
-copy kept here. Only the fields Circle owns are written (CTC, currency,
-period, PF, bank name, account number, IFSC); the target bonus, note, account
-holder, account type and payment mode stay Avora's. Rules:
+Circle wins for pay: HR edits it only in Circle, and payroll runs off the copy
+kept here. Only the fields Circle owns are written (CTC, currency, period,
+PF); the target bonus, note and every bank field stay Avora's. Bank details are
+never synced: Circle holds the person's personal account, while Avora holds the
+corporate salary account payroll pays into. Rules:
 
 - A value Circle has replaces Avora's.
 - A value Circle lacks (or sends in a form Avora would reject) never wipes
@@ -23,14 +24,13 @@ from typing import Any
 from app.core.config import Settings
 from app.core.exceptions import NotFoundError
 from app.core.logging import get_logger
-from app.core.pii_crypto import decrypt_pii, encrypt_pii
 from app.models.compensation import Compensation, PayPeriod
 from app.models.employee import Employee
 from app.repositories.audit import AuditRepository
 from app.repositories.compensation import CircleValue, CompensationRepository
 from app.services.circle_client import CircleClient
 from app.services.circle_document_sync import SYNC_ACTOR
-from app.services.circle_values import amount_minor, bank_fields, parse_date
+from app.services.circle_values import amount_minor, parse_date
 
 logger = get_logger("app.circle_compensation")
 
@@ -39,21 +39,14 @@ CIRCLE_CURRENCY = "INR"
 
 def circle_values(data: dict[str, Any]) -> dict[str, CircleValue]:
     """What Circle's reply says, as Avora columns; None = Circle has nothing
-    usable for that field. The account number is still plaintext here."""
+    usable for that field. Circle's bank block is ignored (see module doc)."""
     amount = amount_minor(data.get("annual_ctc_inr"))
     pf = data.get("pf_enabled")
-    bank_raw = data.get("bank")
-    bank, warnings = bank_fields(bank_raw if isinstance(bank_raw, dict) else {})
-    if warnings:
-        logger.warning("circle_bank_value_rejected", extra={"count": len(warnings)})
     return {
         "amount_minor": amount,
         "currency": CIRCLE_CURRENCY if amount is not None else None,
         "period": PayPeriod.ANNUAL if amount is not None else None,
         "pf_enabled": pf if isinstance(pf, bool) else None,
-        "bank_name": bank["bank_name"],
-        "account_number": bank["account_number"],
-        "ifsc_code": bank["ifsc_code"],
     }
 
 
@@ -71,7 +64,7 @@ class CircleCompensationSync:
         self._client = client
 
     async def sync(self, employee: Employee) -> list[str]:
-        """Apply Circle's pay and bank; returns the names of the fields changed."""
+        """Apply Circle's pay; returns the names of the fields changed."""
         try:
             data = await self._client.compensation(employee.work_email)
         except NotFoundError:
@@ -89,7 +82,7 @@ class CircleCompensationSync:
         if not changes:
             return []
         await self._compensation.apply_circle(employee.id, changes)
-        changed = sorted(_public_name(key) for key in changes)
+        changed = sorted(changes)
         await self._audit.append(
             actor=SYNC_ACTOR,
             action="compensation.circle_sync",
@@ -110,22 +103,15 @@ class CircleCompensationSync:
                 if current is not None:
                     kept.append(field)
                 continue
-            if value == current:
-                continue
-            if field == "account_number":
-                changes["account_number_encrypted"] = encrypt_pii(self._settings, str(value))
-            else:
+            if value != current:
                 changes[field] = value
         return changes, kept
 
     def _current(self, record: Compensation | None, field: str) -> CircleValue:
         if record is None:
             return None
-        if field != "account_number":
-            value: CircleValue = getattr(record, field)
-            return value
-        encrypted = record.account_number_encrypted
-        return decrypt_pii(self._settings, encrypted) if encrypted else None
+        value: CircleValue = getattr(record, field)
+        return value
 
 
 def _lacks_effective_date(record: Compensation | None, changes: dict[str, CircleValue]) -> bool:
@@ -134,7 +120,3 @@ def _lacks_effective_date(record: Compensation | None, changes: dict[str, Circle
     if "amount_minor" not in changes:
         return False
     return record is None or record.effective_date is None
-
-
-def _public_name(column: str) -> str:
-    return "account_number" if column == "account_number_encrypted" else column

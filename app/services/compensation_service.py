@@ -5,10 +5,12 @@ Admin, and the person themselves only**. Managers, senior managers, it_admin,
 executives and viewers may NOT see anyone's pay — not even their reports'.
 Writes are HR/Admin only. Every read and write is audited (Security rule 5.7).
 
-Once the person is in Circle, Circle owns pay (amount, currency, period, PF)
-and bank (bank name, account number, IFSC): the Circle sync keeps them in step
-and a manual change here is refused with "Edit this in Circle". The target
-bonus, note, effective date, account holder and account type stay Avora's.
+Once the person is in Circle, Circle owns pay (amount, currency, period, PF):
+the Circle sync keeps it in step and a manual change here is refused with
+"Edit this in Circle". The target bonus, note and effective date stay Avora's.
+
+Bank details are always Avora's own, Circle-linked or not: Circle keeps the
+person's personal account, Avora the corporate salary account payroll pays.
 """
 
 from __future__ import annotations
@@ -118,17 +120,6 @@ class CompensationService:
         ever reaches the repository."""
         self._assert_can_view(caller, employee_id)  # self-or-HR/Admin
         employee = await self._active_employee(employee_id)
-        current = await self._compensation.get_for_employee(employee_id)
-        refuse_circle_owned_changes(
-            employee,
-            self._bank_of(current) if current else None,
-            {
-                "bank_name": data.bank_name,
-                "account_number": data.account_number,
-                "ifsc_code": data.ifsc_code,
-            },
-            label="Bank details",
-        )
         encrypted = (
             encrypt_pii(self._settings, data.account_number) if data.account_number else None
         )
@@ -147,13 +138,6 @@ class CompensationService:
             target=f"employee:{employee_id}",
         )
         return self._to_read(record, employee)
-
-    def _bank_of(self, record: Compensation) -> dict[str, object]:
-        return {
-            "bank_name": record.bank_name,
-            "account_number": self._account_number(record),
-            "ifsc_code": record.ifsc_code,
-        }
 
 
 def _pay_of(record: Compensation) -> dict[str, object]:

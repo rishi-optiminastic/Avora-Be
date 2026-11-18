@@ -58,6 +58,13 @@ SCHEDULERS=(
   # refresh it, which is how the one worker that already died unnoticed for
   # seven weeks stayed the hardest one to redeploy.
   "celebrations:worker.celebrations_scheduler"
+  # Missing until 18 Nov 2026. task-recurrence was started by hand from the
+  # API's image (deploy/enable-task-recurrence.sh), which works but leaves it
+  # invisible to Coolify and unreachable by this script - so its code would
+  # have gone stale silently, exactly like celebrations did. Building the tag
+  # here is half the fix; it still needs a Coolify resource pointing at
+  # `avora-worker-task-recurrence` to be refreshable like the rest.
+  "task-recurrence:worker.task_recurrence_scheduler"
 )
 
 BASE_IMAGE="avora-worker-base:build"
