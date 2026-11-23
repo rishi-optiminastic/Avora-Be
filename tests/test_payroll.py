@@ -24,11 +24,12 @@ from app.core.payroll import (
     days_in_month,
     employer_contributions,
     payable_base_days,
+    professional_tax_for,
     prorate_breakdown,
     weekdays_in_month,
     working_days_between,
 )
-from app.models.employee import Employee, EmployeeStatus, Role
+from app.models.employee import Employee, EmployeeStatus, Gender, Role
 from app.services.payroll_service import PayrollService
 from tests.conftest import _Seed, auth_headers
 
@@ -70,6 +71,94 @@ def test_breakdown_honours_config_knobs() -> None:
     b = compute_breakdown(50_000_00, CalcConfig(basic_pct=40, professional_tax_minor=0))
     assert b.basic_minor == 20_000_00
     assert b.professional_tax_minor == 0
+
+
+def test_pf_counts_basic_up_to_25k_and_caps_at_3000() -> None:
+    """PF is 12% of Basic, with Basic counted only up to ₹25,000 a month.
+
+    The old ceiling was a ₹15,000 Basic (₹1,800), so anyone above it deducts more
+    now: a ₹70,000 CTC pays 12% of its ₹21,000 Basic in full, where it used to
+    stop at ₹1,800.
+    """
+    mid = compute_breakdown(70_000_00)  # Basic ₹21,000 — over the OLD ceiling
+    assert mid.basic_minor == 21_000_00
+    assert mid.employee_pf_minor == 2_520_00  # 12% in full, not the old ₹1,800
+
+    high = compute_breakdown(1_00_000_00)  # Basic ₹30,000 — over the NEW ceiling
+    assert high.basic_minor == 30_000_00
+    assert high.employee_pf_minor == 3_000_00  # capped: 12% of ₹25,000
+    assert high.employer_pf_minor == 3_000_00  # the employer half matches it
+    assert high.gross_minor == 97_000_00  # CTC less the employer half
+    assert high.net_minor == 93_800_00  # gross - PF 3,000 - PT 200 (no TDS)
+
+    # The boundary itself, read on Basic rather than on CTC.
+    only_basic = CalcConfig(basic_pct=100)
+    assert compute_breakdown(24_900_00, only_basic).employee_pf_minor == 2_988_00
+    assert compute_breakdown(25_000_00, only_basic).employee_pf_minor == 3_000_00
+    assert compute_breakdown(25_100_00, only_basic).employee_pf_minor == 3_000_00
+
+    # The ₹50,000 reference slip sits under the cap, so it is untouched.
+    assert compute_breakdown(50_000_00).employee_pf_minor == 1_800_00
+
+
+def test_professional_tax_exempts_a_woman_earning_25k_or_less() -> None:
+    """₹200 a month (₹300 in February), except for a woman on ₹25,000 or less."""
+    # Exempt: at the threshold and below it, February included.
+    assert professional_tax_for(25_000_00, gender=Gender.FEMALE) == 0
+    assert professional_tax_for(10_000_00, gender=Gender.FEMALE) == 0
+    assert professional_tax_for(25_000_00, gender=Gender.FEMALE, month=2) == 0
+
+    # One paisa over the threshold is not exempt, and February is still ₹300.
+    assert professional_tax_for(25_000_01, gender=Gender.FEMALE) == 200_00
+    assert professional_tax_for(30_000_00, gender=Gender.FEMALE, month=2) == 300_00
+
+    # The exemption is hers alone: nobody else gets it at any income.
+    for other in (Gender.MALE, Gender.OTHER, None, ""):
+        assert professional_tax_for(10_000_00, gender=other) == 200_00
+        assert professional_tax_for(10_000_00, gender=other, month=2) == 300_00
+
+    # Gender arrives as free-ish text from the employee row; casing must not
+    # decide whether someone is charged ₹200.
+    assert professional_tax_for(10_000_00, gender="Female") == 0
+
+    # And it rides the org's configured amounts, not hard-coded ones.
+    doubled = CalcConfig(professional_tax_minor=400_00)
+    assert professional_tax_for(30_000_00, doubled, gender=Gender.FEMALE) == 400_00
+
+
+def test_breakdown_applies_the_professional_tax_exemption_on_gross() -> None:
+    """The threshold is read on monthly GROSS (CTC less the employer PF half)."""
+    # ₹25,000 CTC → gross ₹24,100, under the line.
+    exempt = compute_breakdown(25_000_00, gender=Gender.FEMALE)
+    assert exempt.gross_minor == 24_100_00
+    assert exempt.professional_tax_minor == 0
+    assert exempt.net_minor == 23_200_00  # ₹200 more than before
+
+    charged = compute_breakdown(25_000_00, gender=Gender.MALE)
+    assert charged.professional_tax_minor == 200_00
+    assert charged.net_minor == 23_000_00
+
+    # ₹27,000 CTC → gross ₹26,028, over the line even for her.
+    above = compute_breakdown(27_000_00, gender=Gender.FEMALE)
+    assert above.gross_minor == 26_028_00
+    assert above.professional_tax_minor == 200_00
+
+
+def test_professional_tax_threshold_ignores_proration() -> None:
+    """Unpaid leave must not duck someone under the exemption line.
+
+    Professional tax is a charge on the salary the contract pays, so the band is
+    decided on the full month and the amount then stays flat however few days
+    were payable - otherwise a woman on ₹30,000 would be refunded her ₹200 in
+    any month she worked less than most of it.
+    """
+    b = compute_breakdown(30_000_00, gender=Gender.FEMALE)
+    assert b.gross_minor == 28_920_00  # over ₹25,000 → charged
+    assert b.professional_tax_minor == 200_00
+
+    p = prorate_breakdown(b, payable_days=13, total_days=30)
+    assert p.gross_minor == 12_532_00  # the MONTH's pay is now under ₹25,000 …
+    assert p.professional_tax_minor == 200_00  # … and the charge does not move
 
 
 def test_prorate_breakdown_matches_reference_sheet() -> None:
@@ -188,6 +277,47 @@ async def test_future_working_days_are_not_charged_as_lop(
     assert line["lop_days"] == 0
     assert line["payable_days"] == line["total_days"]
     assert line["net_minor"] == line["breakdown"]["net_minor"]  # full month pay
+
+
+async def test_estimate_honours_the_professional_tax_exemption(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """Gender reaches the calculator from the employee row, not from the request.
+
+    The exemption is worth ₹200 a month to a real person, so the wiring matters as
+    much as the arithmetic: the estimate must read `employees.gender` itself. A
+    future month keeps attendance out of it (no elapsed working days, so no LOP).
+    """
+    seed.report.gender = Gender.FEMALE
+    await db.commit()
+    await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation",
+        json={**_COMP, "amount_minor": 25_000_00},  # gross ₹24,100, under the line
+        headers=auth_headers(settings, seed.admin),
+    )
+    await client.put(
+        "/api/v1/payroll/settings", json=_SETTINGS, headers=auth_headers(settings, seed.admin)
+    )
+
+    resp = await client.get(
+        "/api/v1/payroll/estimate?month=2099-06", headers=auth_headers(settings, seed.admin)
+    )
+    assert resp.status_code == 200
+    line = next(line for line in resp.json()["lines"] if line["employee_id"] == str(seed.report.id))
+    assert line["breakdown"]["gross_minor"] == 24_100_00
+    assert line["breakdown"]["professional_tax_minor"] == 0
+    assert line["prorated"]["professional_tax_minor"] == 0
+    assert line["net_minor"] == 23_200_00
+
+    # The same CTC for a man is charged, which is what proves the gender was read.
+    seed.report.gender = Gender.MALE
+    await db.commit()
+    resp = await client.get(
+        "/api/v1/payroll/estimate?month=2099-06", headers=auth_headers(settings, seed.admin)
+    )
+    line = next(line for line in resp.json()["lines"] if line["employee_id"] == str(seed.report.id))
+    assert line["breakdown"]["professional_tax_minor"] == 200_00
+    assert line["net_minor"] == 23_000_00
 
 
 async def test_payroll_scheduler_build_service_matches_constructor(db: AsyncSession) -> None:
@@ -311,6 +441,126 @@ async def test_export_xlsx_selection_cannot_widen_scope(
     assert unknown.status_code == 404
 
 
+def _formula_rows(content: bytes) -> dict[str, str]:
+    """The Formulas sheet's column table as {heading: formula}."""
+    ws = load_workbook(BytesIO(content))["Formulas"]
+    rows = [[c.value for c in row] for row in ws.iter_rows(max_col=3)]
+    start = next(i for i, r in enumerate(rows) if r[0] == "Column") + 1
+    return {str(r[1]): str(r[2]) for r in rows[start:] if r[1]}
+
+
+def _formula_sheet_text(content: bytes) -> str:
+    ws = load_workbook(BytesIO(content))["Formulas"]
+    return "\n".join(
+        " | ".join("" if c.value is None else str(c.value) for c in row)
+        for row in ws.iter_rows(max_col=3)
+    )
+
+
+async def test_export_carries_a_formula_for_every_column(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """The register ships with its own derivation, column by column.
+
+    HR signs off a number they can re-derive and an auditor asks the same
+    question a year later; both used to need an engineer to read the calculator.
+    """
+    await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation",
+        json=_COMP,
+        headers=auth_headers(settings, seed.admin),
+    )
+    await client.put(
+        "/api/v1/payroll/settings", json=_SETTINGS, headers=auth_headers(settings, seed.admin)
+    )
+    res = await client.get(
+        "/api/v1/payroll/export?month=2026-06", headers=auth_headers(settings, seed.admin)
+    )
+    wb = load_workbook(BytesIO(res.content))
+    assert wb.sheetnames == ["Payrun Employee Salary statemen", "Formulas"]
+
+    register_headers = [c.value for c in wb["Payrun Employee Salary statemen"][1]]
+    formulas = _formula_rows(res.content)
+    # Every column is explained, and nothing is explained that is not a column.
+    assert list(formulas) == register_headers
+    assert all(text.strip() for text in formulas.values())
+
+    # The derivations name the real rule, not a restatement of the heading.
+    assert "30% of monthly CTC" in formulas["Basic"]
+    assert "50% of Basic" in formulas["House Rent Allowance"]
+    assert "Base Days less Loss Of Pay" in formulas["Effective Paid Days"]
+    assert "less EPS" in formulas["EPF Contribution Employer"]
+
+    body = _formula_sheet_text(res.content)
+    assert "June 2026" in body
+    # The two rules a reader most often gets wrong, stated outright.
+    assert "Professional Tax and Income Tax do NOT scale" in body
+    assert "ELAPSED" in body
+
+
+async def test_formula_sheet_quotes_the_settings_actually_used(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """The sheet is generated from the month's config, so it cannot go stale.
+
+    A derivation written once into a document is wrong the first time somebody
+    edits a knob in Settings; this one is re-read from the same object the
+    calculator used.
+    """
+    await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation",
+        json=_COMP,
+        headers=auth_headers(settings, seed.admin),
+    )
+    tweaked = {**_SETTINGS, "basic_pct": 45, "pf_cap_minor": 3_000_00}
+    await client.put(
+        "/api/v1/payroll/settings", json=tweaked, headers=auth_headers(settings, seed.admin)
+    )
+    res = await client.get(
+        "/api/v1/payroll/export?month=2026-06", headers=auth_headers(settings, seed.admin)
+    )
+    formulas = _formula_rows(res.content)
+    assert "45% of monthly CTC" in formulas["Basic"]
+    assert "3,000" in formulas["EPF Contribution"]
+
+    body = _formula_sheet_text(res.content)
+    # The cap is also shown as the Basic it stops at, the way the policy words it.
+    assert "25,000 Basic" in body
+    # And the professional-tax exemption is spelled out where HR will look for it.
+    assert "NIL for a female employee" in body
+
+
+async def test_interns_pay_no_provident_fund_but_still_pay_professional_tax(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """PF comes off interns by ROLE, not by a flag somebody has to remember.
+
+    Switching PF off lifts take-home by roughly twice the PF figure: the employer
+    half is no longer carved out of CTC (so gross rises to CTC) and the employee
+    half is no longer deducted. Professional tax is untouched.
+    """
+    seed.report.role = Role.INTERN
+    await db.commit()
+    await client.put(
+        f"/api/v1/employees/{seed.report.id}/compensation",
+        json=_COMP,
+        headers=auth_headers(settings, seed.admin),
+    )
+    await client.put(
+        "/api/v1/payroll/settings", json=_SETTINGS, headers=auth_headers(settings, seed.admin)
+    )
+    resp = await client.get(
+        "/api/v1/payroll/estimate?month=2099-06", headers=auth_headers(settings, seed.admin)
+    )
+    line = next(line for line in resp.json()["lines"] if line["employee_id"] == str(seed.report.id))
+    b = line["breakdown"]
+    assert b["employee_pf_minor"] == 0
+    assert b["employer_pf_minor"] == 0
+    assert b["gross_minor"] == 50_000_00  # nothing carved out of CTC
+    assert b["professional_tax_minor"] == 200_00  # still charged
+    assert b["net_minor"] == 49_800_00  # vs 46,200 with PF on
+
+
 def _sheet_row_by_name(content: bytes, name: str) -> dict[str, object]:
     """Load the register and return the {header: value} row for one employee."""
     ws = load_workbook(BytesIO(content)).active
@@ -335,6 +585,16 @@ def test_employer_contributions_reference_split() -> None:
     low = employer_contributions(9_870_00, 1_184_00)
     assert low.eps_minor == round(9_870_00 * 8.33 / 100)
     assert low.epf_employer_minor == 1_184_00 - low.eps_minor
+    # A ₹30,000 basic, where the ₹3,000 PF cap bites. Raising the PF ceiling to a
+    # ₹25,000 Basic moves ONLY the EPF remainder: pension (EPS) and insurance
+    # (EDLI) are still legislated against ₹15,000, so they do not budge, and the
+    # extra ₹1,200 of employer PF lands entirely in EPF.
+    high = employer_contributions(30_000_00, 3_000_00)
+    assert high.eps_minor == 1_250_00  # unchanged by the higher ceiling
+    assert high.edli_minor == 75_00  # likewise 0.5% of ₹15,000, not of ₹30,000
+    assert high.epf_employer_minor == 1_750_00  # 3,000 - 1,250
+    assert high.admin_minor == 150_00  # 0.5% of Basic, which is uncapped
+    assert high.total_minor == 3_225_00
 
 
 async def test_export_register_columns_and_consistency(

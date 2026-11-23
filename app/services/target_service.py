@@ -26,7 +26,14 @@ _OWNER_EDITABLE = frozenset({"current_value", "status", "review_notes"})
 
 
 def _can_assign(caller: CurrentUser) -> bool:
-    return caller.role in (Role.ADMIN, Role.SENIOR_MANAGER)
+    """Who may set a target on someone else.
+
+    HR belongs here alongside admins and senior managers: HR runs the goal cycle
+    and was the one group that could open the Targets page, see every target in
+    scope, and have no way to create one. The "New target" button simply was not
+    rendered for them, and the endpoint would have refused anyway.
+    """
+    return caller.role in (Role.ADMIN, Role.SENIOR_MANAGER, Role.HR)
 
 
 class TargetService:

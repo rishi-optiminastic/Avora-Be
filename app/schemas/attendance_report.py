@@ -46,6 +46,10 @@ class AttendanceMonthSummary(BaseModel):
     late_days: int
     absent_days: int
     leave_days: int
+    # Days half spent on approved leave and half worked. Counted apart from
+    # `leave_days` (a whole day off) and `half_days` (a short day with no leave
+    # behind it) so neither figure quietly changes meaning.
+    half_day_leave_days: int = 0
     # Working days credited while away from the office. A float because a half
     # day counts as half - see `AttendanceDayRow.out_of_office_credit`.
     out_of_office_days: float = 0.0

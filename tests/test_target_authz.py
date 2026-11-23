@@ -1,10 +1,12 @@
-"""Target authorization — only admins/senior managers assign; owners track."""
+"""Target authorization — admins/senior managers/HR assign; owners track."""
 
 from __future__ import annotations
 
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
+from app.models.employee import Employee, EmployeeStatus, Role
 from tests.conftest import _Seed, auth_headers
 
 
@@ -77,3 +79,44 @@ async def test_target_read_is_scoped(client: AsyncClient, settings: Settings, se
     # The unrelated outsider can't read it (404, never leaks existence).
     resp = await client.get(f"/api/v1/targets/{tid}", headers=auth_headers(settings, seed.outsider))
     assert resp.status_code == 404
+
+
+async def test_hr_can_assign_targets(
+    client: AsyncClient, settings: Settings, seed: _Seed, db: AsyncSession
+) -> None:
+    """HR runs the goal cycle, so HR must be able to open one.
+
+    HR could already read every target in scope but not create one: the button
+    was not rendered and the endpoint would have refused. A read-only seat on a
+    process you own is a bug, not a permission.
+    """
+    hr = Employee(
+        hr_external_id="hr-targets",
+        work_email="hr-targets@corp.test",
+        full_name="Hana HR",
+        role=Role.HR,
+        status=EmployeeStatus.ACTIVE,
+        is_active=True,
+    )
+    db.add(hr)
+    await db.commit()
+
+    created = await client.post(
+        "/api/v1/targets",
+        json=_new_target(str(seed.manager.id)),
+        headers=auth_headers(settings, hr),
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["assigned_by_id"] == str(hr.id)
+
+
+async def test_report_still_cannot_assign_targets(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """Widening the gate to HR must not have widened it to everyone."""
+    resp = await client.post(
+        "/api/v1/targets",
+        json=_new_target(str(seed.report.id)),
+        headers=auth_headers(settings, seed.report),
+    )
+    assert resp.status_code == 403

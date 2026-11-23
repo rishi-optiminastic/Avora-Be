@@ -35,6 +35,10 @@ class AttendanceStatus(StrEnum):
     LATE = "late"  # arrived in the regularization window, not yet regularized
     ABSENT = "absent"
     ON_LEAVE = "on_leave"  # a working day covered by approved paid leave
+    # Half the day was approved leave and they worked the rest. Its own status
+    # because HALF_DAY ("too few hours") and ON_LEAVE ("the whole day off") both
+    # misread it: one looks like underwork, the other hides that they came in.
+    HALF_DAY_LEAVE = "half_day_leave"
     OUT_OF_OFFICE = "out_of_office"  # worked, but away from the office (approved)
     PRESENT = "present"  # on time / regularized, day still in progress (also legacy fallback)
 

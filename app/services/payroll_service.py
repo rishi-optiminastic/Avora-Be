@@ -450,15 +450,20 @@ class PayrollService:
         )
 
     @staticmethod
-    def _config_for(cfg: CalcConfig, comp: Compensation | None) -> CalcConfig:
+    def _config_for(cfg: CalcConfig, comp: Compensation | None, employee: Employee) -> CalcConfig:
         """The org's calculation config, narrowed to one person.
 
-        Provident Fund is per-contract, not org-wide: a consultant or someone who
-        opted out above the wage ceiling has it switched off on their compensation
-        record. Everyone else — and anyone with no record at all — keeps the org
-        default, so this can only ever remove PF, never silently add it.
+        Provident Fund is per-contract, not org-wide, and comes off for two
+        reasons. A consultant or someone who opted out above the wage ceiling has
+        it switched off on their compensation record. INTERNS have no PF at all,
+        by role: a rule rather than a flag somebody has to remember to tick on
+        every new joiner, and it switches itself back on the day they convert.
+        Professional tax is untouched either way - an intern still pays it.
+
+        Everyone else, and anyone with no record at all, keeps the org default,
+        so this can only ever remove PF, never silently add it.
         """
-        if comp is not None and not comp.pf_enabled:
+        if employee.role is Role.INTERN or (comp is not None and not comp.pf_enabled):
             return replace(cfg, deduct_pf=False)
         return cfg
 
@@ -651,6 +656,7 @@ class PayrollService:
             raise NotFoundError()
 
         year, m = _parse_month(est.month)
+        cfg = self._calc_config(await self.get_settings_model())
         comps = await self._compensation.get_for_employees([r.employee_id for r in payable])
         employees = {e.id: e for e in await self._employees.list_all_active()}
         rows = [
@@ -663,7 +669,14 @@ class PayrollService:
             )
             for line in payable
         ]
-        xlsx = build_payroll_xlsx(rows, month_label=_month_label(year, m), currency=est.currency)
+        xlsx = build_payroll_xlsx(
+            rows,
+            month_label=_month_label(year, m),
+            currency=est.currency,
+            config=cfg,
+            total_days=est.total_days,
+            reimbursement_only=True,
+        )
         await self._audit.append(
             actor=str(caller.employee_id),
             action="payroll.export_reimbursements",
@@ -728,7 +741,13 @@ class PayrollService:
             for line in lines
         ]
 
-        xlsx = build_payroll_xlsx(rows, month_label=_month_label(year, m), currency=est.currency)
+        xlsx = build_payroll_xlsx(
+            rows,
+            month_label=_month_label(year, m),
+            currency=est.currency,
+            config=cfg,
+            total_days=est.total_days,
+        )
         # Bank details leave the system here, so record exactly whose (§5.7) — a
         # whole-org export and a one-person export must not look alike in the log.
         scope = _export_audit_scope(employee_ids, [line.employee_id for line in lines])
@@ -763,7 +782,13 @@ class PayrollService:
             if comp is not None
             else 0
         )
-        breakdown = compute_breakdown(mctc, self._config_for(cfg, comp), month=cal.month)
+        breakdown = compute_breakdown(
+            mctc,
+            self._config_for(cfg, comp, employee),
+            month=cal.month,
+            # Professional tax exempts a female employee under ₹25,000/month.
+            gender=employee.gender,
+        )
         # Weekends and holidays are auto-paid: only working days that were neither
         # present nor paid leave are loss-of-pay, so payable = payroll days - LOP.
         # LOP is charged only over ELAPSED working days — a working day that has not
@@ -1363,5 +1388,14 @@ def _present_days(summary: AttendanceMonthSummary | None) -> float:
     if summary is None:
         return 0.0
     return (
-        summary.full_days + summary.late_days + 0.5 * summary.half_days + summary.out_of_office_days
+        summary.full_days
+        + summary.late_days
+        + 0.5 * summary.half_days
+        + summary.out_of_office_days
+        # The worked half of a half-day-leave day. Before this status existed
+        # the day counted here as a plain half day, so leaving it out would
+        # silently dock half a day's pay for every approved half-day leave.
+        # The other half arrives as paid leave via `_leave_days_by_employee`,
+        # which already weights HALF_DAY at 0.5.
+        + 0.5 * summary.half_day_leave_days
     )

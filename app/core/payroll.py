@@ -12,10 +12,11 @@ structure exactly:
     CTC ₹50,000 → Basic 15,000 · HRA 7,500 · Special 25,700 · Gross 48,200
                   · PF 1,800 · Professional Tax 200 · Net 46,200
 
-Employee PF is `min(12% of Basic, ₹1,800)` — the statutory wage-ceiling rule —
-computed automatically, not a manual per-slip choice. Professional tax follows
-the common state pattern of a higher amount in February (₹300) and a flat
-amount the other eleven months (₹200), both org-configurable. Income tax is
+Employee PF is 12% of Basic up to a ₹25,000 Basic ceiling, so the deduction
+stops at ₹3,000 a month - computed automatically, not a manual per-slip choice.
+Professional tax is ₹200 a month and ₹300 in February, both org-configurable,
+with one exemption: a female employee whose monthly gross is ₹25,000 or less
+pays no professional tax at all (the state slab exempts her). Income tax is
 computed under the **New Regime** (FY 2026-27 slabs — Budget 2026 left Budget
 2025's rates unchanged): a flat ₹75,000 standard deduction, then slabs, then
 the Section 87A rebate that zeroes tax up to ₹12,00,000 taxable income (with
@@ -69,6 +70,17 @@ def compute_annual_income_tax(annual_gross_minor: int) -> int:
     return min(tax, taxable - _REBATE_TAXABLE_LIMIT_MINOR)
 
 
+# Provident Fund ceiling: PF is 12% of Basic, but Basic counts only up to
+# ₹25,000 a month, so the deduction stops at ₹3,000 (12% of ₹25,000).
+PF_CAP_MINOR = 3_000_00
+
+# The gender whose professional-tax exemption slab applies. State PT slabs exempt
+# women below a monthly-salary threshold; men have no equivalent exemption at
+# these income levels. `Gender` is a `StrEnum`, so a caller passes the model value
+# straight in and this module stays free of any `app.models` import.
+PT_EXEMPT_GENDER = "female"
+
+
 @dataclass(frozen=True)
 class CalcConfig:
     """The org-tweakable knobs behind the slip (defaults = the reference image)."""
@@ -76,9 +88,16 @@ class CalcConfig:
     basic_pct: int = 30  # Basic = 30% of CTC
     hra_pct: int = 50  # HRA = 50% of Basic
     pf_pct: int = 12  # PF = 12% of Basic …
-    pf_cap_minor: int = 180_000  # … capped at ₹1,800 (statutory ceiling)
+    # … up to a ₹25,000 Basic ceiling, which 12% turns into a ₹3,000 cap. Capping
+    # the AMOUNT rather than the wage is the same rule at 12% and survives a
+    # change to `pf_pct` without silently re-deriving someone's ceiling.
+    pf_cap_minor: int = PF_CAP_MINOR
     professional_tax_minor: int = 20_000  # flat ₹200, most months
     professional_tax_feb_minor: int = 30_000  # ₹300 in February
+    # Monthly gross at or below which an exempt-category employee owes no
+    # professional tax. Not an org Settings knob: it is a state slab boundary,
+    # kept here beside the amounts it overrides so the rule reads in one place.
+    professional_tax_exempt_upto_minor: int = 25_000_00
     deduct_income_tax: bool = True  # withhold estimated new-regime TDS monthly
     # Whether Provident Fund applies at all. Off means the employer share is not
     # carved out of CTC (so gross == CTC) AND nothing is deducted, which is why
@@ -103,16 +122,42 @@ class SalaryBreakdown:
     net_minor: int
 
 
+def professional_tax_for(
+    monthly_gross_minor: int,
+    config: CalcConfig | None = None,
+    *,
+    month: int | None = None,
+    gender: str | None = None,
+) -> int:
+    """One month's professional tax, in minor units.
+
+    The configured amount (₹200, or ₹300 in February), except that a female
+    employee earning ₹25,000 or less a month owes nothing.
+
+    The threshold is read against the FULL-MONTH gross, never the prorated one:
+    professional tax is a charge on the salary the contract pays, so a month of
+    unpaid leave must not duck someone under the line and refund her ₹200.
+    """
+    cfg = config or CalcConfig()
+    exempt_band = (gender or "").strip().lower() == PT_EXEMPT_GENDER
+    if exempt_band and monthly_gross_minor <= cfg.professional_tax_exempt_upto_minor:
+        return 0
+    return cfg.professional_tax_feb_minor if month == 2 else cfg.professional_tax_minor
+
+
 def compute_breakdown(
     monthly_ctc_minor: int,
     config: CalcConfig | None = None,
     *,
     month: int | None = None,
+    gender: str | None = None,
 ) -> SalaryBreakdown:
     """Derive the salary slip from a monthly CTC. Zero CTC → an all-zero slip.
 
     `month` (1-12) picks the February professional-tax amount when it's 2;
-    omit it (or pass any other month) to use the regular amount.
+    omit it (or pass any other month) to use the regular amount. `gender` picks
+    the professional-tax exemption band (see `professional_tax_for`); omitting it
+    charges the unexempted amount, so a missing gender can never under-deduct.
     """
     cfg = config or CalcConfig()
     ctc = max(0, monthly_ctc_minor)
@@ -124,7 +169,7 @@ def compute_breakdown(
     gross = ctc - pf  # CTC less employer PF (== CTC when PF does not apply)
     hra = round(basic * cfg.hra_pct / 100)
     special = gross - basic - hra  # the balancing figure
-    prof_tax = cfg.professional_tax_feb_minor if month == 2 else cfg.professional_tax_minor
+    prof_tax = professional_tax_for(gross, cfg, month=month, gender=gender)
     income_tax = round(compute_annual_income_tax(gross * 12) / 12) if cfg.deduct_income_tax else 0
     total_deduction = pf + prof_tax + income_tax
     net = gross - total_deduction
@@ -148,9 +193,20 @@ def monthly_ctc_minor(amount_minor: int, *, is_annual: bool) -> int:
     return round(amount_minor / 12) if is_annual else amount_minor
 
 
-# Statutory EPF wage ceiling (₹15,000/month) and the EPS employer cap (₹1,250).
-_PF_WAGE_CEILING_MINOR = 15_000_00
-_EPS_CAP_MINOR = 1_250_00
+# The EPS/EDLI pensionable-wage ceiling (₹15,000/month) and the EPS employer cap
+# (₹1,250). Deliberately NOT `PF_CAP_MINOR`: the 12% PF deduction counts Basic up
+# to ₹25,000, but the pension and insurance slices of the employer's half are
+# still legislated against ₹15,000, so raising the PF ceiling moves the EPF
+# remainder (employee PF minus EPS) and leaves EPS and EDLI where they were.
+#
+# Public because the payroll register documents these rates on its Formulas
+# sheet. Restating them there as literals would let the sheet drift away from
+# the arithmetic it claims to explain.
+PF_WAGE_CEILING_MINOR = 15_000_00
+EPS_CAP_MINOR = 1_250_00
+EPS_RATE_PCT = 8.33  # employer pension share, of the capped wage
+EDLI_RATE_PCT = 0.5  # employer insurance share, of the capped wage
+EPF_ADMIN_RATE_PCT = 0.5  # EPF administration charges, of the FULL Basic
 
 
 @dataclass(frozen=True)
@@ -158,10 +214,10 @@ class EmployerContributions:
     """The employer's statutory PF-side costs for a month, split the way an Indian
     payroll register reports them. All derived from (already-prorated) Basic."""
 
-    epf_employer_minor: int  # 3.67% remainder = employee PF minus EPS
-    eps_minor: int  # 8.33% of min(Basic, ceiling), capped at ₹1,250
-    edli_minor: int  # 0.5% of min(Basic, ceiling)
-    admin_minor: int  # 0.5% of Basic (EPF admin charges)
+    epf_employer_minor: int  # the remainder: employee PF minus EPS
+    eps_minor: int  # EPS_RATE_PCT of min(Basic, ceiling), capped at ₹1,250
+    edli_minor: int  # EDLI_RATE_PCT of min(Basic, ceiling)
+    admin_minor: int  # EPF_ADMIN_RATE_PCT of Basic (EPF admin charges)
     total_minor: int
 
 
@@ -172,13 +228,13 @@ def employer_contributions(basic_minor: int, employee_pf_minor: int) -> Employer
     employer EPF share is that minus EPS, so the two PF halves always agree.
     """
     basic = max(0, basic_minor)
-    wage = min(basic, _PF_WAGE_CEILING_MINOR)
+    wage = min(basic, PF_WAGE_CEILING_MINOR)
     # EPS is 8.33% of the wage, but a flat ₹1,250 at/above the ceiling (the
     # statutory max — 8.33% of ₹15,000 is ₹1,249.50, reported as ₹1,250).
-    eps = _EPS_CAP_MINOR if basic >= _PF_WAGE_CEILING_MINOR else round(wage * 8.33 / 100)
+    eps = EPS_CAP_MINOR if basic >= PF_WAGE_CEILING_MINOR else round(wage * EPS_RATE_PCT / 100)
     epf_employer = max(0, employee_pf_minor - eps)
-    edli = round(wage * 0.5 / 100)
-    admin = round(basic * 0.5 / 100)
+    edli = round(wage * EDLI_RATE_PCT / 100)
+    admin = round(basic * EPF_ADMIN_RATE_PCT / 100)
     return EmployerContributions(
         epf_employer_minor=epf_employer,
         eps_minor=eps,

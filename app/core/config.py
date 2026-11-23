@@ -247,6 +247,10 @@ class Settings(BaseSettings):
     eod_send_hour: int = 18  # local hour drafts auto-send to the reporting manager
     eod_send_minute: int = 0  # local minute (→ 6:00 PM IST)
     eod_ocr_char_budget: int = 12000  # cap concatenated OCR text fed to the LLM
+    # Cap on the ordered window-title timeline fed to the LLM. Far smaller
+    # than the OCR budget because a timeline is already a summary: one
+    # thrashing day must not crowd the rest of the prompt out.
+    eod_timeline_char_budget: int = 2000
     eod_concurrency: int = 5  # max simultaneous LLM calls when generating drafts
 
     # EOD vision — opt-in. When on, a few representative screenshots per employee

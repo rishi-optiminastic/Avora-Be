@@ -155,6 +155,12 @@ class LeaveBalanceRead(BaseModel):
     # Leave types whose allocation accrues monthly rather than being granted up
     # front, so the UI can label them "1/month, carries forward".
     accruing_types: list[LeaveType] = Field(default_factory=list)
+    # Which quota a half day spends from for THIS person. Planned leave
+    # normally; sick leave while planned is locked, because a day charged to a
+    # locked quota is deducted from nothing at all. The picker and the warning
+    # read it from here rather than assuming, so they name the card that will
+    # actually move.
+    half_day_bucket: LeaveType = LeaveType.PLANNED
 
 
 class LeaveCommentCreate(BaseModel):

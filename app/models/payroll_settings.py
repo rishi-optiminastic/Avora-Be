@@ -45,7 +45,8 @@ class PayrollSettings(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     basic_pct: Mapped[int] = mapped_column(default=30)
     hra_pct: Mapped[int] = mapped_column(default=50)
     pf_pct: Mapped[int] = mapped_column(default=12)
-    pf_cap_minor: Mapped[int] = mapped_column(BigInteger, default=180_000)
+    # 12% of Basic, capped at ₹3,000 — Basic counts only up to ₹25,000/month.
+    pf_cap_minor: Mapped[int] = mapped_column(BigInteger, default=300_000)
     professional_tax_minor: Mapped[int] = mapped_column(BigInteger, default=20_000)
     # ₹300 in February, ₹200 the other eleven months — the common state PT slab.
     professional_tax_feb_minor: Mapped[int] = mapped_column(BigInteger, default=30_000)

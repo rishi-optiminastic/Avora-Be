@@ -34,6 +34,7 @@ from app.core.exceptions import NotFoundError, ValidationError
 from app.core.payroll import is_working_day
 from app.models.attendance_override import AttendanceOverrideStatus
 from app.models.employee import Employee
+from app.models.leave import LeaveType
 from app.models.out_of_office import OutOfOfficePortion
 from app.repositories.activity import ActivityRepository, DailyAgg, idle_minutes
 from app.repositories.attendance_override import AttendanceOverrideRepository
@@ -137,6 +138,30 @@ UPCOMING = "Upcoming"
 HOLIDAY_PREFIX = "Holiday: "
 
 
+_NO_DAYS: frozenset[date] = frozenset()
+
+
+@dataclass(frozen=True)
+class _LeaveDays:
+    """Approved paid-leave dates per employee, split by how much of a day each
+    one takes. A date carrying both a full and a half day leave reads as full:
+    the whole day is off either way."""
+
+    full: dict[uuid.UUID, set[date]]
+    half: dict[uuid.UUID, set[date]]
+
+    def covers_any(self, employee_id: uuid.UUID, day: date) -> bool:
+        """Any approved paid leave on this day, of any length."""
+        return day in self.full.get(employee_id, _NO_DAYS) or day in self.half.get(
+            employee_id, _NO_DAYS
+        )
+
+    def covers_half_only(self, employee_id: uuid.UUID, day: date) -> bool:
+        return day in self.half.get(employee_id, _NO_DAYS) and day not in self.full.get(
+            employee_id, _NO_DAYS
+        )
+
+
 class AttendanceService:
     def __init__(
         self,
@@ -174,27 +199,30 @@ class AttendanceService:
 
     async def _approved_leave_dates(
         self, ids: Sequence[uuid.UUID], start_date: str, end_date: str, spec: PolicySpec
-    ) -> dict[uuid.UUID, set[date]]:
-        """Per-employee set of local dates covered by approved paid leave in the
-        inclusive [start_date, end_date] window. Used to label an unattended day
-        as On leave rather than Absent."""
+    ) -> _LeaveDays:
+        """Local dates covered by approved paid leave in the inclusive
+        [start_date, end_date] window, split by how much of the day they take.
+
+        Used to label an unattended day as On leave rather than Absent, and a
+        worked day with half-day leave behind it as Half-day leave.
+        """
         if not ids:
-            return {}
+            return _LeaveDays({}, {})
         start, _ = self._local_bounds(start_date, spec.timezone)
         _, end = self._local_bounds(end_date, spec.timezone)
         leaves = await self._leaves.approved_paid_in_range(ids, start, end)
         tz = ZoneInfo(spec.timezone)
-        out: dict[uuid.UUID, set[date]] = {}
+        full: dict[uuid.UUID, set[date]] = {}
+        half: dict[uuid.UUID, set[date]] = {}
         for emp_id, spans in leaves.items():
-            days: set[date] = set()
-            for span_start, span_end, _kind in spans:
+            for span_start, span_end, kind in spans:
+                bucket = half if kind is LeaveType.HALF_DAY else full
                 cursor = _aware(span_start).astimezone(tz).date()
                 last = _aware(span_end).astimezone(tz).date()
                 while cursor <= last:
-                    days.add(cursor)
+                    bucket.setdefault(emp_id, set()).add(cursor)
                     cursor += timedelta(days=1)
-            out[emp_id] = days
-        return out
+        return _LeaveDays(full, half)
 
     async def working_dates(self, first: date, last: date) -> list[date]:
         """The org's working dates in [first, last] inclusive: the policy's work
@@ -240,13 +268,19 @@ class AttendanceService:
         leave_dates = await self._approved_leave_dates(ids, start_date, last.isoformat(), spec)
         rows: list[AttendanceDayRow] = []
         for emp_id in ids:
-            on_leave = leave_dates.get(emp_id, set())
             window = employment.get(emp_id, _ALWAYS_EMPLOYED)
             for day in working:
                 iso = day.isoformat()
                 if (emp_id, iso) in existing or not window.covers(day):
                     continue
-                status = AttendanceStatus.ON_LEAVE if day in on_leave else AttendanceStatus.ABSENT
+                # No session at all, so there is no worked half to credit: a
+                # half-day leave reads as On leave here exactly as it always
+                # has. Only a day they actually worked becomes HALF_DAY_LEAVE.
+                status = (
+                    AttendanceStatus.ON_LEAVE
+                    if leave_dates.covers_any(emp_id, day)
+                    else AttendanceStatus.ABSENT
+                )
                 rows.append(
                     AttendanceDayRow(
                         employee_id=emp_id,
@@ -406,7 +440,15 @@ class AttendanceService:
                 # Working, just not here. Shown in its own right so a manager can
                 # see who is off site rather than reading it as a normal day.
                 status = AttendanceStatus.OUT_OF_OFFICE
-            elif v.status is AttendanceStatus.ABSENT and the_day in leave_dates.get(e.id, set()):
+            elif v.status is not AttendanceStatus.ABSENT and leave_dates.covers_half_only(
+                e.id, the_day
+            ):
+                # They worked, and half the day was approved leave. Its own
+                # status: as a plain HALF_DAY this read as someone who simply
+                # put in too few hours, which is what HR kept having to correct
+                # by hand. Hours worked stay on the row either way.
+                status = AttendanceStatus.HALF_DAY_LEAVE
+            elif v.status is AttendanceStatus.ABSENT and leave_dates.covers_any(e.id, the_day):
                 # No attendance, but covered by approved paid leave → On leave.
                 status = AttendanceStatus.ON_LEAVE
             else:
@@ -587,6 +629,7 @@ class AttendanceService:
         # otherwise forgive the lates the employee already used up.
         prior_lates = await self._lates_before(ids, start_date, spec)
         verdicts, _ = self._classified(grouped, approved, spec, clock, prior_lates)
+        leave_dates = await self._approved_leave_dates(ids, start_date, end_date, spec)
         rows: list[AttendanceDayRow] = []
         for emp_id, day, acc, v in verdicts:
             ov = overrides.get((emp_id, day))
@@ -595,6 +638,12 @@ class AttendanceService:
                 status = _OVERRIDE_TO_STATUS[ov]
             elif portion is not None:
                 status = AttendanceStatus.OUT_OF_OFFICE
+            elif v.status is not AttendanceStatus.ABSENT and leave_dates.covers_half_only(
+                emp_id, date.fromisoformat(day)
+            ):
+                # Same rule as the single-day board - these rows feed the range
+                # grid and the monthly report, and the three must agree.
+                status = AttendanceStatus.HALF_DAY_LEAVE
             else:
                 status = v.status
             rows.append(
@@ -749,6 +798,8 @@ class AttendanceService:
                 s.absent_days += 1
             elif r.status is AttendanceStatus.ON_LEAVE:
                 s.leave_days += 1
+            elif r.status is AttendanceStatus.HALF_DAY_LEAVE:
+                s.half_day_leave_days += 1
             elif r.status is AttendanceStatus.OUT_OF_OFFICE:
                 s.out_of_office_days += r.out_of_office_credit
             if r.regularized:
@@ -952,10 +1003,18 @@ def _summary_row(person: Employee, s: AttendanceMonthSummary) -> AttendanceSumma
         late_days=s.late_days,
         absent_days=s.absent_days,
         leave_days=s.leave_days,
+        half_day_leave_days=s.half_day_leave_days,
         regularized_days=s.regularized_days,
         # Present is what payroll counts: worked days, however late - plus days
-        # worked away from the office, which carry no session to count.
-        present_days=s.full_days + s.half_days + s.late_days + s.out_of_office_days,
+        # worked away from the office, which carry no session to count, and the
+        # worked half of a half-day-leave day (the other half is paid leave).
+        present_days=(
+            s.full_days
+            + s.half_days
+            + s.late_days
+            + s.out_of_office_days
+            + 0.5 * s.half_day_leave_days
+        ),
         worked_hours=round(s.worked_minutes / 60, 2),
         avg_check_in=_clock_minute(s.avg_check_in_minutes),
         avg_check_out=_clock_minute(s.avg_check_out_minutes),
@@ -986,6 +1045,7 @@ _ZERO = {
     "late_days": 0,
     "absent_days": 0,
     "leave_days": 0,
+    "half_day_leave_days": 0,
     "out_of_office_days": 0.0,
     "regularized_days": 0,
     "worked_minutes": 0,

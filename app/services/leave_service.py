@@ -39,6 +39,7 @@ from app.models.leave import (
     LeaveWithdrawalStatus,
 )
 from app.models.leave_comment import LeaveComment
+from app.models.leave_tier_quota import LeaveTierQuota
 from app.models.notification import NotificationKind, NotificationLevel
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
@@ -144,7 +145,11 @@ _LEAVES_LINK = "/dashboard/time/leaves"
 
 def _quota_bucket(leave_type: LeaveType) -> LeaveType | None:
     """The tracked quota a leave type spends from (half-day -> planned), or None
-    for an uncapped type such as unpaid leave."""
+    for an uncapped type such as unpaid leave.
+
+    The NOMINAL bucket. Where a half day actually lands depends on the person:
+    see `_half_day_members` and `LeaveBalanceRead.half_day_bucket`.
+    """
     for bucket, _policy_attr, _alloc_attr, _before_attr, members in _TRACKED_LEAVE:
         if leave_type in members:
             return bucket
@@ -339,23 +344,32 @@ class LeaveService:
         leave only - the request itself is one of the pending ones, and the other
         pending requests may still be rejected.
         """
-        balance = await self._compute_balance(employee, on=window[0])
+        balance = await self._compute_balance(
+            employee,
+            on=window[0],
+            # The band on the day being REQUESTED decides where this half day
+            # lands, so a day booked during probation is charged to sick leave
+            # even when it is approved after confirmation.
+            half_day_on=max(window[0], utc_date(request.start)),
+        )
+        if request.leave_type is LeaveType.HALF_DAY:
+            # Half-day is never withheld for tenure - the leave policy does not
+            # lock it during probation (see fe features/leaves/eligibility.ts).
+            # But it has to be charged to a quota that EXISTS, or approving one
+            # deducts nothing: with planned locked the balance moves it onto
+            # sick leave, and the monthly cap applies on top of that quota
+            # rather than in place of it.
+            bucket = balance.half_day_bucket
+            if bucket is not LeaveType.PLANNED:
+                await self._enforce_probation_half_day_cap(
+                    employee, request, at_approval=at_approval
+                )
         row = next((b for b in balance.balances if b.leave_type is bucket), None)
         if row is None:
             return
         label = _leave_type_label(bucket, None)
         year = f" for the {_leave_year_label(window)} leave year" if label_year else ""
         if not row.eligible:
-            # Half-day is deliberately never withheld for tenure: it only spends
-            # from the planned bucket and the leave policy does not lock it during
-            # probation (see fe features/leaves/eligibility.ts). With planned
-            # locked there is no quota to measure it against, so it is capped
-            # per calendar month instead of being unlimited.
-            if request.leave_type is not bucket:
-                await self._enforce_probation_half_day_cap(
-                    employee, request, at_approval=at_approval
-                )
-                return
             raise ValidationError(
                 row.ineligible_reason or f"You are not eligible for {label} leave yet."
             )
@@ -927,12 +941,16 @@ class LeaveService:
         return result
 
     async def _compute_balance(
-        self, employee: Employee, *, on: date | None = None
+        self, employee: Employee, *, on: date | None = None, half_day_on: date | None = None
     ) -> LeaveBalanceRead:
         """The balance picture for one employee, without authorization or audit.
 
         Shared by the balance endpoint and by `_enforce_balance`, so what the UI
         shows as "remaining" and what applying/approving enforces are one number.
+
+        `half_day_on` is the day whose tenure band decides `half_day_bucket` -
+        where a half day applied for THAT day would be charged. It never moves
+        an already-booked day, which is always judged by its own date.
 
         `on` picks the leave year (default: the current one). Entitlement is
         evaluated as of today, clamped into that year: a FUTURE year is judged
@@ -997,10 +1015,63 @@ class LeaveService:
         )
         all_rows = await self._tiers.seed_defaults()
         tier_rows = {row.leave_type: row for row in all_rows if row.tier is tier}
+        # Every band's rows, not just today's - `planned_locked_on` needs the
+        # band a past leave day fell in.
+        rows_by_tier: dict[TenureStatus, dict[LeaveType, LeaveTierQuota]] = {}
+        for row in all_rows:
+            rows_by_tier.setdefault(row.tier, {})[row.leave_type] = row
         # Accrual restarts at the leave-year boundary (carryforward is within the
         # year), and can't begin before the person is actually eligible.
         accrual_start = max(year_start, confirmed_on)
         accruing: list[LeaveType] = []
+
+        def locked(leave_type: LeaveType, alloc_attr: str) -> bool:
+            """Whether this band grants none of the type YET.
+
+            A statement about tenure, so it is read off the band - never off a
+            zero. A zero can equally be HR typing 0 into someone's override, or
+            a policy that grants none of a type, and calling either of those
+            "available after one year of service" is nonsense to an eight-year
+            employee looking at their own profile.
+            """
+            if allocation is not None and getattr(allocation, alloc_attr) is not None:
+                return False
+            row = tier_rows.get(leave_type)
+            return row is not None and row.monthly_accrual_days is None and row.annual_days == 0
+
+        def planned_locked_on(day: date) -> bool:
+            """`locked(PLANNED)` as it stood on `day`, not as it stands today."""
+            if allocation is not None and allocation.planned_days is not None:
+                return False
+            band = (
+                tenure_status(hired_on, day, probation_months=probation_months)
+                if hired_on is not None
+                else TenureStatus.TENURED
+            )
+            row = rows_by_tier.get(band, {}).get(LeaveType.PLANNED)
+            return row is not None and row.monthly_accrual_days is None and row.annual_days == 0
+
+        def spent_from(kind: LeaveType, day: date) -> LeaveType:
+            """The quota ONE leave day actually spends from.
+
+            Half days normally belong to the planned bucket. A band that grants
+            no planned leave - probation - leaves them nothing to spend from, so
+            they used to be counted into a locked card nobody is shown and
+            deducted from nothing at all: a probationer could take two half days
+            every month all year and every balance they could see stayed
+            untouched. HR had been subtracting them from sick leave by hand the
+            whole time, so that is where they go.
+
+            Judged by the band ON THE DAY, never today's. The quota a day spends
+            is settled when the day is taken; re-deciding it later would hand a
+            probationer their sick leave back the moment they were confirmed and
+            overdraw the planned leave they had only just been granted.
+            """
+            if kind is LeaveType.HALF_DAY and planned_locked_on(day):
+                return LeaveType.SICK
+            return _quota_bucket(kind) or kind
+
+        half_bucket = spent_from(LeaveType.HALF_DAY, half_day_on or as_of)
 
         def quota(leave_type: LeaveType, policy_attr: str, alloc_attr: str) -> float:
             """The employee's effective entitlement for the leave year.
@@ -1036,11 +1107,12 @@ class LeaveService:
 
         def bucket(
             rows: list[tuple[datetime, datetime, LeaveType, LeaveStatus]],
-            types: tuple[LeaveType, ...],
+            target: LeaveType,
         ) -> float:
+            """Working days in `rows` that spend from the `target` quota."""
             total = 0.0
             for s, e, kind, _status in rows:
-                if kind not in types:
+                if spent_from(kind, utc_date(s)) is not target:
                     continue
                 ls = max(year_start, utc_date(s))
                 le = min(year_end, utc_date(e))
@@ -1049,24 +1121,12 @@ class LeaveService:
             return total
 
         balances: list[LeaveTypeBalance] = []
-        for leave_type, policy_attr, alloc_attr, before_attr, types in _TRACKED_LEAVE:
+        for leave_type, policy_attr, alloc_attr, before_attr, _types in _TRACKED_LEAVE:
             allocated = quota(leave_type, policy_attr, alloc_attr)
             before = taken_before(before_attr)
-            used = bucket(approved, types) + before
-            pend = bucket(pending, types)
-            # "Not earned yet" is a statement about TENURE, so read it off the
-            # band — never off a zero. A zero can equally be HR typing 0 into
-            # someone's override, or a policy that grants none of a type, and
-            # calling either of those "available after one year of service" is
-            # nonsense to an eight-year employee looking at their own profile.
-            override = allocation is not None and getattr(allocation, alloc_attr) is not None
-            row = tier_rows.get(leave_type)
-            not_yet = (
-                not override
-                and row is not None
-                and row.monthly_accrual_days is None
-                and row.annual_days == 0
-            )
+            used = bucket(approved, leave_type) + before
+            pend = bucket(pending, leave_type)
+            not_yet = locked(leave_type, alloc_attr)
             balances.append(
                 LeaveTypeBalance(
                     leave_type=leave_type,
@@ -1080,8 +1140,8 @@ class LeaveService:
                 )
             )
         # Unpaid leave is uncapped — surfaced for visibility (used/pending only).
-        unpaid_used = bucket(approved, (LeaveType.UNPAID,))
-        unpaid_pending = bucket(pending, (LeaveType.UNPAID,))
+        unpaid_used = bucket(approved, LeaveType.UNPAID)
+        unpaid_pending = bucket(pending, LeaveType.UNPAID)
         balances.append(
             LeaveTypeBalance(
                 leave_type=LeaveType.UNPAID,
@@ -1099,6 +1159,7 @@ class LeaveService:
             tenure_status=tier,
             probation_end_date=confirmed_on,
             accruing_types=accruing,
+            half_day_bucket=half_bucket,
         )
 
     async def list_comments(

@@ -32,7 +32,7 @@ from zoneinfo import ZoneInfo
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from app.core import storage
+from app.core import storage, work_timeline
 from app.core.config import Settings
 from app.core.exceptions import (
     AuthorizationError,
@@ -46,7 +46,12 @@ from app.models.eod_report import EodReport, EodStatus
 from app.models.notification import NotificationKind
 from app.models.screenshot import Screenshot
 from app.models.task import Task, TaskStatus
-from app.repositories.activity import ActivityRepository, DailyAgg, idle_minutes
+from app.repositories.activity import (
+    IDLE_SAMPLE_SECONDS,
+    ActivityRepository,
+    DailyAgg,
+    idle_minutes,
+)
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.eod_report import EodReportRepository
@@ -611,6 +616,9 @@ class EodService:
             raise AuthorizationError()
         report_date = await self._local_date(now)
         start, end = await self._day_bounds(now)
+        # Once for the run, not once per person: `spec()` is a DB read and
+        # the timeline below needs a timezone for every employee.
+        tz = ZoneInfo((await self._policy.spec()).timezone)
         # Deliberately the ADMINISTRATIVE scope, not the personal one: this
         # generates the nightly drafts for the whole roster. Narrowing it to the
         # admin's own reports would silently stop producing EOD for everyone else.
@@ -642,7 +650,7 @@ class EodService:
         vision_blocks = await self._vision_blocks(present, start, end)
         # Phase 1 — build each person's context (DB; sequential on the shared session).
         built = [
-            await self._build_context(caller, e, start, end, vision_blocks.get(e.id, ""))
+            await self._build_context(caller, e, start, end, vision_blocks.get(e.id, ""), tz=tz)
             for e in present
         ]
         # Phase 2 — summarise concurrently; the LLM is network-bound, so bound the
@@ -912,6 +920,38 @@ class EodService:
         return None
 
     # ---- context + time helpers ------------------------------------------- #
+    async def _timeline_block(
+        self, employee_id: uuid.UUID, start: datetime, end: datetime, tz: ZoneInfo
+    ) -> str:
+        """The day's work in order, assembled from window titles.
+
+        The only block in the prompt that carries SEQUENCE, and the widest
+        signal there is: 99% of samples name an active window, against OCR
+        text that names a known entity in 45% of screenshots. "Editor, then
+        tests, then the pull request" says what an afternoon was for in a
+        way the same titles as an unordered bag never can.
+
+        Idle samples go first - a window left open over lunch is not work,
+        and `IDLE_SAMPLE_SECONDS` is the same threshold the attendance
+        rollup already trusts for exactly that judgement.
+        """
+        samples = await self._activity.samples_for_employee(employee_id, start, end)
+        stretches = work_timeline.assemble(
+            [
+                work_timeline.Sample(
+                    when=sample.received_at,
+                    window=sample.active_window,
+                    page_title=sample.page_title,
+                    domain=sample.domain,
+                )
+                for sample in samples
+                if (sample.idle_seconds or 0) < IDLE_SAMPLE_SECONDS
+            ]
+        )
+        return work_timeline.narrate(
+            stretches, tz=tz, char_budget=self._settings.eod_timeline_char_budget
+        )
+
     async def _build_context(
         self,
         caller: CurrentUser,
@@ -919,6 +959,8 @@ class EodService:
         start: datetime,
         end: datetime,
         vision_block: str,
+        *,
+        tz: ZoneInfo,
     ) -> tuple[str, dict[str, object], bool]:
         """Returns (LLM context text, day metrics for the email card, has-signal).
         `has_signal` is False only when nothing at all was observed — those days
@@ -938,6 +980,7 @@ class EodService:
         agg = aggs.get(employee.id)
         ocr = await self._screenshots.ocr_text_for_day(employee.id, start, end)
         ocr_text = "\n".join(ocr)[: self._settings.eod_ocr_char_budget]
+        timeline = await self._timeline_block(employee.id, start, end, tz)
 
         worked_minutes, active_minutes = _worked_metrics(agg)
         metrics: dict[str, object] = {
@@ -945,7 +988,7 @@ class EodService:
             "active_minutes": active_minutes,
             "tasks_done": len(completed),
         }
-        has_signal = bool(completed or active or agg or ocr_text or vision_block)
+        has_signal = bool(completed or active or agg or ocr_text or vision_block or timeline)
 
         lines = [
             f"Employee: {employee.full_name}"
@@ -957,6 +1000,13 @@ class EodService:
             f"Tasks completed today: {_join(completed)}",
             f"Tasks in progress / due today: {_join(active)}",
         ]
+        if timeline:
+            lines += [
+                "",
+                "What they worked on, in order, with how long on each "
+                "(from active window titles - the strongest signal here):",
+                timeline,
+            ]
         if vision_block:
             lines += [
                 "",

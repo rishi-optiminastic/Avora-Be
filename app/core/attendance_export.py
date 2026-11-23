@@ -35,6 +35,9 @@ class AttendanceSummaryRow:
     late_days: int
     absent_days: int
     leave_days: int
+    # Days half spent on approved leave and half worked. Its own column so the
+    # sheet matches the screen, and so "leave days" keeps meaning whole days.
+    half_day_leave_days: int
     regularized_days: int
     # Float: a half day spent out of the office credits half a day.
     present_days: float
@@ -54,6 +57,7 @@ class AttendanceSummaryRow:
             self.late_days,
             self.absent_days,
             self.leave_days,
+            self.half_day_leave_days,
             self.regularized_days,
             self.worked_hours,
             self.avg_check_in,
@@ -106,6 +110,7 @@ _SUMMARY_HEADERS = [
     "Late days",
     "Absent days",
     "Leave days",
+    "Half-day leave",
     "Regularised days",
     "Total hours",
     "Avg check in",
