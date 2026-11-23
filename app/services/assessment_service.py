@@ -99,6 +99,7 @@ class AssessmentService:
         row = await self._assessments.add(
             title=payload.title,
             description=payload.description,
+            department=payload.department,
             pass_mark=payload.pass_mark,
             time_limit_minutes=payload.time_limit_minutes,
             created_by=caller.employee_id,
@@ -130,6 +131,7 @@ class AssessmentService:
 
         row.title = payload.title
         row.description = payload.description
+        row.department = payload.department
         row.pass_mark = payload.pass_mark
         row.time_limit_minutes = payload.time_limit_minutes
 
@@ -158,6 +160,7 @@ class AssessmentService:
                 options=list(question.options),
                 correct=sorted(set(question.correct)),
                 points=question.points,
+                competency=(question.competency or "").strip() or None,
             )
 
     async def publish(self, caller: CurrentUser, assessment_id: uuid.UUID) -> AssessmentDetail:
@@ -171,6 +174,17 @@ class AssessmentService:
         questions = await self._assessments.questions_for(row.id)
         if not questions:
             raise ConflictError("Add at least one question before publishing.")
+        # A question with no key marks EVERYBODY wrong - `is_right` cannot
+        # satisfy an empty key, by design - so publishing one would quietly
+        # cost every taker a mark. A draft is allowed to be incomplete;
+        # something people sit is not.
+        unkeyed = [q.position + 1 for q in questions if not q.correct]
+        if unkeyed:
+            numbers = ", ".join(str(n) for n in unkeyed)
+            raise ConflictError(
+                "These questions have no correct answer marked yet, so nobody could "
+                f"pass them: {numbers}. Set the answer key before publishing."
+            )
         row.status = AssessmentStatus.PUBLISHED
         row.published_at = datetime.now(UTC)
         await self._audit.append(
@@ -332,10 +346,15 @@ class AssessmentService:
 
     # --- reading ----------------------------------------------------------- #
     async def list_assessments(self, caller: CurrentUser) -> list[AssessmentRead]:
-        rows = await self._assessments.list_all(include_drafts=_may_manage(caller))
-        totals = await self._assessments.question_totals([r.id for r in rows])
-        counts = await self._assessments.counts_for([r.id for r in rows])
-        return [self._summary(r, totals, counts) for r in rows]
+        manages = _may_manage(caller)
+        rows = await self._assessments.list_all(include_drafts=manages)
+        ids = [r.id for r in rows]
+        totals = await self._assessments.question_totals(ids)
+        counts = await self._assessments.counts_for(ids)
+        # Only HR can act on an unkeyed draft, and only HR is shown drafts at
+        # all, so nobody else pays for the query.
+        unkeyed = await self._assessments.unkeyed_counts(ids) if manages else {}
+        return [self._summary(r, totals, counts, unkeyed=unkeyed.get(r.id, 0)) for r in rows]
 
     async def detail(self, caller: CurrentUser, assessment_id: uuid.UUID) -> AssessmentDetail:
         """HR's view of a test, answer key included."""
@@ -386,7 +405,9 @@ class AssessmentService:
         questions = await self._assessments.questions_for(row.id)
         totals = await self._assessments.question_totals([row.id])
         counts = await self._assessments.counts_for([row.id])
-        summary = self._summary(row, totals, counts)
+        summary = self._summary(
+            row, totals, counts, unkeyed=sum(1 for q in questions if not q.correct)
+        )
         return AssessmentDetail(
             **summary.model_dump(),
             questions=[QuestionForAuthor.model_validate(q) for q in questions],
@@ -397,6 +418,7 @@ class AssessmentService:
         row: Assessment,
         totals: dict[uuid.UUID, tuple[int, int]],
         counts: dict[uuid.UUID, AttemptCounts],
+        unkeyed: int = 0,
     ) -> AssessmentRead:
         count, points = totals.get(row.id, (0, 0))
         seen = counts.get(row.id)
@@ -404,6 +426,7 @@ class AssessmentService:
             update={
                 "question_count": count,
                 "total_points": points,
+                "unkeyed_count": unkeyed,
                 "assigned_count": seen.assigned if seen else 0,
                 "submitted_count": seen.submitted if seen else 0,
             }
@@ -457,10 +480,12 @@ class AssessmentService:
                     AnswerResult(
                         question_id=q.id,
                         prompt=q.prompt,
+                        competency=q.competency,
                         options=list(q.options),
                         chosen=list(answers[q.id].chosen) if q.id in answers else [],
                         is_correct=answers[q.id].is_correct if q.id in answers else False,
                         points_awarded=answers[q.id].points_awarded if q.id in answers else 0.0,
+                        points=q.points,
                         correct=sorted(q.correct),
                     )
                     for q in questions

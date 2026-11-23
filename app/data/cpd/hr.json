@@ -1,0 +1,309 @@
+{
+  "department": "HR",
+  "title": "CPD Assessment - HR",
+  "description": "20 questions, 1 mark each, across five competencies: Technical Knowledge (8), Problem Solving (3), Communication (3), Interpersonal Effectiveness (3), Cultural Alignment & Ownership (3). Capability bands: 0-39% L1 Foundational, 40-59% L2 Developing, 60-74% L3 Competent, 75-89% L4 Proficient, 90-100% L5 Advanced.",
+  "pass_mark": 60,
+  "time_limit_minutes": null,
+  "questions": [
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Workforce Planning & Talent Acquisition\n\nA department anticipates a 30% increase in workload over the next two quarters. The department head requests immediate recruitment for five additional employees. However, the existing team has inconsistent workload distribution, and some roles have overlapping responsibilities. What should the HR Manager do before approving the hiring requirement?",
+      "kind": "single",
+      "options": [
+        "Initiate recruitment for all five positions because the department head is responsible for identifying operational requirements.",
+        "Analyse current workforce capacity, workload distribution, role overlaps, productivity, and future business requirements before determining whether additional hiring or restructuring is necessary.",
+        "Ask the department head to revise the existing employees' KRAs and defer all recruitment until the next performance cycle.",
+        "Approve recruitment for the most critical positions and evaluate the remaining requirements after the new employees join."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Payroll, Attendance & Statutory Compliance\n\nDuring a monthly payroll review, HR identifies that an employee's attendance records, approved leave entries, and payroll inputs do not match. The payroll processing deadline is approaching. What is the most appropriate course of action?",
+      "kind": "single",
+      "options": [
+        "Process payroll using the attendance system's final report because system-generated records should take precedence over manual approvals.",
+        "Process the salary based on the employee's previous month's attendance and adjust the difference in the following payroll cycle.",
+        "Hold the employee's entire salary until all discrepancies have been resolved, regardless of the amount involved.",
+        "Reconcile the attendance records with approved leave and supporting documentation, coordinate with the relevant stakeholders, correct verified discrepancies, and maintain an audit trail before finalising payroll."
+      ],
+      "correct": [
+        3
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Performance Management\n\nAn organisation has completed its annual performance appraisal cycle. Most employees have received similar ratings despite significant differences in performance. Department managers have used inconsistent evaluation criteria, and employees are questioning the fairness of the process. What should the HR Manager prioritise?",
+      "kind": "single",
+      "options": [
+        "Conduct a calibration exercise using defined performance criteria, review supporting evidence, identify rating inconsistencies, and align managers before finalising outcomes.",
+        "Standardise ratings by distributing employees equally across performance categories to ensure consistency.",
+        "Retain the ratings submitted by managers because they are closest to the employees' day-to-day performance.",
+        "Replace the existing appraisal process with self-assessments so that employees have greater control over their ratings."
+      ],
+      "correct": [
+        0
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Employee Relations & Grievance Management\n\nAn employee approaches HR with a formal complaint against their reporting manager, alleging repeated disrespectful behaviour and unfair treatment. The manager is a high-performing employee who is considered critical to business operations. What should the HR Manager do?",
+      "kind": "single",
+      "options": [
+        "Discuss the concern informally with the manager and close the matter if the manager agrees to improve their behaviour.",
+        "Transfer the employee to another reporting manager to prevent further conflict.",
+        "Acknowledge the complaint, follow a fair and confidential fact-finding process, document relevant information, and take appropriate action based on the findings and applicable policies.",
+        "Escalate the complaint directly to senior leadership and wait for their instructions before initiating any review."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "HR Analytics & Decision-Making\n\nAn organisation's employee attrition rate has increased over the last two quarters. Leadership requests HR to identify the reason and recommend corrective measures. Which approach would provide the most meaningful insight?",
+      "kind": "single",
+      "options": [
+        "Compare the overall attrition percentage with industry benchmarks and introduce a retention incentive if the organisation's rate is higher.",
+        "Analyse attrition by department, tenure, designation, manager, performance, and exit feedback, then identify patterns and validate potential causes before recommending interventions.",
+        "Conduct an employee engagement survey and use the overall satisfaction score to determine the primary reason for attrition.",
+        "Review exit interviews from employees who left during the most recent month and implement the most frequently suggested improvement."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Employee Lifecycle & Onboarding\n\nAn organisation is hiring employees across multiple departments. Although offer acceptance rates are high, several new employees leave within their first three months. Feedback suggests that employees experience unclear expectations, inconsistent induction, and limited manager interaction. What should HR prioritise?",
+      "kind": "single",
+      "options": [
+        "Introduce a structured onboarding framework covering pre-boarding, role clarity, induction, manager check-ins, early feedback, and probation reviews, with measurable checkpoints.",
+        "Increase the duration of the induction programme and ensure all new employees attend the same training sessions.",
+        "Introduce a mandatory employee engagement survey after the first month and use the results to assess onboarding effectiveness.",
+        "Extend probation for all new employees so that the organisation has more time to evaluate their suitability."
+      ],
+      "correct": [
+        0
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "HR Policy, Compliance & Risk Management\n\nDuring an internal HR audit, you discover that an existing company policy does not reflect a recent change in an applicable statutory requirement. The policy is being followed across departments, and managers are unaware of the discrepancy. What should the HR Manager do?",
+      "kind": "single",
+      "options": [
+        "Continue following the existing policy until the next scheduled policy review to avoid disrupting current processes.",
+        "Inform employees that statutory requirements take precedence over company policies and allow each department to interpret the change independently.",
+        "Immediately replace the policy with a revised version without reviewing its operational implications or consulting relevant stakeholders.",
+        "Assess the statutory requirement and organisational exposure, obtain appropriate legal or compliance input where necessary, update the policy and related processes, and communicate the changes to relevant stakeholders."
+      ],
+      "correct": [
+        3
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "HR Strategy & Organisational Development\n\nAn organisation is expanding rapidly, but its HR processes remain informal. Recruitment decisions are inconsistent, performance expectations are unclear, employee data is fragmented, and managers rely heavily on HR for routine decisions. Leadership expects HR to support the next phase of growth. What should the HR Manager prioritise?",
+      "kind": "single",
+      "options": [
+        "Focus primarily on introducing new employee engagement initiatives to improve morale during the growth phase.",
+        "Recruit additional HR executives so that operational activities can be completed more quickly.",
+        "Establish scalable HR processes, clear ownership and accountability, reliable workforce data, structured performance practices, and manager capabilities aligned with business priorities.",
+        "Introduce a comprehensive HR policy manual covering every possible employee situation before addressing operational gaps."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Problem Solving",
+      "prompt": "A critical business function has experienced repeated recruitment delays. Hiring managers frequently change requirements after recruitment has started, interview feedback is delayed, and selected candidates drop out due to extended decision-making timelines. What should HR do?",
+      "kind": "single",
+      "options": [
+        "Increase sourcing channels and maintain a larger candidate pipeline to compensate for the delays.",
+        "Analyse the recruitment process, identify bottlenecks, establish role clarity and decision-making timelines, define stakeholder accountability, and monitor recruitment metrics.",
+        "Ask hiring managers to independently manage interviews and share only the final selection decision with HR.",
+        "Introduce stricter candidate deadlines so that applicants must accept offers within a shorter period."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Problem Solving",
+      "prompt": "An organisation's employee engagement survey indicates low satisfaction with career growth and management communication. However, employees continue to report positive relationships with colleagues and satisfaction with the work environment. Leadership asks HR to introduce a general employee engagement programme. What would be the most effective response?",
+      "kind": "single",
+      "options": [
+        "Introduce organisation-wide celebrations, rewards, and recreational activities to improve employee morale.",
+        "Increase the frequency of employee engagement surveys to track whether satisfaction improves.",
+        "Introduce a standardised career development programme for all employees without involving department managers.",
+        "Analyse the survey results by employee group, validate the underlying concerns through focused discussions, and develop targeted interventions involving managers and career development practices."
+      ],
+      "correct": [
+        3
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Problem Solving",
+      "prompt": "A department manager requests HR to initiate a Performance Improvement Plan (PIP) for an employee due to poor performance. However, the employee's goals were never clearly communicated, performance feedback was inconsistent, and no documented review discussions have taken place. What should HR do?",
+      "kind": "single",
+      "options": [
+        "Review the role expectations, available performance evidence, previous feedback, and managerial accountability before determining an appropriate corrective or performance support process.",
+        "Initiate the PIP immediately because the reporting manager is responsible for evaluating the employee's performance.",
+        "Reject the request because a PIP cannot be initiated unless the employee has received a formal written warning.",
+        "Ask the employee to submit a self-assessment and use it as the primary basis for deciding whether a PIP is required."
+      ],
+      "correct": [
+        0
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Communication",
+      "prompt": "Leadership announces an organisational restructuring that will change reporting relationships and responsibilities across several departments. Employees are concerned about job security and possible changes to their roles. What should the HR Manager do?",
+      "kind": "single",
+      "options": [
+        "Communicate only the confirmed reporting changes and avoid discussing employee concerns until leadership makes further decisions.",
+        "Ask department managers to independently explain the restructuring to their teams to ensure that communication comes from direct reporting managers.",
+        "Coordinate with leadership to communicate the rationale, confirmed changes, expected timelines, and known implications clearly, while addressing employee questions transparently and avoiding unsupported assurances.",
+        "Send a detailed email explaining every possible organisational change so that employees have complete information."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Communication",
+      "prompt": "A senior manager insists that an employee should be terminated immediately due to a disagreement, but the employee has not been given an opportunity to explain their position. How should HR communicate its recommendation?",
+      "kind": "single",
+      "options": [
+        "Agree with the senior manager to maintain the relationship and avoid delaying the business decision.",
+        "Explain the importance of a fair and documented process, outline the potential organisational and legal risks, and recommend appropriate next steps based on the facts and applicable policy.",
+        "Inform the senior manager that HR alone has the authority to decide employee termination matters.",
+        "Ask the employee to resign voluntarily to avoid a lengthy internal process."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Communication",
+      "prompt": "You have presented HR analytics to leadership showing an increase in employee attrition and recruitment costs. However, leadership believes the issue is primarily caused by HR's inability to retain employees. How should you respond?",
+      "kind": "single",
+      "options": [
+        "Defend the HR team's efforts by explaining the number of engagement activities and recruitment initiatives completed during the period.",
+        "Share additional employee feedback and request leadership to reconsider its assessment of HR's performance.",
+        "Avoid challenging leadership's view and focus on implementing more retention initiatives.",
+        "Present the underlying data, distinguish between observed trends and validated causes, explain the organisational factors influencing attrition, and recommend measurable actions with shared accountability."
+      ],
+      "correct": [
+        3
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Interpersonal Effectiveness",
+      "prompt": "A department head frequently bypasses established HR processes, including recruitment approvals and performance documentation, stating that these processes slow down business operations. This has started creating inconsistencies across teams. How should the HR Manager handle the situation?",
+      "kind": "single",
+      "options": [
+        "Understand the manager's operational concerns, explain the purpose of the processes, and work towards a practical solution that maintains necessary controls without creating avoidable delays.",
+        "Escalate the manager's behaviour to leadership immediately and request formal intervention.",
+        "Allow the manager to operate independently because department-specific requirements may differ from standard HR processes.",
+        "Enforce all existing HR processes without modifications to ensure that every department follows the same procedures."
+      ],
+      "correct": [
+        0
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Interpersonal Effectiveness",
+      "prompt": "Two employees from different departments are involved in a workplace conflict. Both approach HR and provide contradictory accounts of the incident. Their managers have already taken different positions on the matter. What should HR do?",
+      "kind": "single",
+      "options": [
+        "Ask the respective managers to resolve the issue because they are responsible for managing their employees.",
+        "Bring both employees together immediately and ask them to resolve their differences directly.",
+        "Hear both employees independently, gather relevant facts, remain neutral, identify the underlying issue, and facilitate a fair resolution based on the circumstances.",
+        "Transfer one of the employees to another department to prevent the conflict from affecting business operations."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Interpersonal Effectiveness",
+      "prompt": "A new manager has strong technical expertise but struggles with giving feedback, managing team expectations, and handling employee concerns. Their team has started approaching HR for routine managerial issues. What would be the most effective approach?",
+      "kind": "single",
+      "options": [
+        "Take over the team's employee-related matters so that the manager can focus on operational responsibilities.",
+        "Coach the manager on feedback, communication, and people management, establish clear expectations for managerial ownership, and provide structured support to monitor improvement.",
+        "Recommend that leadership replace the manager because people management is a critical requirement of the position.",
+        "Conduct a general leadership training programme for all managers without addressing the specific issues affecting this team."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Cultural Alignment & Ownership",
+      "prompt": "During a confidential employee relations discussion, a senior leader informally requests access to an employee's personal complaint and supporting documentation. The leader is not directly involved in the matter but states that the information may be useful for management decisions. What should the HR Manager do?",
+      "kind": "single",
+      "options": [
+        "Share the complete documentation because senior leadership should have access to employee-related information.",
+        "Refuse to share any information with leadership under all circumstances, regardless of organisational requirements.",
+        "Share the employee's identity and complaint summary verbally while avoiding written documentation.",
+        "Assess the legitimate business need and authorised access, protect confidentiality, and share only the necessary information through appropriate channels in accordance with applicable policies and requirements."
+      ],
+      "correct": [
+        3
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Cultural Alignment & Ownership",
+      "prompt": "You identify that several HR processes are being handled manually across spreadsheets and email, resulting in repeated data errors and delays. The organisation already has access to an HRMS platform, but its features are not being fully utilised. What demonstrates the strongest ownership?",
+      "kind": "single",
+      "options": [
+        "Identify process gaps, evaluate how the existing HRMS can address them, coordinate implementation and user adoption, and monitor improvements in accuracy and efficiency.",
+        "Continue with the existing manual process because changing systems may disrupt ongoing HR operations.",
+        "Recommend purchasing a new HRMS immediately because the existing platform has not resolved operational inefficiencies.",
+        "Delegate the system-related work to the HR operations team and focus on strategic HR activities."
+      ],
+      "correct": [
+        0
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Cultural Alignment & Ownership",
+      "prompt": "Leadership asks HR to reduce employee-related costs significantly within the next quarter. The proposed reduction may affect training, recruitment, and employee engagement initiatives. What should the HR Manager do?\n\nQ.\n\nCorrect answer\n\nCompetency\n\nRationale",
+      "kind": "single",
+      "options": [
+        "Implement uniform budget cuts across all HR activities to meet the financial target.",
+        "Protect all existing HR programmes because reducing employee-related investment may negatively affect morale.",
+        "Evaluate the cost structure, business priorities, workforce requirements, and potential impact of each initiative, then present options that balance financial objectives with critical people needs.",
+        "Reduce recruitment and training expenditure first because these costs can be restored once the organisation's financial position improves."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    }
+  ]
+}

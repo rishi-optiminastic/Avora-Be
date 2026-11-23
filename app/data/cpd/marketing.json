@@ -1,0 +1,269 @@
+{
+  "department": "Marketing",
+  "title": "CPD Assessment - Marketing",
+  "description": "20 questions, 1 mark each, across five competencies: Technical Knowledge (8), Problem Solving (3), Communication (3), Interpersonal Effectiveness (3), Cultural Alignment & Ownership (3). Capability bands: 0-39% L1 Foundational, 40-59% L2 Developing, 60-74% L3 Competent, 75-89% L4 Proficient, 90-100% L5 Advanced.",
+  "pass_mark": 60,
+  "time_limit_minutes": null,
+  "questions": [
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Evaluating conflicting efficiency signals\n\nTwo campaigns use comparable qualification criteria and reporting periods. The business requires at least 90 qualified enquiries per month.\n\nMetric | Campaign A | Campaign B\nSpend | ₹18,000 | ₹24,000\nEnquiries | 360 | 400\nQualified enquiries | 72 | 100\n\nBudget cannot increase this month. Campaign A has a lower cost per enquiry, while Campaign B meets the qualification requirement. Which recommendation best addresses the business constraint?",
+      "kind": "single",
+      "options": [
+        "Maintain A and reduce its cost per enquiry further, then reassess whether qualification can reach the required level.",
+        "Prioritise B while investigating whether its higher spend can be reduced without compromising qualified-enquiry volume.",
+        "Split spend proportionately to observed qualified-enquiry rates, then use the next reporting period to establish a stable allocation.",
+        "Retain the existing allocation until both campaigns have comparable qualified-enquiry volumes, avoiding a decision based on unequal output."
+      ],
+      "correct": [],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Distinguishing content effectiveness from distribution\n\nAn organic content series has a 25% lower engagement rate than its predecessor but generates 18% more profile visits per post. The new series received 40% more reach, and the audience mix changed. The objective is to increase relevant profile visits without reducing audience quality. The next content plan must be approved today.\n\nWhich decision is most defensible?",
+      "kind": "single",
+      "options": [
+        "Continue the new series because profile visits per post improved, then monitor audience quality during the next cycle.",
+        "Retain the previous series because its higher engagement rate indicates stronger audience resonance under the existing strategy.",
+        "Compare profile-visit rates against reach and segment audience quality before allocating the next cycle's production capacity.",
+        "Run both series at the same frequency next month to create a larger dataset before changing the content strategy."
+      ],
+      "correct": [],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Process flow - Designing an interpretable test\n\nTwo creative concepts must be compared within seven days. Distribution is limited, and the result will determine which concept receives the next month's production budget. The team cannot guarantee a large sample.\n\nArrange the steps in the most appropriate sequence.\n\nA. Execute the comparison under the defined conditions.\n\nB. Specify the hypothesis and the decision the test must inform.\n\nC. Interpret the observed result against the decision criteria and limitations.\n\nD. Establish the primary outcome, baseline, and minimum evidence needed to act.",
+      "kind": "single",
+      "options": [
+        "B → D → A → C",
+        "D → B → C → A",
+        "B → A → D → C",
+        "D → A → B → C"
+      ],
+      "correct": [],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Diagnosing an apparent improvement\n\nFollowing a creative refresh, click-through rate rises by 22%, cost per click falls by 12%, and qualified enquiries remain unchanged. Spend increases by 15%, and the observation period is four days. The campaign must continue for another week, but the next budget allocation is being considered today.\n\nWhich interpretation should guide the decision?",
+      "kind": "single",
+      "options": [
+        "Retain the refreshed creative and increase its allocation cautiously because two leading indicators improved without a decline in qualified enquiries.",
+        "Restore the previous creative because unchanged qualified enquiries indicate that the improved engagement signals have not translated into business value.",
+        "Compare qualified-enquiry rates by audience segment and investigate traffic quality before deciding whether the refreshed creative merits additional budget.",
+        "Maintain the current allocation until a full week of data is available, since the short observation period makes the current differences unreliable."
+      ],
+      "correct": [],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Comparing content formats under unequal conditions\n\nThree content formats have different reach, posting frequency and production effort. The business wants to identify formats that efficiently generate relevant website visits. One format receives high reach through occasional distribution spikes; another generates fewer visits but consistently attracts the intended audience.\n\nWhich evaluation method is strongest?",
+      "kind": "single",
+      "options": [
+        "Rank formats by total relevant visits, then use production hours to distinguish formats with similar results.",
+        "Compare relevant visits per post and engagement rate, using production effort to assess whether the output is sustainable.",
+        "Compare relevant visits relative to reach, segment audience relevance, and consider production effort and exposure differences before ranking formats.",
+        "Compare cost per relevant visit using production hours as the cost measure, then retain formats with the lowest apparent cost."
+      ],
+      "correct": [],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Resolving conflicting conversion records\n\nA paid campaign reports 186 conversions, while the CRM records 151. The campaign uses a seven-day attribution window, while the CRM report is based on records created during the calendar week. A budget review is scheduled in 60 minutes.\n\nWhat should the team do before making the recommendation?",
+      "kind": "single",
+      "options": [
+        "Use CRM conversions as the commercial source of truth and report the platform total separately for optimisation context.",
+        "Align reporting periods and conversion definitions, reconcile records where possible, and state the remaining uncertainty before using the figures.",
+        "Recalculate the platform report using the CRM total as the benchmark, then investigate tracking if the budget recommendation changes.",
+        "Retain both figures and recommend no budget change until the tracking and attribution systems produce matching totals."
+      ],
+      "correct": [],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Balancing platform adaptation and message consistency\n\nA campaign requires six assets across three social platforms. The approved offer and core message cannot change. Each platform has different format constraints and audience behaviours, but production capacity permits only two substantial adaptations. Historical performance data is available but differs in recency and sample size.\n\nWhich production decision is most defensible?",
+      "kind": "single",
+      "options": [
+        "Use a common master asset across all platforms and prioritise technical compliance, avoiding creative changes that make comparisons less consistent.",
+        "Develop platform-specific concepts based on each platform's strongest historical result, preserving the offer and visual identity.",
+        "Prioritise adaptations where format constraints or reliable evidence indicate a material opportunity, while preserving the approved message and documenting assumptions.",
+        "Allocate the two adaptations to the platforms with the largest audiences, using reach potential as the most consistent basis for prioritisation."
+      ],
+      "correct": [],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Process flow - Turning campaign results into action\n\nA campaign ends below its primary objective. The dashboard contains inconsistencies, the next brief is due tomorrow, and the team must avoid carrying unsupported conclusions into the next plan.\n\nArrange the steps in the most appropriate sequence.\n\nA. Identify plausible performance drivers using the validated evidence.\n\nB. Define the next test or operational improvement.\n\nC. Compare observed results with the intended objectives.\n\nD. Validate data quality and record limitations.",
+      "kind": "single",
+      "options": [
+        "C → A → D → B",
+        "D → C → B → A",
+        "C → D → A → B",
+        "D → A → C → B"
+      ],
+      "correct": [],
+      "points": 1
+    },
+    {
+      "competency": "Problem Solving",
+      "prompt": "Prioritising concurrent risks\n\nThree issues arise simultaneously:\n\nA live campaign destination is intermittently failing.\n\nA monthly report containing unreconciled figures is due in 90 minutes.\n\nA scheduled content asset has a minor formatting defect.\n\nThe destination failure may be affecting conversions, but its scale is unknown. One team member can investigate the live issue; the report owner is available, but no replacement resource is available for the formatting defect.\n\nWhat is the strongest response?",
+      "kind": "single",
+      "options": [
+        "Investigate the destination first, pause affected delivery if necessary, and assign the report owner to reconciliation while deferring the non-critical formatting work.",
+        "Pause the entire campaign, complete the report using verified figures, and resume delivery after the destination has been fully diagnosed.",
+        "Resolve the formatting defect first because it is a known issue, then divide the remaining time between the campaign and report.",
+        "Prioritise the report because its deadline is fixed, while asking the campaign owner to monitor the destination and report any further deterioration."
+      ],
+      "correct": [],
+      "points": 1
+    },
+    {
+      "competency": "Problem Solving",
+      "prompt": "Making a decision from confounded results\n\nA content format performs well in two posts and poorly in a third. The successful posts received substantially higher distribution; the third coincided with a major industry event. Only one production slot remains next week, and the team needs to decide whether to retain the format.\n\nWhich action offers the strongest next step?",
+      "kind": "single",
+      "options": [
+        "Retain the format because two positive observations outweigh one result affected by unusual external conditions.",
+        "Replace the format temporarily because inconsistent performance creates an opportunity to explore alternative content approaches.",
+        "Use the available slot for a comparable repeat, controlling relevant distribution differences where feasible and defining what evidence would change the decision.",
+        "Publish a different format next week, then compare all available results to determine whether the original format remains competitive."
+      ],
+      "correct": [],
+      "points": 1
+    },
+    {
+      "competency": "Problem Solving",
+      "prompt": "Fixing a recurring delivery problem\n\nFour projects have missed deadlines. Two were delayed by incomplete briefs, one by repeated revisions, and one by a publishing error. Management requires one process improvement before the next sprint. The team has insufficient capacity to introduce a comprehensive new workflow.\n\nWhich approach is most defensible?",
+      "kind": "single",
+      "options": [
+        "Introduce mandatory readiness checks for every project, even if this increases initial setup time, to prevent incomplete inputs from entering production.",
+        "Add approval checkpoints and deadline escalation rules to every project so that emerging delays become visible earlier.",
+        "Identify the most consequential preventable failure, introduce a targeted control with a named owner, and review its effect after the next sprint.",
+        "Add standard buffers to all project timelines while retaining the current workflow until a larger process review can be completed."
+      ],
+      "correct": [],
+      "points": 1
+    },
+    {
+      "competency": "Communication",
+      "prompt": "Reporting a result with a measurement change\n\nA report shows a 14% improvement in campaign performance. During the reporting period, the platform changed its attribution window. The previous period cannot be reconstructed completely, but several unaffected metrics are available. Leadership requires a budget recommendation today.\n\nWhich reporting approach is strongest?",
+      "kind": "single",
+      "options": [
+        "Report the 14% improvement with a prominent comparability caveat and base the recommendation on the available unaffected measures where possible.",
+        "Exclude the comparison and recommend retaining the current budget until a fully comparable reporting period is available.",
+        "Reconstruct the previous period using the closest available proxy, disclose the method, and use the adjusted trend for the main recommendation.",
+        "Present the platform-reported improvement and the attribution change together, then let leadership decide whether the result is sufficiently reliable."
+      ],
+      "correct": [],
+      "points": 1
+    },
+    {
+      "competency": "Communication",
+      "prompt": "Negotiating a conflicting stakeholder request\n\nA stakeholder requests daily content instead of three posts per week. Production capacity is fixed, and previous high-frequency periods reduced quality. The stakeholder's stated objective is more qualified audience engagement, but they also want visible growth in posting frequency this month.\n\nWhich response best balances the competing requirements?",
+      "kind": "single",
+      "options": [
+        "Retain the current cadence and improve content quality, using qualified engagement to demonstrate whether more frequent publishing is necessary.",
+        "Run a limited increase in publishing frequency using repurposed assets, while monitoring quality and qualified engagement against agreed thresholds.",
+        "Explain the capacity trade-off and propose a bounded frequency test with explicit quality and audience-outcome criteria before committing the full schedule.",
+        "Agree to daily publishing for one month, prioritising the stakeholder's immediate request and reviewing the quality impact at the end of the period."
+      ],
+      "correct": [],
+      "points": 1
+    },
+    {
+      "competency": "Communication",
+      "prompt": "Explaining a multi-variable performance change\n\nA campaign improves after the team changes the creative, audience and publishing schedule together. A stakeholder asks which change produced the improvement. There was no controlled test, and the next campaign plan is due tomorrow.\n\nWhat is the most accurate response?",
+      "kind": "single",
+      "options": [
+        "The combined changes coincided with the improvement, but the available evidence cannot isolate their individual contributions; the next plan should test the most consequential uncertainty.",
+        "Audience changes are the likeliest driver because they influence who receives the message, although creative and timing may also have contributed.",
+        "The result supports retaining the revised approach as a package, with individual contributions assessed only if performance later deteriorates.",
+        "The creative change is the most plausible explanation if engagement improved, but a controlled test should confirm its contribution in the next cycle."
+      ],
+      "correct": [],
+      "points": 1
+    },
+    {
+      "competency": "Interpersonal Effectiveness",
+      "prompt": "Resolving conflicting creative feedback\n\nAn asset is due tomorrow. One stakeholder wants more detail; another wants a simpler layout. Both requests reflect legitimate audience needs. Only one revision round remains, and the authorised approver is available for a short review.\n\nWhat is the strongest next step?",
+      "kind": "single",
+      "options": [
+        "Create two variations within the remaining revision round and ask the approver to select the stronger option.",
+        "Identify the audience need behind each request, agree the decision criteria with the authorised approver, and consolidate feedback before revising.",
+        "Follow the simpler-layout request because reducing cognitive load is generally preferable when audience needs conflict.",
+        "Retain the existing layout and ask stakeholders to submit a unified recommendation before further work is undertaken."
+      ],
+      "correct": [],
+      "points": 1
+    },
+    {
+      "competency": "Interpersonal Effectiveness",
+      "prompt": "Resolving a disagreement about declining performance\n\nA colleague recommends stopping a content series because engagement is declining. You believe distribution has fallen more sharply than audience response. The next review is tomorrow, and the available data does not yet establish either explanation.\n\nWhich response best supports a sound team decision?",
+      "kind": "single",
+      "options": [
+        "Continue the series until the next review because stopping it without confirmed evidence would introduce an unnecessary change.",
+        "Ask the colleague to justify the recommendation using available data, then decide whether the evidence supports stopping the series.",
+        "Agree on a focused comparison that separates distribution effects from audience response, and define how each possible result would affect the decision.",
+        "Present both interpretations to the manager and recommend that the decision be deferred until additional data becomes available."
+      ],
+      "correct": [],
+      "points": 1
+    },
+    {
+      "competency": "Interpersonal Effectiveness",
+      "prompt": "Coordinating work with a critical dependency\n\nA campaign asset is due in 48 hours. The creative team has completed most of the design, but the account team has not confirmed the offer. The offer owner will be available later today, and the launch date cannot move without approval.\n\nWhat should the team do?",
+      "kind": "single",
+      "options": [
+        "Continue only the work independent of the offer, establish an owner and deadline for confirmation, and define the escalation point for any launch risk.",
+        "Create a neutral version without the offer and replace it when confirmation arrives, preserving the current launch schedule.",
+        "Escalate the missing offer confirmation immediately and suspend all asset work until the authorised owner responds.",
+        "Ask the account team to resolve the dependency directly and update the project tracker after the final offer is approved."
+      ],
+      "correct": [],
+      "points": 1
+    },
+    {
+      "competency": "Cultural Alignment & Ownership",
+      "prompt": "Handling an unsupported product claim\n\nAn asset contains a product claim that is absent from the approved documentation. The stakeholder says the claim has been used previously and requests publication today. Removing it may reduce the asset's persuasive impact, but the claim cannot currently be substantiated.\n\nWhat should the owner do?",
+      "kind": "single",
+      "options": [
+        "Retain the claim with qualifying wording and request updated substantiation before the next campaign cycle.",
+        "Hold the unsupported claim, seek verification from the authorised owner, and communicate the delivery implications before publication.",
+        "Remove the claim and publish the remaining asset immediately, notifying the stakeholder after the change has been made.",
+        "Obtain written confirmation from the stakeholder and publish if they accept responsibility for the claim."
+      ],
+      "correct": [],
+      "points": 1
+    },
+    {
+      "competency": "Cultural Alignment & Ownership",
+      "prompt": "Correcting a material reporting error\n\nA report sent to leadership contains an error that changes one team's ranking but not the overall business result. The meeting begins in 45 minutes. The calculation can be corrected quickly, but the implications for the team's evaluation have not been reviewed.\n\nWhat is the strongest response?",
+      "kind": "single",
+      "options": [
+        "Correct the ranking in the working file and explain the adjustment during the meeting, avoiding multiple report versions.",
+        "Inform the manager and wait for approval before changing a report already distributed to leadership.",
+        "Verify the figures, assess the decision impact, alert recipients and issue a clearly identified correction before the meeting where feasible.",
+        "Notify the affected team first, agree how the revised ranking should be interpreted, and then update leadership."
+      ],
+      "correct": [],
+      "points": 1
+    },
+    {
+      "competency": "Cultural Alignment & Ownership",
+      "prompt": "Maintaining transparency under stakeholder pressure\n\nA channel used 20% of the monthly budget but generated fewer qualified enquiries than forecast. The overall business result is positive. A senior stakeholder requests that the channel be excluded from the main report because it may distract from the result. The report will inform next month's allocation.\n\nWhat is the most defensible response?",
+      "kind": "single",
+      "options": [
+        "Present the overall result in the main report and retain the channel's results in an appendix, making them available for allocation discussions.",
+        "Include the channel's results with appropriate context, explain the variance and limitations, and connect the findings to the next allocation decision.",
+        "Report the overall result and include channel-level performance only if leadership requests a more detailed breakdown.",
+        "Present the channel separately from the main result and seek agreement on a consistent reporting format for future periods."
+      ],
+      "correct": [],
+      "points": 1
+    }
+  ]
+}

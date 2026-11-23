@@ -84,6 +84,14 @@ class Assessment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     #: hard server cutoff: a cutoff would discard honest work on a dropped
     #: connection, which is worse than a generous test.
     time_limit_minutes: Mapped[int | None] = mapped_column(Integer, default=None)
+    #: The department this paper is written FOR, as the same plain label
+    #: `employees.department` uses. Nullable: a test can be for everybody.
+    #:
+    #: It is a grouping label and nothing more - `assign` still decides who
+    #: actually gets the test. Scoping on it instead would mean a department
+    #: renamed in the directory silently stopped matching, turning a live
+    #: paper into one nobody can be given.
+    department: Mapped[str | None] = mapped_column(String(120), default=None)
 
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("employees.id", ondelete="SET NULL"), default=None
@@ -112,6 +120,13 @@ class AssessmentQuestion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     correct: Mapped[list[int]] = mapped_column(JSON, default=list)
     #: What this question is worth. Lets a test weight the hard ones.
     points: Mapped[int] = mapped_column(Integer, default=1)
+    #: Which competency this question tests - "Problem Solving".
+    #:
+    #: A label rather than an enum, because the five CPD competencies are
+    #: HR's wording and a sixth should not need a migration. Safe to put in
+    #: front of a taker: it is the section heading they are already reading,
+    #: not a hint at the key.
+    competency: Mapped[str | None] = mapped_column(String(80), default=None)
 
 
 class AssessmentAttempt(UUIDPrimaryKeyMixin, TimestampMixin, Base):

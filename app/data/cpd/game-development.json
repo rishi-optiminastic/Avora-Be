@@ -1,0 +1,309 @@
+{
+  "department": "Game Development",
+  "title": "CPD Assessment - Game Development",
+  "description": "20 questions, 1 mark each, across five competencies: Technical Knowledge (8), Problem Solving (3), Communication (3), Interpersonal Effectiveness (3), Cultural Alignment & Ownership (3). Capability bands: 0-39% L1 Foundational, 40-59% L2 Developing, 60-74% L3 Competent, 75-89% L4 Proficient, 90-100% L5 Advanced.",
+  "pass_mark": 60,
+  "time_limit_minutes": null,
+  "questions": [
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Managing client-server communication and exploit prevention\n\nYou are developing a Roblox multiplayer game where players can collect coins by completing in-game activities. The client sends a RemoteEvent to the server whenever a player collects a coin.\n\nDuring testing, you discover that some players can exploit the RemoteEvent by triggering it repeatedly, allowing them to increase their coin balance without completing the activity.\n\nWhich implementation provides the most reliable solution?",
+      "kind": "single",
+      "options": [
+        "Add a cooldown to the RemoteEvent on the client side, preventing players from triggering the collection action more frequently than the intended gameplay interval.",
+        "Validate the player's coin collection request on the server by checking the relevant game conditions, collectible availability and player proximity, then update the player's balance only after validation.",
+        "Store the player's previous coin balance locally and compare it with the updated balance whenever a collection request is received, rejecting unusually large increases.",
+        "Introduce a server-side delay between successive collection requests and accept the request if the player has not exceeded the permitted number of requests within that interval."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Handling persistent player data and DataStore failures\n\nA Roblox game stores player progression, coins, unlocked items and achievements using DataStores. During periods of high player activity, some data-saving requests fail intermittently. A few players also report losing progress after leaving the game shortly after completing an activity.\n\nThe development team wants to improve data reliability without creating excessive DataStore requests or allowing newer data to be overwritten by older information.\n\nWhich approach is most appropriate?",
+      "kind": "single",
+      "options": [
+        "Save player data after every individual activity and retry failed requests immediately until the DataStore confirms successful completion.",
+        "Save player data at fixed intervals and when players leave, using protected calls and retry handling, while applying appropriate request budgeting and safeguards against overwriting newer data.",
+        "Maintain player progress in server memory throughout the session and save the complete data only when the player disconnects, reducing the number of DataStore requests.",
+        "Store player progression in separate DataStores for coins, achievements and unlocked items, allowing each category to be saved independently when changes occur."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Process flow - Developing a reusable gameplay mechanic\n\nYou are asked to develop a reusable reward system that will be implemented across three Roblox games. The system should support different reward types, configurable conditions and consistent reward processing.\n\nArrange the following development steps in the most appropriate sequence.\n\nA. Implement the reward logic using reusable modules and configurable parameters.\n\nB. Identify the reward requirements, game-specific differences and expected behaviour.\n\nC. Test the system across different reward scenarios and game environments.\n\nD. Integrate the system into the respective games and validate its interaction with existing gameplay systems.",
+      "kind": "single",
+      "options": [
+        "B → A → C → D",
+        "A → B → D → C",
+        "B → D → A → C",
+        "D → B → A → C"
+      ],
+      "correct": [
+        0
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Diagnosing performance issues in a live Roblox game\n\nA Roblox game begins experiencing frame drops when several players enter an area containing multiple interactive objects, animated models and particle effects.\n\nThe issue is more noticeable on lower-end devices. The game uses several scripts that continuously check object positions and update gameplay states.\n\nThe team wants to improve performance without significantly reducing the visual quality or functionality of the game.\n\nWhich approach is most appropriate?",
+      "kind": "single",
+      "options": [
+        "Reduce the number of interactive objects and particle effects across the entire game, prioritising consistent performance over visual complexity.",
+        "Increase the frequency of script execution so that object positions and gameplay states are updated more accurately, reducing inconsistencies between frames.",
+        "Profile the affected area, identify expensive scripts and rendering operations, optimise unnecessary per-frame work, and selectively reduce or defer non-essential effects.",
+        "Move all object-position calculations to the client, allowing each player's device to handle the processing independently and reducing server workload."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Designing an efficient RemoteEvent architecture\n\nA multiplayer Roblox game has several gameplay systems, including inventory management, combat, trading and player progression. Each system currently uses multiple RemoteEvents with different naming conventions and inconsistent validation logic.\n\nAs the game grows, debugging communication issues and maintaining the system becomes increasingly difficult.\n\nWhich architectural approach is most appropriate?",
+      "kind": "single",
+      "options": [
+        "Consolidate all gameplay communication into a single RemoteEvent and use string identifiers to distinguish the requested action, reducing the number of communication objects.",
+        "Maintain separate RemoteEvents for each gameplay system, establish consistent communication contracts and centralise relevant server-side validation and permission checks.",
+        "Replace RemoteEvents with RemoteFunctions wherever possible, ensuring that every client request receives a response before the next gameplay operation begins.",
+        "Allow each gameplay system to create and manage its own RemoteEvents independently, while maintaining a shared naming convention to improve consistency."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Managing object-oriented design and reusable Luau code\n\nA development team maintains three Roblox games with similar inventory, reward and player progression systems. However, each game currently has separate scripts containing largely duplicated logic.\n\nThe team wants to create reusable systems while allowing individual games to introduce different mechanics without repeatedly modifying the shared codebase.\n\nWhich approach provides the strongest architectural foundation?",
+      "kind": "single",
+      "options": [
+        "Move all shared functionality into one large ModuleScript and use conditional statements to identify which game is requesting a particular operation.",
+        "Create independent ModuleScripts for each game and copy the shared logic into them, allowing developers to modify individual implementations without affecting other projects.",
+        "Develop modular systems with clearly defined responsibilities, shared interfaces and configurable behaviour, allowing game-specific implementations to extend or use common functionality.",
+        "Create a single base gameplay script that contains all common functions and allow individual game scripts to override functions whenever different behaviour is required."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Evaluating UI implementation and gameplay responsiveness\n\nA Roblox game has an inventory interface that displays collectible items, quantities and item descriptions. Whenever the player collects or removes an item, the entire inventory interface is rebuilt.\n\nAs the number of collectible items increases, the interface begins to feel less responsive, particularly on devices with limited resources.\n\nWhich improvement is most appropriate?",
+      "kind": "single",
+      "options": [
+        "Increase the frequency of inventory refresh operations so that the interface remains synchronised with changes in the player's inventory.",
+        "Rebuild the interface only when the player closes and reopens the inventory, reducing the number of UI updates during gameplay.",
+        "Introduce an event-driven inventory update mechanism that tracks relevant changes and updates only affected UI elements, while managing connections and cleanup appropriately.",
+        "Move inventory rendering and item calculations to a separate LocalScript for each inventory category, allowing different parts of the interface to update independently."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Process flow - Releasing an update to a live Roblox game\n\nA seasonal update is ready for a live Roblox game. It includes new assets, gameplay mechanics, reward configurations and changes to existing scripts. The game has active players, and an issue could affect progression or previously saved player data.\n\nArrange the following steps in the most appropriate sequence.\n\nA. Deploy the update using an appropriate release strategy and monitor the live game's behaviour.\n\nB. Verify the update's functionality, compatibility, gameplay balance and potential impact on existing player data.\n\nC. Define the release scope, dependencies, expected player impact and rollback or recovery considerations.\n\nD. Investigate reported issues, assess their severity and implement corrective actions where required.",
+      "kind": "single",
+      "options": [
+        "C → B → A → D",
+        "B → C → D → A",
+        "C → A → B → D",
+        "A → C → B → D"
+      ],
+      "correct": [
+        0
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Problem Solving",
+      "prompt": "Prioritising issues across multiple live games\n\nYou are responsible for maintaining three Roblox games simultaneously. The following issues arise on the same day:\n\nGame A has a bug causing some players to lose recently earned rewards.\n\nGame B has a seasonal event scheduled to launch in six hours, but final testing is incomplete.\n\nGame C has received feedback about a minor UI alignment issue.\n\nYou have limited development capacity, and delaying the seasonal event may affect its planned engagement campaign.\n\nWhat is the strongest response?",
+      "kind": "single",
+      "options": [
+        "Prioritise Game B because its launch deadline is fixed, while assigning the remaining time to investigate the reward issue and schedule the UI correction later.",
+        "Investigate and contain the reward-loss issue first, assess the seasonal release risk in parallel and proceed only when critical checks are satisfied, while deferring the cosmetic issue.",
+        "Suspend all three games' development activities until the reward issue has been fully resolved, preventing additional problems from entering production.",
+        "Release the seasonal event with the current implementation, provided its main functionality works, and address the reward-loss issue through a subsequent maintenance update."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Problem Solving",
+      "prompt": "Diagnosing declining player engagement\n\nA Roblox game has experienced a decline in average session duration over the last three weeks. The team has received mixed feedback: some players report repetitive gameplay, others mention difficult progression, and a few complain about loading times.\n\nThe game recently introduced a new reward system and changed the difficulty of certain levels. Only one major update can be developed for the next release.\n\nWhich approach offers the strongest basis for deciding what to improve?",
+      "kind": "single",
+      "options": [
+        "Introduce additional rewards and limited-time challenges because repetitive gameplay is a common reason for players to stop engaging with a game.",
+        "Reverse the recent difficulty changes because progression complaints suggest that the new balancing system may be discouraging players.",
+        "Analyse player behaviour and retention patterns alongside feedback, identify where players are dropping off and investigate the contribution of progression, loading and gameplay changes before selecting a focused intervention.",
+        "Improve loading performance first because technical delays affect the overall experience regardless of the game's content or progression design."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Problem Solving",
+      "prompt": "Fixing a recurring gameplay defect\n\nAcross four recent updates, the development team has encountered the following issues:\n\nTwo updates introduced bugs because shared scripts were modified without checking their effect on other games.\n\nOne update contained an incorrect reward configuration.\n\nOne update introduced an issue because an asset was not properly tested in the live game environment.\n\nManagement wants one practical process improvement before the next release. The team cannot introduce a lengthy approval process.\n\nWhich approach is most appropriate?",
+      "kind": "single",
+      "options": [
+        "Require developers to obtain technical manager approval before modifying any shared scripts, configurations or game assets.",
+        "Increase manual testing time for every update and require developers to verify all gameplay systems before submitting their work.",
+        "Identify the recurring failure patterns and introduce targeted release checks, such as shared-module impact testing, configuration validation and asset compatibility checks, with clear ownership.",
+        "Introduce a fixed development buffer before every release so that developers have additional time to identify and correct issues."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Communication",
+      "prompt": "Communicating a technical limitation to a stakeholder\n\nA game designer requests a new multiplayer mechanic that involves synchronising multiple player actions in real time. The proposed mechanic is technically possible, but the current implementation would require significant changes to existing server-side systems.\n\nThe designer expects the feature to be completed within three days because the visual design and assets are already prepared. The development team estimates approximately two weeks for a reliable implementation.\n\nWhich response is most appropriate?",
+      "kind": "single",
+      "options": [
+        "Explain the technical dependencies and ask the designer to communicate the revised delivery estimate to the project manager.",
+        "Agree to the three-day timeline and implement the visual and basic gameplay components first, completing the server-side synchronisation in a later update.",
+        "Explain the technical dependencies in terms of player experience and reliability, present feasible implementation alternatives and recommend a realistic phased delivery approach.",
+        "Inform the designer that the requested timeline is not feasible and ask them to simplify the mechanic before development can begin."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Communication",
+      "prompt": "Managing conflicting creative and technical requirements\n\nA game designer wants to introduce several detailed visual effects and animated objects into a popular Roblox game. The assets are expected to improve the overall player experience.\n\nHowever, developers have observed performance issues on lower-end devices when similar effects are used. The design team believes reducing the effects will compromise the intended experience.\n\nWhich response best balances the competing requirements?",
+      "kind": "single",
+      "options": [
+        "Implement the full visual experience because maintaining the intended design is important, then optimise performance if players report issues after release.",
+        "Explain the performance implications, evaluate the most important visual elements and explore optimisation or selective rendering options that preserve the intended experience where possible.",
+        "Reject the proposed visual effects and recommend simpler assets, ensuring that the game remains accessible across different devices.",
+        "Ask the design team to provide a lower-detail version of every asset before development begins, ensuring that the technical requirements are addressed in advance."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Communication",
+      "prompt": "Reporting an unresolved production issue\n\nA live Roblox game begins experiencing intermittent DataStore failures. Some players report that their recent progress is not appearing after rejoining. The development team has identified a possible connection with increased player activity, but the root cause has not been established.\n\nA senior stakeholder asks whether the issue is caused by incorrect scripting and wants to know when it will be fixed.\n\nWhat is the most appropriate response?",
+      "kind": "single",
+      "options": [
+        "Explain that increased player activity is the likely cause based on the timing of the issue and recommend reducing the number of active players temporarily.",
+        "Communicate the confirmed symptoms, affected functionality, immediate safeguards, investigation status and next update timeline, clearly distinguishing the suspected cause from established findings.",
+        "Avoid communicating the issue until the root cause is established, ensuring that stakeholders receive only a confirmed technical explanation.",
+        "Explain that DataStore failures can occur due to platform limitations and recommend monitoring the situation before introducing code changes."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Interpersonal Effectiveness",
+      "prompt": "Resolving disagreement over a gameplay implementation\n\nA developer proposes implementing a new combat mechanic using an existing shared module. Another developer believes that the mechanic has sufficiently different requirements to justify a separate implementation.\n\nBoth approaches appear technically possible. The release deadline is approaching, and the team needs to avoid introducing unnecessary maintenance complexity across multiple games.\n\nWhat is the strongest next step?",
+      "kind": "single",
+      "options": [
+        "Use the existing shared module because reusing established code is generally more efficient and reduces unnecessary duplication.",
+        "Develop a separate implementation because game-specific mechanics should remain independent to avoid affecting other projects.",
+        "Compare both approaches against the mechanic's requirements, existing module responsibilities, performance, maintainability and impact on other games, then document the implementation decision.",
+        "Ask the technical manager to decide which approach should be followed, allowing the developers to focus on completing the feature."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Interpersonal Effectiveness",
+      "prompt": "Collaborating when an asset dependency is delayed\n\nA Roblox developer is implementing a new game environment. Most of the scripting is complete, but the final environment assets from the design team have not been delivered.\n\nThe designer is working on multiple projects and has not provided a confirmed delivery date. The developer believes the delay is affecting the planned release.\n\nWhich response best supports effective collaboration?",
+      "kind": "single",
+      "options": [
+        "Escalate the delay to the project manager and request that the assets be reassigned to another designer so development can continue.",
+        "Identify the minimum assets needed for integration, explore temporary placeholder options, agree on a realistic delivery timeline with the designer and communicate any release implications.",
+        "Wait until all final assets are delivered before proceeding, avoiding the possibility of reworking scripts to accommodate changes in the environment.",
+        "Develop the environment using assumed asset dimensions and configurations, asking the design team to adjust the final assets to match the existing implementation."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Interpersonal Effectiveness",
+      "prompt": "Supporting a junior developer with a debugging challenge\n\nA junior Roblox developer is struggling to debug a gameplay mechanic involving player movement and collision detection. They have tried several code changes but have not identified the underlying cause.\n\nYou are also responsible for completing a critical update for another live game.\n\nWhat is the most constructive response?",
+      "kind": "single",
+      "options": [
+        "Fix the issue yourself and share the corrected script, ensuring that the junior developer can continue with the remaining tasks.",
+        "Share relevant documentation about Roblox physics and collision detection and ask the junior developer to investigate independently before seeking further assistance.",
+        "Spend focused time understanding the debugging process, guide the developer through a structured investigation and agree on a checkpoint while maintaining visibility of your own delivery commitments.",
+        "Ask the technical manager to assign the issue to a more experienced developer and provide the junior developer with a less complex task."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Cultural Alignment & Ownership",
+      "prompt": "Handling an exploit discovered before release\n\nYou are testing a new Roblox game update and discover that players may be able to manipulate a RemoteEvent to receive rewards without completing the intended gameplay activity.\n\nThe issue has not yet been observed in the live game. However, the update is scheduled for release the following day, and the team believes the likelihood of exploitation is relatively low.\n\nWhat should you do?",
+      "kind": "single",
+      "options": [
+        "Release the update as scheduled and monitor player behaviour, addressing the exploit if it is observed in the live environment.",
+        "Inform the technical owner, demonstrate the exploit, assess its impact and ensure appropriate server-side validation or mitigation is implemented before approving the release.",
+        "Introduce a client-side cooldown to reduce the possibility of repeated requests and schedule a more comprehensive server-side correction for the next update.",
+        "Remove the entire reward mechanic from the update and proceed with the remaining features, avoiding the risk of delaying the release."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Cultural Alignment & Ownership",
+      "prompt": "Demonstrating accountability for a live game issue\n\nA gameplay update you developed introduces a bug that affects player progression in one of the live Roblox games. The issue is identified after players begin reporting missing rewards.\n\nResolving the issue requires additional development and may affect another team's planned content update.\n\nWhat is the most appropriate response?",
+      "kind": "single",
+      "options": [
+        "Investigate and fix the bug independently, then inform the relevant team once the corrected version is ready for deployment.",
+        "Inform the relevant technical owner and affected team, explain the potential player impact, take responsibility for investigating and correcting the issue, and coordinate an updated delivery plan.",
+        "Explain that the issue may be related to the existing progression system and request the developer responsible for that system to investigate it.",
+        "Prioritise fixing the issue and update the project tracker once the final resolution is confirmed, avoiding changes to other teams' plans until necessary."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Cultural Alignment & Ownership",
+      "prompt": "Maintaining transparency under release pressure\n\nA seasonal update for a popular Roblox game has passed its primary functionality tests. However, some edge cases involving player rewards and saved progression remain untested.\n\nThe marketing team has already announced the event launch for the following day, and a senior stakeholder wants the update marked as completed.\n\nWhat is the most defensible response?",
+      "kind": "single",
+      "options": [
+        "Mark the update as completed because the main functionality works, while scheduling the remaining edge-case tests as part of post-release monitoring.",
+        "Communicate the completed testing, outstanding risks and possible player impact, then recommend whether the release can proceed with appropriate safeguards or should be delayed until critical scenarios are validated.",
+        "Delay the entire update until every possible edge case has been tested, regardless of the actual severity or likelihood of the identified risks.",
+        "Complete the remaining tests as quickly as possible and proceed with the release if no additional issues are identified, without raising the existing concern unless it causes a failure."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    }
+  ]
+}

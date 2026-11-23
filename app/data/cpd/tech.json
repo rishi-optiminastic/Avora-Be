@@ -1,0 +1,309 @@
+{
+  "department": "Tech",
+  "title": "CPD Assessment - Tech",
+  "description": "20 questions, 1 mark each, across five competencies: Technical Knowledge (8), Problem Solving (3), Communication (3), Interpersonal Effectiveness (3), Cultural Alignment & Ownership (3). Capability bands: 0-39% L1 Foundational, 40-59% L2 Developing, 60-74% L3 Competent, 75-89% L4 Proficient, 90-100% L5 Advanced.",
+  "pass_mark": 60,
+  "time_limit_minutes": null,
+  "questions": [
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Managing data consistency across concurrent requests\n\nA web application allows users to book limited-availability resources. Two users attempt to book the last available slot almost simultaneously. Both requests read the availability as one before either request completes, resulting in two confirmed bookings.\n\nThe application uses a relational database, and the development team wants to prevent this issue without unnecessarily restricting concurrent bookings for unrelated resources.\n\nWhich approach is most appropriate?",
+      "kind": "single",
+      "options": [
+        "Add a frontend validation check that disables the booking button immediately after the first user clicks it, reducing the likelihood of duplicate submissions.",
+        "Use a database transaction with appropriate locking or an atomic conditional update, ensuring that availability is checked and modified as a single protected operation.",
+        "Introduce a short delay between booking requests so that the first transaction has sufficient time to update the availability before the next request is processed.",
+        "Implement a backend validation that checks the current availability immediately before inserting the booking, while retaining the existing database operations."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Evaluating API design and idempotency\n\nA payment-related API is integrated with an external payment gateway. Occasionally, network timeouts occur after the gateway has processed a payment but before the application receives the response. Users retry the request, resulting in duplicate payment attempts.\n\nThe team wants to ensure that retries do not create duplicate transactions while preserving the ability to process legitimate new payments.\n\nWhich implementation provides the strongest solution?",
+      "kind": "single",
+      "options": [
+        "Disable repeated payment requests from the frontend until the previous request receives a response, and display a timeout message if the request takes longer than expected.",
+        "Introduce a unique transaction reference for each user session and reject subsequent payment requests using the same session reference.",
+        "Implement an idempotency key for each logical payment operation, persist its processing status and result, and return the original outcome when the same request is retried.",
+        "Increase the API timeout and introduce automatic retries with progressively longer intervals, reducing the likelihood of users manually submitting the same payment again."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Process flow - Implementing a reliable backend feature\n\nA new feature requires data to be collected through a frontend form, validated, stored in a database and displayed back to the user. The feature must also handle invalid input and database failures without returning misleading success responses.\n\nArrange the following development steps in the most appropriate sequence.\n\nA. Implement the frontend integration and display appropriate success or failure responses.\n\nB. Define the data contract, validation requirements and expected API behaviour.\n\nC. Implement the backend processing and database operations, including failure handling.\n\nD. Test the complete request flow, including invalid inputs, successful submissions and failure scenarios.",
+      "kind": "single",
+      "options": [
+        "B → C → A → D",
+        "C → B → D → A",
+        "B → A → C → D",
+        "A → B → C → D"
+      ],
+      "correct": [
+        0
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Diagnosing database performance degradation\n\nA production application experiences slower response times after its user base increases significantly. The backend team observes that one frequently accessed endpoint retrieves records from a large relational table. The endpoint filters records using multiple fields, sorts the results and returns only a small subset.\n\nThe database has existing indexes, but query execution time has increased. The team wants to improve performance without introducing unnecessary storage overhead or affecting write operations.\n\nWhich investigation and improvement approach is most appropriate?",
+      "kind": "single",
+      "options": [
+        "Add individual indexes to every field used in the filtering and sorting conditions, ensuring that the database has multiple access paths for the query.",
+        "Increase the database server resources first, as the performance degradation is likely associated with the increased number of concurrent users.",
+        "Examine the query execution plan, data distribution and existing indexes, then evaluate an appropriate composite or covering index while measuring its effect on reads and writes.",
+        "Retrieve a larger set of records in one database request and perform filtering and sorting in the backend, reducing the number of database interactions."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Handling authentication and authorization\n\nA web application has three user roles: Administrator, Manager and Employee. Employees should only access their own records, Managers should access records belonging to their assigned teams, and Administrators should have broader access.\n\nThe application currently hides restricted navigation options on the frontend. However, users can still access certain restricted API endpoints by directly modifying request URLs.\n\nWhich approach best addresses the underlying issue?",
+      "kind": "single",
+      "options": [
+        "Implement role-based conditional rendering across all frontend components and ensure that restricted navigation options cannot be accessed through the interface.",
+        "Validate user roles during login and generate separate authentication tokens for each role, reducing the possibility of users accessing unauthorised sections.",
+        "Implement server-side authorization checks for every protected resource, combining role permissions with ownership or team-level access validation, while retaining frontend restrictions for usability.",
+        "Encrypt sensitive API parameters and require authenticated requests for all endpoints, preventing users from modifying request URLs to access restricted information."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Managing asynchronous operations and application reliability\n\nA full-stack application processes user-uploaded files. Once a file is submitted, the backend performs validation, extracts information, generates a report and stores the final output.\n\nAs the number and size of uploads increase, users experience request timeouts. Some operations complete successfully in the background, while others fail midway. The team wants to improve reliability without keeping users waiting for long-running requests.\n\nWhich architecture is most appropriate?",
+      "kind": "single",
+      "options": [
+        "Increase the API timeout and allocate additional server resources so that the backend can complete larger processing operations within the same request lifecycle.",
+        "Move the entire processing operation to the frontend, allowing the browser to handle file validation and report generation before submitting the final output.",
+        "Introduce an asynchronous job-processing mechanism with a queue, persistent job status, retry handling and appropriate failure tracking, allowing the frontend to retrieve processing progress separately.",
+        "Divide the processing operation into multiple synchronous API requests, requiring the frontend to trigger each step sequentially and maintain the current processing state."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Evaluating testing strategies before deployment\n\nA development team has completed a new feature involving frontend validation, backend APIs and database updates. Unit tests are passing, but the feature interacts with existing authentication, reporting and user-management modules.\n\nThe release is scheduled for the following day, and the team has limited time for additional testing.\n\nWhich testing approach provides the strongest release confidence?",
+      "kind": "single",
+      "options": [
+        "Expand unit test coverage around the newly developed functions and deploy once all unit tests pass, as integration issues can be addressed through production monitoring.",
+        "Prioritise end-to-end testing of the new feature using a few successful user journeys, as these tests cover the complete application flow.",
+        "Perform targeted integration testing around the affected APIs, database operations and authentication dependencies, alongside critical end-to-end regression scenarios and existing automated checks.",
+        "Conduct manual testing of all newly introduced frontend screens and validate the database records independently before approving the release."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Process flow - Managing a production deployment failure\n\nA new application release introduces a database schema change and updated backend functionality. Shortly after deployment, users report errors when accessing a critical feature. The team must restore service while avoiding data loss and preserving the ability to investigate the incident.\n\nArrange the following actions in the most appropriate sequence.\n\nA. Identify the release changes and determine whether rollback, forward-fix or another recovery approach is safe.\n\nB. Verify the failure, assess its impact and stabilise the affected service.\n\nC. Execute the approved recovery approach and validate the application's critical functionality.\n\nD. Document the incident, identify contributing factors and define preventive actions.",
+      "kind": "single",
+      "options": [
+        "A → B → C → D",
+        "B → A → C → D",
+        "B → C → A → D",
+        "C → B → A → D"
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Problem Solving",
+      "prompt": "Prioritising concurrent technical issues\n\nThree issues arise simultaneously during a development sprint:\n\nA production API intermittently returns incorrect data to a subset of users.\n\nA critical feature is scheduled for deployment in four hours, but its regression testing is incomplete.\n\nA non-critical UI component has a visual alignment issue reported by the design team.\n\nOne developer is available to investigate the production issue, another is responsible for the deployment, and no additional resources are available.\n\nWhat is the strongest response?",
+      "kind": "single",
+      "options": [
+        "Complete the scheduled deployment first because the release deadline is fixed, while monitoring the production API and addressing the UI issue afterward.",
+        "Assign the available developer to investigate the production issue, assess its impact and stabilise it; simultaneously review the deployment risk and defer non-critical UI work.",
+        "Stop all development activities until the production issue is completely resolved, ensuring that no additional changes introduce further instability.",
+        "Deploy the critical feature after completing a basic functionality check, then allocate the remaining team capacity to investigating the production issue."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Problem Solving",
+      "prompt": "Making a technical decision under architectural constraints\n\nAn existing application uses a monolithic architecture. A new feature is expected to experience significantly higher traffic than other modules. The team is considering separating the feature into an independent service.\n\nHowever, the feature shares database records and business logic with existing modules. The delivery deadline is three weeks, and the team has limited experience managing distributed services.\n\nWhich approach is most defensible?",
+      "kind": "single",
+      "options": [
+        "Extract the feature into a separate microservice immediately, as independent deployment and scaling will provide better long-term flexibility.",
+        "Retain the existing architecture permanently and optimise the feature within the monolith, avoiding the operational complexity of introducing additional services.",
+        "Evaluate the actual bottleneck, traffic expectations, data dependencies and operational readiness, then choose a scoped solution that addresses immediate performance needs without creating unnecessary architectural complexity.",
+        "Duplicate the relevant database tables and business logic into a separate service, allowing the new feature to operate independently without affecting existing modules."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Problem Solving",
+      "prompt": "Resolving a recurring development issue\n\nA team has experienced repeated defects across four recent releases:\n\nTwo defects originated from unclear requirements.\n\nOne resulted from an overlooked API dependency.\n\nOne occurred because a previously working feature was affected by a code change.\n\nManagement requires one process improvement before the next sprint. The team cannot introduce a comprehensive new development framework at this stage.\n\nWhich approach is most appropriate?",
+      "kind": "single",
+      "options": [
+        "Introduce mandatory code reviews for every change, as peer review can identify implementation mistakes and improve overall code quality.",
+        "Increase manual testing before every release, ensuring that all previously reported defects are checked before deployment.",
+        "Analyse the most consequential recurring failure patterns and introduce a targeted control, such as requirement acceptance criteria, dependency checks or focused regression tests, with an owner and review point.",
+        "Increase development estimates for every task and reserve additional time for debugging, reducing the pressure to complete work within existing deadlines."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Communication",
+      "prompt": "Communicating a technical limitation to a stakeholder\n\nA stakeholder requests a new application feature that appears straightforward from the frontend but requires significant backend changes because of existing database dependencies. The stakeholder expects delivery within three days, while the development team estimates that a reliable implementation will take approximately two weeks.\n\nThe stakeholder has already communicated the three-day timeline to senior management.\n\nWhich response is most appropriate?",
+      "kind": "single",
+      "options": [
+        "Explain the technical dependencies in detail and request that the stakeholder communicate the revised timeline to senior management.",
+        "Agree to the three-day deadline and prioritise the frontend implementation, while completing the backend changes in subsequent iterations.",
+        "Explain the dependency and delivery risks in business terms, present feasible implementation options with their trade-offs, and recommend a realistic phased delivery plan.",
+        "Inform the stakeholder that the requested timeline is technically unfeasible and ask them to revise the requirement before development begins."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Communication",
+      "prompt": "Managing conflicting technical and business requirements\n\nA business team requests that a reporting page display real-time information. However, the current database architecture supports periodic updates, and implementing real-time synchronisation may affect the performance of other application modules.\n\nThe business team considers real-time visibility essential, while the development team is concerned about reliability and implementation complexity.\n\nWhich response best balances both requirements?",
+      "kind": "single",
+      "options": [
+        "Recommend retaining periodic updates because system reliability should take precedence over the convenience of real-time reporting.",
+        "Explain the technical constraints, clarify what level of data freshness the business actually requires, and evaluate alternative approaches against performance, cost and operational impact.",
+        "Implement real-time updates for the reporting page independently, as separating the functionality from other modules should minimise performance concerns.",
+        "Ask the business team to provide a revised requirement and postpone technical discussions until the expected functionality is clearly documented."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Communication",
+      "prompt": "Explaining an unexpected production issue\n\nA recently deployed feature causes an intermittent failure. The initial investigation suggests that the issue may involve an interaction between a backend service and an external API. However, the root cause has not been established.\n\nA senior stakeholder asks whether the development team made an implementation error and wants an immediate explanation.\n\nWhat is the most appropriate response?",
+      "kind": "single",
+      "options": [
+        "Explain that the external API is the likely cause based on the initial observations, while clarifying that further investigation is required.",
+        "Share the confirmed symptoms, affected functionality, immediate mitigation steps and investigation status, while distinguishing established facts from hypotheses and committing to an update.",
+        "Avoid discussing the technical issue until the root cause has been identified, preventing inaccurate information from reaching stakeholders.",
+        "Explain that intermittent failures are expected when external services are involved and recommend monitoring the issue before making further changes."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Interpersonal Effectiveness",
+      "prompt": "Resolving disagreement during a code review\n\nA developer submits a solution that meets the functional requirements but uses an implementation approach that another team member believes may create maintenance challenges. Both developers have reasonable technical arguments, and the release deadline is approaching.\n\nWhat is the strongest next step?",
+      "kind": "single",
+      "options": [
+        "Accept the submitted implementation because it meets the requirements and changing the approach at this stage may affect the delivery timeline.",
+        "Ask the reviewer to suggest an alternative implementation and adopt it if it appears more maintainable, ensuring that the disagreement does not delay the release.",
+        "Compare both approaches against agreed technical criteria, including correctness, maintainability, performance and delivery risk, then document the decision and any follow-up improvements.",
+        "Escalate the disagreement to the technical manager immediately so that an authoritative decision can be made before the release."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Interpersonal Effectiveness",
+      "prompt": "Collaborating when a dependency is delayed\n\nA frontend developer cannot complete an assigned feature because the backend API is not ready. The backend developer is simultaneously addressing a production issue and has not provided a revised delivery estimate.\n\nThe frontend developer believes the delay is affecting their productivity, while the backend developer is already managing competing priorities.\n\nWhich response best supports effective collaboration?",
+      "kind": "single",
+      "options": [
+        "Escalate the dependency to the project manager and request reassignment of the backend work so that the frontend developer can continue independently.",
+        "Agree on the minimum API contract required, explore available mock or interim data to continue independent frontend work, and coordinate a realistic dependency timeline with the backend developer.",
+        "Wait for the backend developer to complete the production issue before discussing the API dependency, avoiding additional pressure on the team member.",
+        "Implement the frontend using an assumed API structure and request the backend developer to align the actual implementation with it once their current work is complete."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Interpersonal Effectiveness",
+      "prompt": "Supporting a team member's technical difficulty\n\nA junior developer repeatedly struggles with debugging a particular module. You notice that the developer is spending considerable time trying different fixes without consistently identifying the underlying cause. Your own sprint commitments are also approaching their deadlines.\n\nWhat is the most constructive response?",
+      "kind": "single",
+      "options": [
+        "Resolve the issue yourself and share the corrected implementation, ensuring that the team can meet its immediate delivery commitments.",
+        "Recommend relevant technical documentation and ask the developer to independently investigate the issue before requesting further assistance.",
+        "Spend focused time understanding the debugging approach, guide the developer through a structured investigation and agree on a checkpoint while maintaining visibility of your own commitments.",
+        "Ask the technical lead to reassign the module to a more experienced developer and allocate the junior developer a less complex task."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Cultural Alignment & Ownership",
+      "prompt": "Handling a potential security vulnerability\n\nDuring development, you identify that an API endpoint may expose sensitive user information if a request is modified. The issue has not yet been reported by users, and the feature is scheduled for release the following day.\n\nThe team believes the likelihood of exploitation is low, but the vulnerability has not been formally assessed.\n\nWhat should you do?",
+      "kind": "single",
+      "options": [
+        "Complete the scheduled release and include the issue in the next development sprint, provided that no actual misuse has been observed.",
+        "Inform the relevant technical owner, document the potential exposure, assess the severity and affected access paths, and ensure appropriate mitigation or release approval before proceeding.",
+        "Restrict the affected endpoint temporarily through frontend validation and schedule a backend security review after the release.",
+        "Immediately rewrite the entire authentication and authorization mechanism before releasing the feature, ensuring that similar vulnerabilities cannot occur elsewhere."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Cultural Alignment & Ownership",
+      "prompt": "Demonstrating accountability for a development error\n\nA feature you developed introduces an issue in an existing application module. The issue is identified during internal testing, and resolving it will require additional development time. The delay may affect another team's planned work.\n\nWhat is the most appropriate response?",
+      "kind": "single",
+      "options": [
+        "Resolve the issue independently and inform the relevant stakeholders once the corrected feature is ready, avoiding unnecessary concern before the impact is known.",
+        "Inform the affected team and technical owner, explain the issue and its potential impact, take responsibility for the corrective work and coordinate an updated delivery plan.",
+        "Explain that the issue was caused by an interaction with an existing module and request the team responsible for that module to investigate it.",
+        "Prioritise fixing the defect and update the project tracker once the actual delay is confirmed, avoiding changes to the timeline based on an unresolved issue."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Cultural Alignment & Ownership",
+      "prompt": "Maintaining transparency under delivery pressure\n\nA stakeholder requests that a feature be marked as completed because it has passed the main functionality checks. However, some edge cases remain untested, and the development team has identified a potential issue affecting a small group of users.\n\nThe feature is required for an important business presentation the following day.\n\nWhat is the most defensible response?",
+      "kind": "single",
+      "options": [
+        "Mark the feature as completed with a note that additional edge-case testing is planned, allowing the stakeholder to proceed with the presentation.",
+        "Communicate the current testing status, explain the identified limitation and its potential impact, and provide a realistic recommendation on whether the feature can be demonstrated or released with appropriate safeguards.",
+        "Delay the feature's release until every possible edge case has been tested, regardless of its impact on the business presentation.",
+        "Complete the remaining tests as quickly as possible and mark the feature as completed if no additional issues are identified, without raising the existing concern unless it recurs."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    }
+  ]
+}

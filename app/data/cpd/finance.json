@@ -1,0 +1,309 @@
+{
+  "department": "Finance",
+  "title": "CPD Assessment - Finance",
+  "description": "20 questions, 1 mark each, across five competencies: Technical Knowledge (8), Problem Solving (3), Communication (3), Interpersonal Effectiveness (3), Cultural Alignment & Ownership (3). Capability bands: 0-39% L1 Foundational, 40-59% L2 Developing, 60-74% L3 Competent, 75-89% L4 Proficient, 90-100% L5 Advanced.",
+  "pass_mark": 60,
+  "time_limit_minutes": null,
+  "questions": [
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Identifying the impact of accrual accounting\n\nA company receives a professional services invoice of ₹80,000 on 28 March for services completed during March. The invoice is received and recorded in April, and payment is made in May.\n\nThe company follows an accrual-based accounting system and closes its books at the end of March.\n\nHow should the transaction be treated?",
+      "kind": "single",
+      "options": [
+        "Record the expense in April because the invoice was received during that accounting period, and recognise the payment in May.",
+        "Record the expense in March with a corresponding accrued liability, then adjust the liability when the invoice is recorded in April.",
+        "Record the expense in May when the payment is made, while disclosing the outstanding invoice in the March financial statements.",
+        "Record the expense in March and April, reversing the March entry once the actual invoice is received to maintain invoice-level accuracy."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Reconciling bank and accounting records\n\nThe bank statement shows a closing balance of ₹5,40,000, whereas the company's cash book shows ₹4,95,000. On investigation, the finance executive identifies:\n\nCheques issued but not yet presented: ₹60,000.\n\nDeposits recorded in the cash book but not yet credited by the bank: ₹25,000.\n\nBank charges not yet recorded in the cash book: ₹10,000.\n\nThe finance team needs to establish whether the difference is explainable before closing the month.\n\nWhich approach is most appropriate?",
+      "kind": "single",
+      "options": [
+        "Add the outstanding cheques and deduct deposits in transit from the bank balance, then record the bank charges separately in the accounting records.",
+        "Adjust the cash book for bank charges and reconcile the remaining difference using outstanding cheques and deposits in transit, ensuring that the adjusted balances agree.",
+        "Record the entire ₹45,000 difference as a bank reconciliation adjustment and investigate the individual transactions during the following month.",
+        "Reverse the outstanding cheques and deposits from the cash book, then record all transactions again based on the bank statement."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Process flow - Month-end financial closing\n\nA company is completing its monthly financial close. Several transactions are pending verification, vendor invoices have been received, and the management team requires accurate financial reports.\n\nArrange the following steps in the most appropriate sequence.\n\nA. Prepare financial statements and management reports using the verified balances.\n\nB. Record and classify transactions, including relevant accruals and adjustments.\n\nC. Reconcile bank accounts, ledgers and relevant supporting schedules.\n\nD. Review supporting documents, identify missing information and validate transaction completeness.",
+      "kind": "single",
+      "options": [
+        "D → B → C → A",
+        "B → D → A → C",
+        "C → B → D → A",
+        "D → C → A → B"
+      ],
+      "correct": [
+        0
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Evaluating GST input tax credit discrepancies\n\nA company receives an eligible-looking vendor invoice containing GST. The purchase has been recorded in the accounting system, but the corresponding invoice is not appearing in the available GST portal records for the relevant period.\n\nThe vendor confirms that the invoice has been issued and requests payment. The finance team is preparing the applicable GST return.\n\nWhich approach is most appropriate?",
+      "kind": "single",
+      "options": [
+        "Claim the input tax credit based on the vendor invoice because the company has received the document and recorded the underlying purchase.",
+        "Reject the invoice permanently and reverse the entire purchase entry because the invoice is not currently appearing in the portal records.",
+        "Verify the invoice details, assess the applicable input tax credit conditions and return-period requirements, follow up with the vendor and claim credit only when the statutory eligibility conditions are satisfied.",
+        "Record the GST amount as a permanent expense and process the vendor payment, avoiding further reconciliation with the GST records."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Understanding cash flow versus profitability\n\nA company reports a net profit of ₹12 lakh for the quarter. However, its bank balance has decreased significantly during the same period.\n\nThe finance team identifies the following developments:\n\nCustomer receivables have increased substantially.\n\nThe company has purchased new equipment.\n\nCertain vendor payments have been made earlier than their contractual due dates.\n\nThe company has recognised revenue from completed services that have not yet been collected.\n\nWhich explanation best accounts for the difference between profit and available cash?",
+      "kind": "single",
+      "options": [
+        "The company has overstated its profitability because revenue that has not been collected should not be recognised in the financial statements.",
+        "The company may be profitable on an accrual basis while experiencing lower cash availability due to delayed collections, capital expenditure and the timing of payments.",
+        "The reduction in bank balance indicates that operating expenses have been understated, even though the reported net profit remains positive.",
+        "The equipment purchase should be treated entirely as an operating expense, and the customer receivables should be excluded until payment is received."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Managing vendor payments and duplicate invoices\n\nA vendor submits an invoice for ₹1,20,000. During verification, the finance executive discovers that an invoice with the same number, amount and vendor details was already processed two weeks earlier.\n\nThe vendor explains that the second document was generated because the original invoice was not reflected in their payment records. The payment for the first invoice is still pending.\n\nWhat should the finance executive do?",
+      "kind": "single",
+      "options": [
+        "Process the second invoice independently because the vendor has confirmed that it was generated again for payment follow-up purposes.",
+        "Reject both invoices and ask the vendor to issue a fresh invoice with a different number before making any payment.",
+        "Verify the original invoice's approval and accounting status, confirm that the underlying transaction is recorded only once, and coordinate with the vendor before proceeding with the existing payment.",
+        "Hold the second invoice but create a separate payable entry so that the vendor's outstanding balance remains visible in the accounting system."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Evaluating depreciation and fixed asset accounting\n\nA company purchases equipment worth ₹6,00,000 in January. The equipment is expected to be used for five years, has an estimated residual value of ₹60,000 and is depreciated using the straight-line method.\n\nThe finance executive is preparing the monthly financial statements and needs to ensure that the equipment is accounted for appropriately.\n\nWhich treatment is most appropriate, assuming the asset is available for use in January and a full month of depreciation is applicable?",
+      "kind": "single",
+      "options": [
+        "Recognise the entire ₹6,00,000 as an expense in January because the company has already paid for the equipment.",
+        "Capitalise the equipment and charge annual depreciation of ₹1,20,000, excluding the estimated residual value from the calculation.",
+        "Capitalise the equipment and recognise monthly depreciation of ₹9,000, based on its depreciable amount and estimated useful life.",
+        "Capitalise the equipment and recognise depreciation only when the equipment requires repair or replacement."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "Process flow - Vendor payment and compliance control\n\nA vendor payment is due, but the invoice contains incomplete information. The purchase has been approved by the department, and the payment is included in the upcoming payment schedule.\n\nArrange the following steps in the most appropriate sequence.\n\nA. Record the approved transaction and applicable tax treatment in the accounting system.\n\nB. Verify the invoice, vendor details, purchase approval and supporting documentation.\n\nC. Process the payment through the authorised payment mechanism and retain proof of payment.\n\nD. Identify missing information, obtain corrections and complete the required compliance checks.",
+      "kind": "single",
+      "options": [
+        "B → D → A → C",
+        "A → B → C → D",
+        "B → A → D → C",
+        "D → C → B → A"
+      ],
+      "correct": [
+        0
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Problem Solving",
+      "prompt": "Prioritising concurrent financial issues\n\nThree issues arise simultaneously during month-end closing:\n\nA significant customer payment has not been received, and the outstanding balance is affecting cash flow projections.\n\nA vendor payment is scheduled for today, but its supporting invoice has an unresolved discrepancy.\n\nManagement requires the monthly financial report within four hours, and some reconciliation entries remain incomplete.\n\nThe finance team has limited resources and cannot resolve all three issues simultaneously.\n\nWhat is the strongest response?",
+      "kind": "single",
+      "options": [
+        "Process the vendor payment based on the existing approval, complete the management report using available figures and investigate the customer payment afterward.",
+        "Prioritise the customer collection because it directly affects cash availability, while asking another team member to complete the remaining reconciliations.",
+        "Assess the financial and compliance risks of each issue, hold the unsupported payment, coordinate urgent collection follow-up and prioritise reconciliation of material balances before issuing the report with any necessary limitations disclosed.",
+        "Delay the management report until all three issues are completely resolved, ensuring that no provisional information is communicated to leadership."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Problem Solving",
+      "prompt": "Investigating an unexpected expense variance\n\nA department's monthly budget for operational expenses is ₹5 lakh. Actual expenditure is ₹6.2 lakh, resulting in an unfavourable variance of ₹1.2 lakh.\n\nDuring the initial review, the finance executive discovers that:\n\nA one-time software renewal was paid during the month.\n\nCertain vendor invoices relate to services received in the previous month.\n\nEmployee travel expenditure has increased.\n\nOne expense entry may have been classified under the wrong cost centre.\n\nManagement wants an explanation and a recommendation for the next month's budget.\n\nWhich approach is most appropriate?",
+      "kind": "single",
+      "options": [
+        "Recommend reducing the next month's operational budget by ₹1.2 lakh, ensuring that the department compensates for the overspending.",
+        "Separate timing differences, one-time expenses, recurring expenditure and possible classification errors, validate the underlying records and use the adjusted analysis to recommend future budget changes.",
+        "Exclude the software renewal and previous-month invoices from the current report because they do not represent recurring operational expenditure.",
+        "Retain the original budget and explain the variance as a temporary increase in expenditure, as the total expense remains within a manageable range."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Problem Solving",
+      "prompt": "Resolving a mismatch in financial reporting\n\nThe accounting system reports total vendor payables of ₹18.5 lakh, while the vendor ageing report shows ₹17.2 lakh.\n\nThe difference may relate to unallocated credit notes, invoices posted to incorrect vendor accounts or payments that have not been adjusted.\n\nThe management report is due the following morning.\n\nWhich action offers the strongest solution?",
+      "kind": "single",
+      "options": [
+        "Use the accounting system's balance as the final payable figure because the general ledger is the primary financial record.",
+        "Use the vendor ageing report because it provides a more detailed breakdown of individual outstanding balances.",
+        "Reconcile the general ledger with vendor-level balances, investigate unallocated transactions and classification differences, and document any unresolved items before finalising the report.",
+        "Adjust the vendor ageing report manually to match the general ledger, then investigate the underlying difference during the next closing cycle."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Communication",
+      "prompt": "Communicating a financial discrepancy to management\n\nDuring the monthly closing process, you identify that a significant expense has been recorded twice. Correcting the entry will reduce the reported monthly expenditure and change the department's budget variance.\n\nThe financial report has already been shared with management, and the review meeting is scheduled for the following day.\n\nWhich response is most appropriate?",
+      "kind": "single",
+      "options": [
+        "Correct the accounting entry and share the revised report during the meeting, explaining the adjustment if management asks about the difference.",
+        "Inform the finance manager, verify the duplicate entry and its impact, notify relevant recipients and circulate a clearly identified corrected report before the meeting where feasible.",
+        "Retain the original report because the correction does not change the company's overall profitability and can be incorporated in the next reporting cycle.",
+        "Inform the department manager first and seek agreement on how the revised expense should be presented before correcting the financial report."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Communication",
+      "prompt": "Managing a stakeholder's urgent payment request\n\nA department manager requests an urgent vendor payment to avoid disruption to an ongoing project. However, the invoice is missing supporting documentation, and the vendor's bank details differ from those maintained in the existing vendor records.\n\nThe manager insists that the payment must be completed today.\n\nWhich response best balances business requirements and financial controls?",
+      "kind": "single",
+      "options": [
+        "Process the payment using the updated bank details because the department manager has confirmed the urgency and business requirement.",
+        "Explain the documentation and payment verification requirements, coordinate with the relevant stakeholders to validate the updated bank details and identify whether an authorised alternative process can meet the deadline.",
+        "Reject the payment request and ask the department manager to resubmit it once all documentation is available through the standard process.",
+        "Process a partial payment using the existing vendor details and complete the remaining amount after the updated bank details have been verified."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Communication",
+      "prompt": "Explaining a cash flow concern to a non-finance stakeholder\n\nA business unit reports strong sales growth and requests approval for additional operational expenditure. However, the finance team identifies that a significant proportion of sales revenue remains outstanding from customers, and cash collections are slower than expected.\n\nThe business unit believes that the company's reported revenue is sufficient justification for the additional spending.\n\nWhat is the most appropriate response?",
+      "kind": "single",
+      "options": [
+        "Explain that additional spending cannot be approved until all outstanding customer receivables have been collected.",
+        "Share the cash flow position, distinguish recognised revenue from actual collections, explain the timing implications and evaluate the proposed expenditure against available liquidity and business priorities.",
+        "Approve the additional expenditure because reported revenue indicates that the business unit is generating sufficient commercial value.",
+        "Ask the business unit to reduce its existing expenses before submitting any additional expenditure requests, avoiding further pressure on cash flow."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Interpersonal Effectiveness",
+      "prompt": "Resolving a disagreement over financial classification\n\nA department manager submits an expense claim that they believe should be classified as a business development expense. The finance executive believes the transaction belongs under a different expense category based on its nature and supporting documentation.\n\nBoth parties have reasonable explanations, and the monthly closing deadline is approaching.\n\nWhat is the strongest next step?",
+      "kind": "single",
+      "options": [
+        "Accept the department manager's classification because they have better knowledge of the business purpose behind the expenditure.",
+        "Apply the finance executive's preferred classification because financial reporting consistency should take priority over departmental preferences.",
+        "Review the transaction's business purpose, supporting documents and applicable accounting treatment, discuss the classification with the stakeholder and document the final decision consistently.",
+        "Escalate the disagreement to the finance manager immediately, leaving the transaction unrecorded until a final decision is received."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Interpersonal Effectiveness",
+      "prompt": "Coordinating with departments for missing financial information\n\nYou are preparing the monthly financial report, but several departments have not submitted their expense details and supporting documents. The reporting deadline is approaching, and repeated follow-ups have not resulted in complete information.\n\nThe department managers are also managing their own operational deadlines.\n\nWhich approach best supports effective coordination?",
+      "kind": "single",
+      "options": [
+        "Complete the report using the information already available and exclude missing departmental expenses until the next reporting period.",
+        "Send a formal escalation to senior management highlighting all departments that have failed to provide the required information.",
+        "Communicate the specific missing information, explain its impact on reporting, agree on realistic submission timelines and escalate material unresolved gaps where necessary.",
+        "Wait until the departments provide all requested information, avoiding the risk of publishing incomplete financial reports."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Interpersonal Effectiveness",
+      "prompt": "Supporting a junior finance team member\n\nA junior finance executive repeatedly makes reconciliation errors because they are not consistently matching transactions with the correct supporting documents. You notice that they are rushing through the process to complete the monthly closing tasks.\n\nYou also have your own reporting deadlines to meet.\n\nWhat is the most constructive response?",
+      "kind": "single",
+      "options": [
+        "Correct the reconciliation errors yourself and share the revised records, ensuring that the monthly closing process is not delayed.",
+        "Ask the junior executive to independently review the reconciliation process and refer to the accounting system documentation before requesting further assistance.",
+        "Identify the recurring error pattern, guide the junior executive through a structured reconciliation approach and introduce a review checkpoint while managing your own deliverables.",
+        "Request the finance manager to reassign the reconciliation work to an experienced employee and allocate the junior executive less critical tasks."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Cultural Alignment & Ownership",
+      "prompt": "Handling a potential compliance discrepancy\n\nWhile reviewing vendor payments, you identify that a transaction may have been processed without the required tax deduction. The payment has already been made, and the vendor has not raised any concern.\n\nThe transaction is relatively small, and the team is approaching its monthly closing deadline.\n\nWhat should you do?",
+      "kind": "single",
+      "options": [
+        "Leave the transaction unchanged because the payment has already been completed and the amount is relatively insignificant.",
+        "Verify the transaction, applicable tax treatment and supporting records, inform the responsible finance or compliance owner and initiate the appropriate corrective action within the applicable timelines.",
+        "Adjust the tax deduction in the following month's vendor payment, ensuring that the overall tax liability is eventually recovered.",
+        "Record the transaction as a regular expense and include the possible tax discrepancy in the next internal review."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Cultural Alignment & Ownership",
+      "prompt": "Demonstrating accountability for a financial reporting error\n\nYou discover that a financial report prepared by you contains an incorrect expense classification. The error affects the departmental budget variance presented to management, although the overall company expenditure remains unchanged.\n\nThe report has already been circulated.\n\nWhat is the most appropriate response?",
+      "kind": "single",
+      "options": [
+        "Correct the working file and communicate the revised classification during the next monthly reporting cycle, as the overall financial position remains unchanged.",
+        "Inform the relevant finance owner and management recipients, verify the impact, issue a clearly identified correction and review how the error occurred to prevent recurrence.",
+        "Ask the department manager to confirm the correct classification before communicating the issue to management, avoiding unnecessary confusion.",
+        "Retain the original report and explain the classification difference if it is raised during the management review meeting."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Cultural Alignment & Ownership",
+      "prompt": "Maintaining transparency under business pressure\n\nA department has exceeded its approved monthly budget. A senior stakeholder requests that certain expenses be moved to the following month so that the current month's financial report reflects a more favourable position.\n\nThe expenses relate to services already received during the current month, and the management report will be used for financial planning.\n\nWhat is the most defensible response?",
+      "kind": "single",
+      "options": [
+        "Defer the expenses if the vendors have not yet been paid, allowing the department to manage its budget position more effectively.",
+        "Record the expenses in the appropriate accounting period, explain the variance and its business implications, and work with the stakeholder on legitimate cost-management measures for future periods.",
+        "Present the total expenditure in the main report but exclude the specific department's variance from the management commentary until further review.",
+        "Discuss the requested adjustment with the finance manager and follow the agreed reporting approach, ensuring that the department's budget position is presented consistently."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    }
+  ]
+}

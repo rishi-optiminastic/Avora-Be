@@ -1,0 +1,309 @@
+{
+  "department": "Motion & Graphic Designer",
+  "title": "CPD Assessment - Motion & Graphic Designer",
+  "description": "20 questions, 1 mark each, across five competencies: Technical Knowledge (8), Problem Solving (3), Communication (3), Interpersonal Effectiveness (3), Cultural Alignment & Ownership (3). Capability bands: 0-39% L1 Foundational, 40-59% L2 Developing, 60-74% L3 Competent, 75-89% L4 Proficient, 90-100% L5 Advanced.",
+  "pass_mark": 60,
+  "time_limit_minutes": null,
+  "questions": [
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "You are animating a logo reveal in Adobe After Effects. The logo moves from the left side of the screen to the centre, but the movement feels robotic despite having correctly placed keyframes. What should you adjust first?",
+      "kind": "single",
+      "options": [
+        "Increase the number of keyframes so that the logo follows a more detailed movement path.",
+        "Increase the composition frame rate without changing the keyframe positions.",
+        "Review the spacing and easing of the keyframes to create more natural acceleration and deceleration.",
+        "Add motion blur to the logo so that the movement appears more realistic."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "You are creating an animated typography sequence in which several words appear one after another. The animation feels visually inconsistent because the words enter the screen at different speeds and settle at different times. What would be the most appropriate approach?",
+      "kind": "single",
+      "options": [
+        "Establish a consistent timing system, use appropriate easing, and coordinate the animation of individual words with the intended reading rhythm.",
+        "Apply the same entrance preset to every word without adjusting the timing.",
+        "Increase the duration of the composition so that each word has more time to appear.",
+        "Use additional transition effects between words to make the sequence feel more connected."
+      ],
+      "correct": [
+        0
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "You receive a layered Illustrator file containing icons, text, and illustrations for an animated social media post. What should you consider before importing it into After Effects?",
+      "kind": "single",
+      "options": [
+        "Export the complete artwork as a single high-resolution image so that all elements retain their original appearance.",
+        "Convert every element into a separate image file, regardless of whether it needs individual animation.",
+        "Flatten the artwork and use masks to recreate the individual elements that need to move.",
+        "Organise and name the layers logically, preserve the required editable elements, and prepare the artwork in a structure suitable for the intended animation."
+      ],
+      "correct": [
+        3
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "You are editing a promotional video that contains voice-over, background music, and sound effects. The background music makes the narration difficult to hear during certain sections. What should you do?",
+      "kind": "single",
+      "options": [
+        "Increase the volume of the voice-over and retain the music at its current level throughout.",
+        "Balance the audio levels, use appropriate volume automation or ducking, and check the mix across the complete sequence.",
+        "Reduce the volume of every audio track equally so that none of the elements dominates.",
+        "Remove the sound effects and retain the music and voice-over at their original levels."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "A social media animation looks sharp in After Effects but appears blurry after export and upload. Which set of factors should you investigate?",
+      "kind": "single",
+      "options": [
+        "Composition and export dimensions, render settings, compression, bitrate, and the platform's format requirements.",
+        "The number of layers in the composition and the number of keyframes used in the animation.",
+        "The colour palette, typography, and background contrast of the original design.",
+        "The number of effects applied to the composition and the speed of the preview render."
+      ],
+      "correct": [
+        0
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "You are animating a product illustration that includes a moving object and a camera movement. The object appears to slide unnaturally across the scene when the camera moves. What should you review?",
+      "kind": "single",
+      "options": [
+        "Increase the object's scale throughout the animation so that it remains visually prominent.",
+        "Apply additional motion blur to hide the difference between the object and camera movement.",
+        "Review the relationship between the object's position, anchor point, parent-child hierarchy, and camera movement to ensure the motion is coordinated.",
+        "Reduce the camera movement and retain the existing object animation."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "You are creating a 15-second animated advertisement. The video contains several messages, product benefits, and a call to action. The viewer may not have enough time to read everything. What should guide your design decisions?",
+      "kind": "single",
+      "options": [
+        "Maintain all the original text and reduce the font size so that every message fits.",
+        "Use faster text transitions so that all the information appears within the duration.",
+        "Increase the number of animated elements to direct attention towards the most important messages.",
+        "Establish a clear information hierarchy, prioritise the main message, and allocate sufficient screen time for important text and the call to action."
+      ],
+      "correct": [
+        3
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "A motion graphic project contains multiple compositions, imported assets, and linked media files. Another team member needs to continue editing the project on a different system. What is the most appropriate handover process?",
+      "kind": "single",
+      "options": [
+        "Export the final video and share the original project file without checking the linked media.",
+        "Organise the project, collect and package required assets, maintain clear file naming, and verify that the project opens correctly on the receiving system.",
+        "Convert all compositions into rendered videos and replace the original editable elements.",
+        "Share the project folder and ask the receiving team member to locate any missing assets independently."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Problem Solving",
+      "prompt": "You are assigned a motion graphic based on a static design. After animating the first version, you realise that the design contains too much text for the intended 10-second video. What should you do?",
+      "kind": "single",
+      "options": [
+        "Animate all the text using faster transitions so that the complete content remains visible.",
+        "Remove the smaller text elements without consulting the creative team.",
+        "Review the communication objective, identify the essential information, and propose a revised visual hierarchy or sequence that fits the duration.",
+        "Increase the video duration without informing the team so that the complete message can be accommodated."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Problem Solving",
+      "prompt": "You are working on an animation with several effects and high-resolution assets. After adding multiple layers, the preview becomes extremely slow, making it difficult to review the timing and movement. What would be the most appropriate response?",
+      "kind": "single",
+      "options": [
+        "Optimise the preview workflow by using suitable resolution settings, managing unnecessary effects, and organising the composition while preserving the final output requirements.",
+        "Reduce the resolution of all source assets permanently so that the project becomes easier to preview.",
+        "Remove the more complex animation elements and use static images wherever possible.",
+        "Increase the number of keyframes so that the preview can calculate the animation more accurately."
+      ],
+      "correct": [
+        0
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Problem Solving",
+      "prompt": "You have completed a social media animation in a square format. The marketing team now requires a vertical version for a different platform. The original animation includes text near the edges and several objects moving across the frame. What is the best approach?",
+      "kind": "single",
+      "options": [
+        "Crop the square video to a vertical frame and adjust only the export dimensions.",
+        "Stretch the existing composition vertically so that the content fills the new format.",
+        "Reduce the size of every element proportionately and retain the original animation timing.",
+        "Adapt the composition for the new aspect ratio, reposition elements, review text safe areas, and adjust animation timing or layout where required."
+      ],
+      "correct": [
+        3
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Communication",
+      "prompt": "A creative lead shares a reference video and asks you to create something similar for a new campaign. The reference contains several animation styles, transitions, and visual effects, but the actual campaign objective is not clearly explained. What should you do?",
+      "kind": "single",
+      "options": [
+        "Recreate the reference as closely as possible and share the first version for feedback.",
+        "Clarify the campaign objective, target audience, key message, and required deliverables before translating the reference into a suitable creative direction.",
+        "Select the most visually engaging elements from the reference and begin animating them.",
+        "Ask the creative lead to provide a complete storyboard before starting any work."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Communication",
+      "prompt": "A creative lead tells you that your animation looks polished but the main campaign message is not coming through clearly. You believe the animation is technically strong. What is the most constructive response?",
+      "kind": "single",
+      "options": [
+        "Explain the animation techniques used and request that the creative lead reconsider the feedback.",
+        "Change the overall animation style and colour palette without seeking further clarification.",
+        "Ask for specific examples of where the message is unclear, revisit the campaign objective, and propose changes that improve the communication while retaining effective elements.",
+        "Share the video with other designers and use their feedback to decide whether the creative lead's comments are valid."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Communication",
+      "prompt": "You realise that an exported video contains an incorrect logo and has already been shared with the marketing team for publishing. What should you do?",
+      "kind": "single",
+      "options": [
+        "Immediately inform the relevant team, identify the incorrect version, provide the corrected file and clarify which version should be used.",
+        "Export the corrected video and replace the original file without informing the marketing team.",
+        "Wait until the marketing team identifies the error and requests a replacement.",
+        "Inform the creative lead but allow the marketing team to continue using the original version until a revised request is raised."
+      ],
+      "correct": [
+        0
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Interpersonal Effectiveness",
+      "prompt": "A motion designer and a marketing executive disagree about the animation direction. The marketing executive prefers a straightforward promotional video, while the designer believes a more experimental approach would improve engagement. What should the designer do?",
+      "kind": "single",
+      "options": [
+        "Follow the marketing executive's direction without discussing alternative creative possibilities.",
+        "Create two completely different videos and allow the marketing executive to choose without further discussion.",
+        "Proceed with the experimental approach because creative differentiation should be prioritised.",
+        "Discuss the campaign objective and audience, present the reasoning behind the proposed approach, and align on a creative direction that balances the communication requirements with visual quality."
+      ],
+      "correct": [
+        3
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Interpersonal Effectiveness",
+      "prompt": "A colleague repeatedly sends incomplete creative briefs, causing you to spend additional time understanding the requirements. You have already reminded them informally. What is the most appropriate response?",
+      "kind": "single",
+      "options": [
+        "Continue working with the incomplete briefs because asking for more information may delay the project.",
+        "Explain the impact of incomplete inputs, agree on the information required before work begins, and establish a clearer handover process.",
+        "Escalate the colleague's behaviour to the manager immediately without discussing the issue again.",
+        "Stop accepting their requests until they consistently provide complete briefs."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Interpersonal Effectiveness",
+      "prompt": "A junior designer is struggling with the animation workflow and repeatedly makes mistakes while incorporating feedback. The project deadline is approaching. What would be the best way to support them?",
+      "kind": "single",
+      "options": [
+        "Take over the complete animation so that the deadline can be maintained.",
+        "Ask them to repeat the work independently until they understand the required process.",
+        "Demonstrate the difficult steps, provide specific feedback, agree on interim review points, and allow them to complete the revisions with appropriate guidance.",
+        "Forward the creative lead's feedback and ask them to resolve the issues independently."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Cultural Alignment & Ownership",
+      "prompt": "You are completing a campaign animation and notice that the final video contains a small but visible typography error. Correcting it may delay delivery slightly. What should you do?",
+      "kind": "single",
+      "options": [
+        "Correct the error, review the final output, and communicate any delivery impact to the relevant stakeholders.",
+        "Deliver the video because the error is minor and does not change the overall message.",
+        "Wait for the creative lead to identify the error during the next review.",
+        "Leave the error unchanged if the marketing team has already approved the concept."
+      ],
+      "correct": [
+        0
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Cultural Alignment & Ownership",
+      "prompt": "You notice that a recurring animation task takes considerable time because the team repeatedly creates similar elements from scratch. You believe a reusable template could improve efficiency. What demonstrates the strongest ownership?",
+      "kind": "single",
+      "options": [
+        "Create the template and immediately make it compulsory for all team members to use.",
+        "Continue using the current method because the task has already been assigned and does not require process changes.",
+        "Complete your own work using the existing method and leave the suggestion for a future review.",
+        "Develop and test a reusable template, assess whether it maintains the required creative quality, and share it with the team for feedback before wider adoption."
+      ],
+      "correct": [
+        3
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Cultural Alignment & Ownership",
+      "prompt": "You are working on three creative deliverables with overlapping deadlines. One animation requires more revisions than expected, and you realise another deliverable may be delayed. What is the most responsible response?",
+      "kind": "single",
+      "options": [
+        "Continue working on all three projects and inform the team only if a deadline is missed.",
+        "Review priorities and dependencies, communicate the potential delay early, explain the impact, and align on revised timelines or task allocation.",
+        "Prioritise the project with the highest visibility and postpone the remaining work without informing the stakeholders.",
+        "Reduce the time spent on quality checks so that all deliverables can be submitted within the original deadlines."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    }
+  ]
+}

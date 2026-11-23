@@ -102,6 +102,27 @@ class AssessmentRepository:
         )
         return {r[0]: (int(r[1]), int(r[2])) for r in rows.all()}
 
+    async def unkeyed_counts(self, assessment_ids: Sequence[uuid.UUID]) -> dict[uuid.UUID, int]:
+        """How many questions still have no answer key, per assessment.
+
+        Counted in Python rather than in SQL: `correct` is a JSON column and
+        "is this array empty" has no spelling that works on both Postgres and
+        the SQLite the tests run against. Only the two columns are selected
+        and a paper is capped at `MAX_QUESTIONS`, so the rows are cheap.
+        """
+        if not assessment_ids:
+            return {}
+        rows = await self._session.execute(
+            select(AssessmentQuestion.assessment_id, AssessmentQuestion.correct).where(
+                AssessmentQuestion.assessment_id.in_(assessment_ids)
+            )
+        )
+        out: dict[uuid.UUID, int] = dict.fromkeys(assessment_ids, 0)
+        for assessment_id, correct in rows.all():
+            if not correct:
+                out[assessment_id] = out.get(assessment_id, 0) + 1
+        return out
+
     # --- attempts ---------------------------------------------------------- #
     async def add_attempt(self, **values: object) -> AssessmentAttempt:
         row = AssessmentAttempt(**values)

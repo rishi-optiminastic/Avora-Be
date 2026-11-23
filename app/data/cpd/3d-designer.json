@@ -1,0 +1,309 @@
+{
+  "department": "3D Designer",
+  "title": "CPD Assessment - 3D Designer",
+  "description": "20 questions, 1 mark each, across five competencies: Technical Knowledge (8), Problem Solving (3), Communication (3), Interpersonal Effectiveness (3), Cultural Alignment & Ownership (3). Capability bands: 0-39% L1 Foundational, 40-59% L2 Developing, 60-74% L3 Competent, 75-89% L4 Proficient, 90-100% L5 Advanced.",
+  "pass_mark": 60,
+  "time_limit_minutes": null,
+  "questions": [
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "You are designing a customised mechanical enclosure that needs to accommodate an electronic component. The component fits correctly in the digital model, but the first printed prototype is too tight to assemble. The printer and material have already been tested successfully on similar products. What would be the most appropriate next step?",
+      "kind": "single",
+      "options": [
+        "Increase the overall dimensions of the enclosure proportionately and print another prototype.",
+        "Review the dimensional tolerances, mating clearances, material shrinkage, and printer calibration before modifying the affected geometry.",
+        "Increase the wall thickness to improve the rigidity of the enclosure and prevent dimensional variation.",
+        "Reduce the polygon count of the model and export it using a different mesh resolution."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "A client requests a hollow 3D-printed decorative product with a complex internal structure. The model appears correct in the design software, but the slicer identifies unexpected internal surfaces and incomplete geometry. What should you do before proceeding?",
+      "kind": "single",
+      "options": [
+        "Increase the infill percentage so that the slicer can compensate for the missing geometry.",
+        "Export the file in a different format and rely on the slicer to reconstruct the internal structure.",
+        "Inspect the mesh for non-manifold edges, unintended internal faces, intersecting geometry, and volume integrity, then repair and validate the model.",
+        "Apply smooth shading and subdivide the model to improve its surface quality."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "You are designing a product with two interlocking 3D-printed components. The client wants a tight fit with minimal visible gaps, but the product must also be assembled and disassembled repeatedly. Which design consideration is most important?",
+      "kind": "single",
+      "options": [
+        "Use a consistent clearance based on the printer, material, geometry, and intended fit, then validate it through a test print.",
+        "Design both components with identical mating dimensions and rely on the material's flexibility during assembly.",
+        "Increase the wall thickness of both components so that the mating surfaces remain stable.",
+        "Reduce the overall dimensions of the components to create additional space during assembly."
+      ],
+      "correct": [
+        0
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "A product has a large flat base and several thin vertical features. During printing, the base repeatedly warps and some vertical features break during handling. Which approach would most effectively address the issue?",
+      "kind": "single",
+      "options": [
+        "Increase the infill percentage and print the model at a higher speed to reduce total exposure to heat.",
+        "Increase the overall scale of the model so that the thin features become stronger.",
+        "Add supports beneath every vertical feature and retain the current base geometry.",
+        "Evaluate bed adhesion, thermal behaviour, print orientation, feature thickness, and material suitability, then revise the geometry and print setup accordingly."
+      ],
+      "correct": [
+        3
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "A customer wants a personalised product with a name engraved on a curved surface. The text must remain readable after printing without compromising the product's appearance. What should be considered during modelling?",
+      "kind": "single",
+      "options": [
+        "Apply the text as a flat image texture because it preserves the original typography.",
+        "Convert the text into geometry, account for the surface curvature and engraving depth, and verify that the smallest features are printable.",
+        "Increase the overall model resolution so that the engraved text appears sharper.",
+        "Place the text on a separate flat surface and position it close to the curved body."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "You receive a 3D model created by another designer. It contains a large number of polygons, overlapping objects, and unnecessary details. The model needs to be modified and prepared for production. What is the best approach?",
+      "kind": "single",
+      "options": [
+        "Retain the existing geometry and increase the system's processing capacity to handle the model.",
+        "Reduce the polygon count uniformly across the entire model, regardless of where the detail is concentrated.",
+        "Inspect the model structure, simplify unnecessary geometry while preserving critical features, and maintain a clean, editable model suitable for the intended output.",
+        "Convert the entire model into a single mesh immediately so that it becomes easier to export."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "You are preparing a model for a 3D print that contains several overhangs and narrow internal channels. The slicer generates extensive supports, increasing material consumption and post-processing time. What should you investigate first?",
+      "kind": "single",
+      "options": [
+        "Revisit model orientation and geometry, assess whether overhangs or internal features can be redesigned, and use supports selectively where they are necessary.",
+        "Increase infill density so that the overhanging sections have more material beneath them.",
+        "Increase the printer's layer height to reduce the number of layers requiring support.",
+        "Remove all supports and rely on the printer's bridging capability for every unsupported section."
+      ],
+      "correct": [
+        0
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Technical Knowledge",
+      "prompt": "A customised product has been approved by the customer, and the final 3D model has been sent for printing. During production, the team discovers that the approved model is an older version with outdated dimensions. Which process would best prevent similar issues?",
+      "kind": "single",
+      "options": [
+        "Save every revised model using a new filename and allow the production team to select the latest file based on its date.",
+        "Maintain a central folder containing all versions and rely on the production team to identify the correct file.",
+        "Keep the original approved model unchanged and communicate all revisions through email.",
+        "Maintain controlled versioning, clearly identify approved production files, document design changes, and ensure the production team uses the latest authorised version."
+      ],
+      "correct": [
+        3
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Problem Solving",
+      "prompt": "A customer shares a rough sketch of a customised product and expects a printable prototype within three days. The sketch does not contain complete dimensions, material preferences, or functional details. What would be the most effective approach?",
+      "kind": "single",
+      "options": [
+        "Start modelling using your experience and seek customer approval once the first prototype is ready.",
+        "Identify critical missing information, clarify functional and dimensional requirements, communicate feasibility constraints, and develop a preliminary concept for early validation.",
+        "Prepare several detailed designs immediately so that the customer can select one without further clarification.",
+        "Ask the customer to submit a complete engineering drawing before beginning any design exploration."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Problem Solving",
+      "prompt": "A 3D-printed component repeatedly fails at the same narrow section, even though the overall model dimensions are correct. The material and printer settings have been checked. What should you investigate?",
+      "kind": "single",
+      "options": [
+        "Increase the overall infill percentage and retain the existing geometry.",
+        "Reduce the print speed and assume that the problem is caused by insufficient layer bonding.",
+        "Examine the geometry, load-bearing direction, wall thickness, stress concentration, and orientation to identify whether the design itself needs modification.",
+        "Increase the overall size of the product so that the failed section becomes proportionately larger."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Problem Solving",
+      "prompt": "A client approves a customised product, but the first physical prototype does not match the expected appearance. The digital model is dimensionally accurate, but the material finish, surface texture, and colour appear different from the reference. What should you do?",
+      "kind": "single",
+      "options": [
+        "Review the material and finishing limitations, compare the physical sample with the agreed references, and propose suitable adjustments or alternative production options.",
+        "Change the model dimensions until the physical product looks closer to the reference image.",
+        "Recreate the entire model using a different 3D software package to improve visual accuracy.",
+        "Proceed with the approved model because the digital dimensions are correct and the difference is related to production."
+      ],
+      "correct": [
+        0
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Communication",
+      "prompt": "A customer provides several reference images for a customised product. Some images show different dimensions and design features, and the customer is unable to explain which elements are essential. How should you proceed?",
+      "kind": "single",
+      "options": [
+        "Select the most visually appealing reference and use it as the final design direction.",
+        "Create a complete design based on your interpretation and share it after the modelling is finished.",
+        "Ask the customer to select one reference image and avoid combining features from multiple images.",
+        "Translate the references into a structured design brief, identify conflicting requirements, use annotated visuals to confirm expectations, and obtain approval on critical specifications."
+      ],
+      "correct": [
+        3
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Communication",
+      "prompt": "The production team informs you that a design is difficult to manufacture using the current printing setup. You believe the design can be produced with some modifications, but the changes may affect the product's appearance. How should you communicate this?",
+      "kind": "single",
+      "options": [
+        "Explain that the design was already approved and request the production team to proceed with the current model.",
+        "Discuss the manufacturing constraints, identify which design features are affected, and present alternative solutions with their implications for appearance, functionality, and production.",
+        "Make the necessary changes independently and share the revised model once production has confirmed that it works.",
+        "Ask the production team to suggest a replacement design without providing further design inputs."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Communication",
+      "prompt": "You discover a dimensional error in a production-ready file shortly before the printing team begins production. What should you communicate?",
+      "kind": "single",
+      "options": [
+        "Wait until the corrected model is complete before informing the team so that there is no unnecessary confusion.",
+        "Inform the team that a revised file will be shared but do not mention the possible production impact.",
+        "Immediately flag the issue, identify the affected file and dimensions, explain the potential impact, and communicate the corrective action and expected time for the revised file.",
+        "Send the corrected file using the same filename and assume the production team will automatically use it."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Interpersonal Effectiveness",
+      "prompt": "A customer wants a visually complex product, but the production team believes that some features may compromise durability and manufacturability. You are responsible for finding a solution. What should you do?",
+      "kind": "single",
+      "options": [
+        "Prioritise the customer's design preference because the product must match the approved concept.",
+        "Accept the production team's recommendation and remove the complex features without further customer discussion.",
+        "Bring both perspectives together, understand the functional importance of the requested features, and explore alternatives that balance the customer's expectations with production feasibility.",
+        "Ask the manager to decide between the customer and production team without attempting to resolve the technical disagreement."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Interpersonal Effectiveness",
+      "prompt": "A colleague repeatedly shares incomplete product specifications, causing you to spend additional time clarifying requirements and revising designs. You have already raised the issue informally. What is the most appropriate response?",
+      "kind": "single",
+      "options": [
+        "Explain the impact of incomplete inputs, agree on the specific information required at handover, and establish a consistent process for future submissions.",
+        "Continue filling in missing details yourself because raising the issue may affect the working relationship.",
+        "Stop accepting the colleague's work until they follow the expected process consistently.",
+        "Escalate the issue immediately without discussing the recurring problem with the colleague again."
+      ],
+      "correct": [
+        0
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Interpersonal Effectiveness",
+      "prompt": "A junior designer is struggling to prepare a complex 3D model for printing. Their revisions repeatedly introduce geometry errors, and the project deadline is approaching. What would be the best way to support them?",
+      "kind": "single",
+      "options": [
+        "Take over the entire task so that the project can be completed without further delays.",
+        "Ask them to restart the complete model independently so that they can learn through repeated practice.",
+        "Forward the production team's feedback and ask them to resolve all the issues without additional guidance.",
+        "Identify the specific areas causing difficulty, explain the relevant modelling and validation steps, agree on review checkpoints, and allow them to complete the work with appropriate support."
+      ],
+      "correct": [
+        3
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Cultural Alignment & Ownership",
+      "prompt": "You discover that a product design technically meets the customer's brief but has a visible defect that may affect the final customer experience. Correcting it may delay delivery. What should you do?",
+      "kind": "single",
+      "options": [
+        "Proceed with the current design because it meets the agreed requirements and avoid introducing a delay.",
+        "Assess the defect, communicate its impact transparently, recommend a corrective action, and align with the relevant stakeholders on the delivery implications.",
+        "Make the correction independently and inform the team only if the deadline is affected.",
+        "Deliver the product with a disclaimer so that the customer can decide whether the defect is acceptable."
+      ],
+      "correct": [
+        1
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Cultural Alignment & Ownership",
+      "prompt": "You identify that a recurring modelling or file-preparation task is consuming significant time. You believe a different workflow or tool could improve efficiency. What demonstrates the strongest ownership?",
+      "kind": "single",
+      "options": [
+        "Continue with the current workflow because changing it during ongoing projects may introduce risk.",
+        "Introduce the new tool immediately across all projects without informing the team.",
+        "Research and test the proposed improvement, evaluate its impact on quality and timelines, and share the recommendation with the team before adopting it.",
+        "Complete the assigned work using the existing method and leave the improvement suggestion for a future review."
+      ],
+      "correct": [
+        2
+      ],
+      "points": 1
+    },
+    {
+      "competency": "Cultural Alignment & Ownership",
+      "prompt": "You are handling multiple customised product projects with overlapping deadlines. One project requires additional revisions, and you realise that another delivery may be affected. What is the most responsible course of action?\n\nQ.\n\nAnswer\n\nCompetency\n\nRationale",
+      "kind": "single",
+      "options": [
+        "Review priorities and dependencies, communicate the potential delay early, explain the impact, and align on revised timelines or task allocation with the relevant stakeholders.",
+        "Continue working on both projects and communicate the delay only if the final deadline is missed.",
+        "Prioritise the project with the most visible customer output and postpone the other without discussion.",
+        "Reduce quality checks on both projects to maintain the original delivery dates."
+      ],
+      "correct": [
+        0
+      ],
+      "points": 1
+    }
+  ]
+}

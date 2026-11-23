@@ -26,9 +26,12 @@ class QuestionWrite(BaseModel):
     prompt: str = Field(min_length=1, max_length=1000)
     kind: QuestionKind = QuestionKind.SINGLE
     options: list[str] = Field(min_length=2, max_length=MAX_OPTIONS)
-    #: Indexes into `options`.
-    correct: list[int] = Field(min_length=1)
+    #: Indexes into `options`. EMPTY means "not keyed yet" - see
+    #: `_key_is_answerable`.
+    correct: list[int] = Field(default_factory=list, max_length=MAX_OPTIONS)
     points: int = Field(default=1, ge=0, le=100)
+    #: Which competency this question tests. A section heading, not a hint.
+    competency: str | None = Field(default=None, max_length=80)
 
     @field_validator("options")
     @classmethod
@@ -49,6 +52,13 @@ class QuestionWrite(BaseModel):
         people have sat the test is too late to fix it fairly.
         """
         key = set(self.correct)
+        if not key:
+            # No key YET, which a DRAFT is allowed to be: a paper can be
+            # written - or imported from a document that never carried one -
+            # before anybody decides the answers. `publish` is what refuses
+            # to let an unkeyed question be sat, because marking one scores
+            # everybody wrong (see `app.core.marking.is_right`).
+            return self
         if any(i < 0 or i >= len(self.options) for i in key):
             raise ValueError("The correct answer must be one of the options.")
         if self.kind is QuestionKind.SINGLE and len(key) != 1:
@@ -66,6 +76,9 @@ class QuestionWrite(BaseModel):
 class AssessmentWrite(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=2000)
+    #: The department this paper is written for. A grouping label; `assign`
+    #: still decides who gets it.
+    department: str | None = Field(default=None, max_length=120)
     pass_mark: int = Field(default=60, ge=0, le=100)
     time_limit_minutes: int | None = Field(default=None, ge=1, le=600)
     questions: list[QuestionWrite] = Field(default_factory=list, max_length=MAX_QUESTIONS)
@@ -95,6 +108,7 @@ class QuestionRead(BaseModel):
     kind: QuestionKind
     options: list[str]
     points: int
+    competency: str | None = None
 
 
 class QuestionForAuthor(QuestionRead):
@@ -109,11 +123,16 @@ class AssessmentRead(BaseModel):
     id: uuid.UUID
     title: str
     description: str | None
+    department: str | None = None
     status: AssessmentStatus
     pass_mark: int
     time_limit_minutes: int | None
     question_count: int = 0
     total_points: int = 0
+    #: Questions still without an answer key. Any at all and the test cannot
+    #: be published, so the list can say why rather than offering a button
+    #: that exists only to answer 409.
+    unkeyed_count: int = 0
     #: How many people hold it, and how many have sat it. HR's at-a-glance.
     assigned_count: int = 0
     submitted_count: int = 0
@@ -160,10 +179,15 @@ class AnswerResult(BaseModel):
 
     question_id: uuid.UUID
     prompt: str
+    competency: str | None = None
     options: list[str]
     chosen: list[int]
     is_correct: bool
     points_awarded: float
+    #: What the question was worth. `points_awarded` alone cannot be read as
+    #: a score - a per-competency breakdown needs the denominator too, and
+    #: deriving it from "awarded or zero" loses it for every wrong answer.
+    points: int = 1
     #: Shown only once the attempt is submitted, and never before.
     correct: list[int] | None = None
 
