@@ -156,6 +156,12 @@ class Employee(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # anything else. For a Head of Business or the Founder's Office, who lead the
     # work but have no business reading salaries. Admin-set only.
     assigns_org_wide: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Capability grant ("Founder's Office"): triages every request to meet the
+    # CEO - approves, rejects, asks for more, proposes another time, and books
+    # the meeting. Deliberately NOT folded into `assigns_org_wide`: leading the
+    # work and gatekeeping the founder's day are different jobs, and the people
+    # who do one are often not the people who do the other. Admin-set only.
+    founders_office: Mapped[bool] = mapped_column(Boolean, default=False)
     # Exempt from the office geofence on clock-in (genuine remote / field staff).
     # Admin-set; only meaningful when the org requires location for clock-in.
     location_check_exempt: Mapped[bool] = mapped_column(Boolean, default=False)

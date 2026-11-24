@@ -34,6 +34,19 @@ class NotificationKind(StrEnum):
     DEVICE_HEALTH = "device_health"  # an agent stopped capturing (or recovered)
     SHEET_SHARED = "sheet_shared"  # someone shared a spreadsheet with you
     EVENT = "event"  # an event you are invited to was published or called off
+    # Founder Meetings. Bodies deliberately never carry the agenda or purpose:
+    # a request can be Personal / Confidential, and an inbox preview is the one
+    # place its subject would leak to a phone's lock screen.
+    MEETING_REQUEST = "meeting_request"  # a new request for the Founder's Office
+    MEETING_APPROVAL_NEEDED = "meeting_approval_needed"  # forwarded to the CEO
+    MEETING_INFO_NEEDED = "meeting_info_needed"  # sent back to the requester
+    MEETING_SLOT_PROPOSED = "meeting_slot_proposed"  # a different time is offered
+    MEETING_SLOT_ANSWERED = "meeting_slot_answered"  # the requester took or refused it
+    MEETING_CONFIRMED = "meeting_confirmed"  # it is on the calendar
+    MEETING_REJECTED = "meeting_rejected"
+    MEETING_CANCELLED = "meeting_cancelled"
+    MEETING_SCHEDULING_FAILED = "meeting_scheduling_failed"  # approved, but Google refused
+    MEETING_REMINDER = "meeting_reminder"  # your meeting is soon
     SYSTEM = "system"
 
 

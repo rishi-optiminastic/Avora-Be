@@ -67,6 +67,25 @@ from app.models.leave import Leave, LeaveStatus, LeaveType
 from app.models.leave_comment import LeaveComment
 from app.models.leave_policy import LeavePolicy
 from app.models.leave_tier_quota import LeaveTierQuota
+from app.models.meeting_approval import (
+    ApprovalDecision,
+    ApprovalStage,
+    MeetingActivityLog,
+    MeetingApproval,
+)
+from app.models.meeting_event import EventSyncStatus, MeetingCalendarSync, MeetingEvent
+from app.models.meeting_request import (
+    MeetingAttachment,
+    MeetingCategory,
+    MeetingParticipant,
+    MeetingPriority,
+    MeetingRequest,
+    MeetingSlot,
+    MeetingStatus,
+    SlotOrigin,
+    SlotStatus,
+)
+from app.models.meeting_settings import MeetingSettings
 from app.models.notification import Notification, NotificationKind, NotificationLevel
 from app.models.onboarding_config import OnboardingConfig
 from app.models.org_settings import OrgSettings
@@ -213,6 +232,23 @@ __all__ = [
     "LeaveStatus",
     "LeaveTierQuota",
     "LeaveType",
+    "ApprovalDecision",
+    "ApprovalStage",
+    "EventSyncStatus",
+    "MeetingActivityLog",
+    "MeetingApproval",
+    "MeetingAttachment",
+    "MeetingCalendarSync",
+    "MeetingCategory",
+    "MeetingEvent",
+    "MeetingParticipant",
+    "MeetingPriority",
+    "MeetingRequest",
+    "MeetingSettings",
+    "MeetingSlot",
+    "MeetingStatus",
+    "SlotOrigin",
+    "SlotStatus",
     "Notification",
     "NotificationKind",
     "NotificationLevel",

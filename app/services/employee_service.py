@@ -605,6 +605,23 @@ class EmployeeService:
         )
         return updated
 
+    async def set_founders_office(
+        self, caller: CurrentUser, target_id: uuid.UUID, granted: bool
+    ) -> Employee:
+        # A capability grant is a privilege change - admin-only (rule 5.5).
+        if not caller.is_admin:
+            raise AuthorizationError()
+        employee = await self._employees.get(target_id)
+        if employee is None:
+            raise NotFoundError()
+        updated = await self._employees.set_founders_office(employee, granted)
+        await self._audit.append(
+            actor=str(caller.employee_id),
+            action="employee.founders_office_change",
+            target=f"employee:{target_id}:{granted}",
+        )
+        return updated
+
     async def set_location_check_exempt(
         self, caller: CurrentUser, target_id: uuid.UUID, exempt: bool
     ) -> Employee:

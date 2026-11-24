@@ -599,6 +599,16 @@ class EmployeeRepository:
         )
         return rows.scalars().all()
 
+    async def list_founders_office(self) -> Sequence[Employee]:
+        """Active holders of the Founder's Office grant - the people who triage
+        requests to meet the CEO."""
+        rows = await self._session.execute(
+            select(Employee)
+            .where(Employee.founders_office.is_(True), Employee.is_active.is_(True))
+            .order_by(Employee.full_name)
+        )
+        return rows.scalars().all()
+
     async def list_guests(self) -> Sequence[Employee]:
         """People from another workspace with an account in this one.
 
@@ -702,6 +712,12 @@ class EmployeeRepository:
     async def set_assigns_org_wide(self, employee: Employee, granted: bool) -> Employee:
         """Admin-only capability grant: assign tasks to anyone in the workspace."""
         employee.assigns_org_wide = granted
+        await self._session.flush()
+        return employee
+
+    async def set_founders_office(self, employee: Employee, granted: bool) -> Employee:
+        """Admin-only capability grant: triage the CEO's meeting queue."""
+        employee.founders_office = granted
         await self._session.flush()
         return employee
 

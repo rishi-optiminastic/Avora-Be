@@ -205,6 +205,17 @@ def settings() -> Settings:
         # paste tests hit the API and came back 402. Tests that need a model stub
         # it and `model_copy` the key back in (see tests/test_eod.py).
         openrouter_api_key="",
+        # Same reasoning for Google and Slack. `Settings()` reads the developer's
+        # .env for anything not passed here, and a dev machine has REAL
+        # service-account credentials in it - so without these the suite signed
+        # a live JWT with the production key and POSTed it to
+        # oauth2.googleapis.com on every run, and `test_quick_meet_unconfigured`
+        # passed for the wrong reason (503 from a failed network call, not from
+        # the not-configured guard it was written to prove).
+        google_sa_client_email="",
+        google_sa_private_key="",
+        google_meet_impersonate_subject="",
+        slack_webhook_url="",
     )
 
 

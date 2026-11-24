@@ -72,6 +72,8 @@ from app.repositories.leave_allocation import LeaveAllocationRepository
 from app.repositories.leave_comment import LeaveCommentRepository
 from app.repositories.leave_policy import LeavePolicyRepository
 from app.repositories.leave_tier_quota import LeaveTierQuotaRepository
+from app.repositories.meeting_request import MeetingRequestRepository
+from app.repositories.meeting_settings import MeetingSettingsRepository
 from app.repositories.note import NoteRepository
 from app.repositories.notification import NotificationRepository
 from app.repositories.office_location import OfficeLocationRepository
@@ -150,6 +152,8 @@ from app.services.leave_policy_service import LeavePolicyService
 from app.services.leave_service import LeaveService
 from app.services.llm_credit_service import LlmCreditService
 from app.services.llm_service import LlmService
+from app.services.meeting_booking_service import MeetingBookingService
+from app.services.meeting_request_service import MeetingRequestService
 from app.services.meeting_service import MeetingService
 from app.services.monitoring_gate import MonitoringGateService
 from app.services.monitoring_service import MonitoringService
@@ -482,6 +486,14 @@ def get_email_service(settings: SettingsDep) -> EmailService:
 
 def get_quick_meet_repo(db: DbDep) -> QuickMeetRepository:
     return QuickMeetRepository(db)
+
+
+def get_meeting_request_repo(db: DbDep) -> MeetingRequestRepository:
+    return MeetingRequestRepository(db)
+
+
+def get_meeting_settings_repo(db: DbDep) -> MeetingSettingsRepository:
+    return MeetingSettingsRepository(db)
 
 
 def get_meeting_service(
@@ -917,6 +929,29 @@ def get_notification_service(
     return NotificationService(notifications)
 
 
+def get_meeting_booking_service(
+    settings: SettingsDep,
+    requests: Annotated[MeetingRequestRepository, Depends(get_meeting_request_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    meeting_settings: Annotated[MeetingSettingsRepository, Depends(get_meeting_settings_repo)],
+) -> MeetingBookingService:
+    return MeetingBookingService(settings, requests, employees, meeting_settings)
+
+
+def get_meeting_request_service(
+    settings: SettingsDep,
+    requests: Annotated[MeetingRequestRepository, Depends(get_meeting_request_repo)],
+    employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
+    meeting_settings: Annotated[MeetingSettingsRepository, Depends(get_meeting_settings_repo)],
+    booking: Annotated[MeetingBookingService, Depends(get_meeting_booking_service)],
+    notifications: Annotated[NotificationService, Depends(get_notification_service)],
+    audit: Annotated[AuditRepository, Depends(get_audit_repo)],
+) -> MeetingRequestService:
+    return MeetingRequestService(
+        settings, requests, employees, meeting_settings, booking, notifications, audit
+    )
+
+
 def get_device_health_service(
     devices: Annotated[DeviceRepository, Depends(get_device_repo)],
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
@@ -1345,6 +1380,7 @@ CelebrationServiceDep = Annotated[CelebrationService, Depends(get_celebration_se
 LeavePolicyServiceDep = Annotated[LeavePolicyService, Depends(get_leave_policy_service)]
 LeaveAllocationServiceDep = Annotated[LeaveAllocationService, Depends(get_leave_allocation_service)]
 MeetingServiceDep = Annotated[MeetingService, Depends(get_meeting_service)]
+MeetingRequestServiceDep = Annotated[MeetingRequestService, Depends(get_meeting_request_service)]
 NoteServiceDep = Annotated[NoteService, Depends(get_note_service)]
 WorkbookServiceDep = Annotated[WorkbookService, Depends(get_workbook_service)]
 NotificationServiceDep = Annotated[NotificationService, Depends(get_notification_service)]
@@ -1462,6 +1498,7 @@ async def get_current_user(
         manager_id=employee.manager_id,
         payroll_manager=employee.payroll_manager,
         assigns_org_wide=employee.assigns_org_wide,
+        founders_office=employee.founders_office,
     )
 
 

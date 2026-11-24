@@ -31,6 +31,7 @@ class EmployeeRead(ORMModel):
     role: Role
     payroll_manager: bool = False
     assigns_org_wide: bool = False
+    founders_office: bool = False
     location_check_exempt: bool = False
     # Holds an account here on behalf of another workspace: full role, but not
     # this workspace's personnel. Defaulted so existing callers are unaffected.
@@ -75,6 +76,13 @@ class OrgWideAssignUpdate(BaseModel):
     workspace (a Head of Business), without HR or admin access."""
 
     assigns_org_wide: bool
+
+
+class FoundersOfficeUpdate(BaseModel):
+    """Admin-only capability grant: let one person triage the CEO's meeting
+    queue (the Founder's Office), without HR or admin access."""
+
+    founders_office: bool
 
 
 class AssignmentGrantsUpdate(BaseModel):

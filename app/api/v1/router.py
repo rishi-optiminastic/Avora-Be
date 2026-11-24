@@ -35,6 +35,7 @@ from app.api.v1.routes import (
     leave_allocation,
     leaves,
     llm_credit,
+    meeting_requests,
     meetings,
     notes,
     notifications,
@@ -95,6 +96,7 @@ api_router.include_router(devices.router)
 api_router.include_router(attendance.router)
 api_router.include_router(biometric.router)
 api_router.include_router(meetings.router)
+api_router.include_router(meeting_requests.router)
 api_router.include_router(notes.router)
 api_router.include_router(sheets.router)
 api_router.include_router(browsing.router)

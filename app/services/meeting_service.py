@@ -1,48 +1,33 @@
-"""Quick Meet — one click creates a Google Calendar event with a Meet link,
+"""Quick Meet - one click creates a Google Calendar event with a Meet link,
 emails the invite to the default attendees, posts it to Slack, and returns the
 link to join.
 
-Google Workspace service account + domain-wide delegation: the backend mints an
-access token impersonating the clicking user (or a configured subject), calls the
-Calendar API `events.insert` with `conferenceData` to get a real Meet link and
-`sendUpdates=all` so Google emails the invite to every attendee, then posts to a
-Slack incoming webhook. The SA private key is a secret from Settings only and is
-never logged (Security rule 5.6). No new dependency — the JWT assertion is signed
-with PyJWT (RS256) and the HTTP is httpx.
+The Google plumbing (service-account domain-wide delegation, the RS256
+assertion, the token exchange, the PEM normalisation) now lives in
+`app.services.google_calendar`, shared with Founder Meetings so there is one
+tested path to Calendar rather than two drifting copies. This module keeps what
+is specific to Quick Meet: a 30-minute event starting now, the caller's saved
+default invitees, and the Slack post.
 """
 
 from __future__ import annotations
 
-import time
-import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 import httpx
-import jwt
 
 from app.core.config import Settings
-from app.core.exceptions import AppError
 from app.core.logging import get_logger
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.quick_meet import QuickMeetRepository
 from app.schemas.auth import CurrentUser
 from app.schemas.meeting import QuickMeetDefaultsRead, QuickMeetingRead
+from app.services.google_calendar import GoogleCalendarClient, IntegrationError
 
-# calendar.events lets us insert an event with a Meet conference and invite people.
-_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events"
-_CALENDAR_EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+__all__ = ["IntegrationError", "MeetingService"]
 
 logger = get_logger("app.meeting")
-
-
-class IntegrationError(AppError):
-    """An upstream integration (Google/Slack) is unavailable or misconfigured."""
-
-    status_code = 503
-    code = "integration_unavailable"
-    message = "Meeting integration is unavailable."
 
 
 class MeetingService:
@@ -57,10 +42,11 @@ class MeetingService:
         self._employees = employees
         self._audit = audit
         self._quick_meet = quick_meet
+        self._calendar = GoogleCalendarClient(settings)
 
     async def start_quick(self, caller: CurrentUser) -> QuickMeetingRead:
         if not self._settings.quick_meet_configured:
-            raise IntegrationError("Quick Meet isn't set up yet — add the Google service account.")
+            raise IntegrationError("Quick Meet isn't set up yet - add the Google service account.")
 
         employee = await self._employees.get(caller.employee_id)
         if employee is None:
@@ -73,8 +59,7 @@ class MeetingService:
         saved = defaults.invitee_emails if defaults else []
         attendees = [e for e in saved if e.lower() != subject.lower()]
 
-        token = await self._access_token(subject)
-        meet_url = await self._create_event(token, employee.full_name, attendees)
+        meet_url = await self._create_event(subject, employee.full_name, attendees)
         slack_posted = await self._post_to_slack(employee.full_name, meet_url)
 
         await self._audit.append(
@@ -106,115 +91,26 @@ class MeetingService:
         )
         return QuickMeetDefaultsRead(invitee_emails=row.invitee_emails)
 
-    # ---- Google service-account (domain-wide delegation) ------------------- #
-    def _build_assertion(self, subject: str) -> str:
-        """Signed JWT the SA exchanges for an access token, impersonating `subject`."""
-        now = int(time.time())
-        claims = {
-            "iss": self._settings.google_sa_client_email,
-            "sub": subject,  # the Workspace user we act as (domain-wide delegation)
-            "scope": _CALENDAR_SCOPE,
-            "aud": self._settings.google_sa_token_uri,
-            "iat": now,
-            "exp": now + 3600,
-        }
-        key = _normalise_pem(self._settings.google_sa_private_key)
-        return jwt.encode(claims, key, algorithm="RS256")
-
-    async def _access_token(self, subject: str) -> str:
-        # Signing is the likeliest thing to break on a fresh setup — the SA private
-        # key is pasted through an env var, so a stray quote or half-unescaped
-        # newline leaves a PEM that `quick_meet_configured` (a non-empty check)
-        # happily accepts and PyJWT then rejects. Uncaught that surfaced as an
-        # opaque 500; as a 503 it reads as "the integration is misconfigured",
-        # which is what it is.
-        try:
-            assertion = self._build_assertion(subject)
-        except Exception as exc:
-            logger.warning(
-                "google_sa_key_unusable",
-                extra={
-                    "reason": type(exc).__name__,
-                    "sa_client_email": self._settings.google_sa_client_email,
-                },
-            )
-            raise IntegrationError(
-                "GOOGLE_SA_PRIVATE_KEY is unreadable: "
-                f"{_describe_pem(self._settings.google_sa_private_key)}. "
-                "Paste the private_key value from the service-account JSON, "
-                "without wrapping quotes."
-            ) from exc
-        payload = {
-            "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
-            "assertion": assertion,
-        }
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(self._settings.google_sa_token_uri, data=payload)
-        except httpx.HTTPError as exc:
-            raise IntegrationError("Could not reach Google to authorize.") from exc
-        if resp.status_code >= 400:
-            # Google's token-endpoint error body carries no secrets — only
-            # {"error", "error_description"}. Log it so prod failures are
-            # diagnosable instead of an opaque 400 -> 503. The subject is the
-            # impersonated user, not a secret.
-            logger.warning(
-                "google_token_exchange_failed",
-                extra={
-                    "status": resp.status_code,
-                    "google_error": resp.text,
-                    "subject": subject,
-                    "sa_client_email": self._settings.google_sa_client_email,
-                },
-            )
-            raise IntegrationError("Google rejected the meeting authorization.")
-        token = resp.json().get("access_token")
-        if not isinstance(token, str):
-            raise IntegrationError("Google did not return an access token.")
-        return token
-
-    async def _create_event(self, token: str, starter: str, attendees: list[str]) -> str:
+    async def _create_event(self, subject: str, starter: str, attendees: list[str]) -> str:
         """Insert a Calendar event with a Meet link; Google emails the attendees."""
         start = datetime.now(UTC)
         end = start + timedelta(minutes=self._settings.quick_meet_duration_minutes)
-        body = {
-            "summary": f"Quick Meet — {starter}",
-            "start": {"dateTime": start.isoformat()},
-            "end": {"dateTime": end.isoformat()},
-            "attendees": [{"email": email} for email in attendees],
-            "conferenceData": {
-                "createRequest": {
-                    "requestId": uuid.uuid4().hex,
-                    "conferenceSolutionKey": {"type": "hangoutsMeet"},
-                }
+        event = await self._calendar.insert_event(
+            subject=subject,
+            calendar_id="primary",
+            body={
+                "summary": f"Quick Meet - {starter}",
+                "start": {"dateTime": start.isoformat()},
+                "end": {"dateTime": end.isoformat()},
+                "attendees": [{"email": email} for email in attendees],
             },
-        }
-        try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.post(
-                    _CALENDAR_EVENTS_URL,
-                    headers={"Authorization": f"Bearer {token}"},
-                    params={"conferenceDataVersion": 1, "sendUpdates": "all"},
-                    json=body,
-                )
-        except httpx.HTTPError as exc:
-            raise IntegrationError("Could not reach Google Calendar.") from exc
-        if resp.status_code >= 400:
-            raise IntegrationError("Google Calendar could not create the meeting.")
-        return self._extract_meet_link(resp.json())
-
-    @staticmethod
-    def _extract_meet_link(event: dict[str, Any]) -> str:
-        link = event.get("hangoutLink")
-        if isinstance(link, str) and link:
-            return link
-        conference = event.get("conferenceData")
-        entry_points = conference.get("entryPoints", []) if isinstance(conference, dict) else []
-        for entry in entry_points:
-            uri = entry.get("uri")
-            if entry.get("entryPointType") == "video" and isinstance(uri, str):
-                return uri
-        raise IntegrationError("Google Calendar did not return a meeting link.")
+        )
+        link = self._calendar.extract_meet_link(event)
+        if link is None:
+            # Quick Meet's entire output IS the link, so an event without one is
+            # a failure here even though it is legitimate elsewhere.
+            raise IntegrationError("Google Calendar did not return a meeting link.")
+        return link
 
     # ---- Slack ------------------------------------------------------------- #
     async def _post_to_slack(self, starter: str, url: str) -> bool:
@@ -228,62 +124,3 @@ class MeetingService:
         except httpx.HTTPError:
             return False  # the meeting still works even if Slack is down
         return resp.status_code < 400
-
-
-def _normalise_pem(raw: str) -> str:
-    """Coax a pasted private key into a real PEM.
-
-    The key reaches us through an env-var text box, and the same four mistakes
-    happen every time: the JSON's escaped ``\\n`` sequences survive verbatim, the
-    surrounding quotes get pasted along with the value, the deploy UI expands the
-    escapes into genuine newlines, or it expands only the ``n`` and leaves the
-    backslash behind at the end of every line. All four describe the same key, so
-    accept all four rather than making somebody guess which one the parser wanted.
-
-    Only formatting is normalised. A truncated or wrong key still fails to parse,
-    which is the point.
-    """
-    key = raw.strip()
-    # Paired wrapping quotes, e.g. VALUE="-----BEGIN...". Unpaired quotes are left
-    # alone: they are part of a genuinely malformed value, not decoration.
-    for quote in ('"', "'"):
-        if len(key) >= 2 and key.startswith(quote) and key.endswith(quote):
-            key = key[1:-1].strip()
-            break
-    # Escaped newlines (single-line form) become real ones. A key that already has
-    # real newlines is unaffected: there is nothing to replace.
-    key = key.replace("\\n", "\n")
-    # A backslash left dangling at the end of a line is the half-expanded form:
-    # the `n` of each `\n` became a real newline and the backslash stayed. It sits
-    # inside the base64 body and breaks the decode, while every marker still looks
-    # right, which is why the key reads as valid and is not. Base64 never contains
-    # a backslash, so stripping it here is unambiguous.
-    lines = (line.rstrip().rstrip("\\").rstrip() for line in key.split("\n"))
-    cleaned = "\n".join(line for line in lines if line)
-    # Keep an empty value empty, so `_describe_pem` can still say "it is empty"
-    # rather than reporting a missing BEGIN line on a blank env var.
-    return f"{cleaned}\n" if cleaned else ""
-
-
-def _describe_pem(raw: str) -> str:
-    """Why a key looks unusable, in terms the person pasting it can act on.
-
-    Deliberately reports SHAPE only — length and which markers are present. The
-    key itself is a secret and never reaches a log or an API response.
-    """
-    key = _normalise_pem(raw)
-    if not key:
-        return "it is empty"
-    problems: list[str] = []
-    if "-----BEGIN" not in key:
-        problems.append("no BEGIN line")
-    if "-----END" not in key:
-        problems.append("no END line")
-    # Count breaks in the CONTENT: normalisation terminates the key with a newline,
-    # so testing for one at all would call every single-line key well formed and
-    # lose the most actionable message of the set.
-    if len(key.strip().split("\n")) == 1:
-        problems.append("no line breaks (escaped \\n may have been stripped)")
-    if not problems:
-        problems.append(f"markers present but the body did not parse ({len(key)} chars)")
-    return ", ".join(problems)

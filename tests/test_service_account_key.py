@@ -13,7 +13,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from app.services.meeting_service import _describe_pem, _normalise_pem
+from app.services.google_calendar import describe_pem, normalise_pem
 
 
 @pytest.fixture(scope="module")
@@ -36,17 +36,17 @@ def _loads(candidate: str) -> bool:
 
 
 def test_a_clean_key_is_left_working(pem: str) -> None:
-    assert _loads(_normalise_pem(pem))
+    assert _loads(normalise_pem(pem))
 
 
 def test_the_single_line_json_form_works(pem: str) -> None:
     """Straight out of the service-account JSON, escapes intact."""
-    assert _loads(_normalise_pem(pem.replace("\n", "\\n")))
+    assert _loads(normalise_pem(pem.replace("\n", "\\n")))
 
 
 def test_wrapping_quotes_are_stripped(pem: str) -> None:
-    assert _loads(_normalise_pem(f'"{pem}"'))
-    assert _loads(_normalise_pem(f"'{pem.replace(chr(10), chr(92) + 'n')}'"))
+    assert _loads(normalise_pem(f'"{pem}"'))
+    assert _loads(normalise_pem(f"'{pem.replace(chr(10), chr(92) + 'n')}'"))
 
 
 def test_the_half_expanded_form_that_broke_production(pem: str) -> None:
@@ -55,28 +55,28 @@ def test_the_half_expanded_form_that_broke_production(pem: str) -> None:
     down to 65-character body lines where PEM uses 64."""
     mangled = pem.replace("\n", "\\\n")
     assert not _loads(mangled), "fixture is not actually broken"
-    assert _loads(_normalise_pem(mangled))
+    assert _loads(normalise_pem(mangled))
 
 
 def test_trailing_spaces_after_the_backslash_are_tolerated(pem: str) -> None:
-    assert _loads(_normalise_pem(pem.replace("\n", "\\  \n")))
+    assert _loads(normalise_pem(pem.replace("\n", "\\  \n")))
 
 
 def test_a_genuinely_broken_key_still_fails(pem: str) -> None:
     """Normalisation must not paper over a truncated or wrong key."""
     truncated = "\n".join(pem.split("\n")[:5])
-    assert not _loads(_normalise_pem(truncated))
+    assert not _loads(normalise_pem(truncated))
 
 
 def test_the_diagnosis_never_contains_the_key(pem: str) -> None:
-    """`_describe_pem` reaches an API response, so it reports shape only."""
+    """`describe_pem` reaches an API response, so it reports shape only."""
     body = pem.split("\n")[1]
     for candidate in (pem, pem.replace("\n", "\\\n"), "", "not a key"):
-        message = _describe_pem(candidate)
+        message = describe_pem(candidate)
         assert body not in message
         assert "BEGIN" not in message or "no BEGIN line" in message
 
 
 def test_an_empty_value_says_so() -> None:
-    assert _describe_pem("") == "it is empty"
-    assert _describe_pem("   ") == "it is empty"
+    assert describe_pem("") == "it is empty"
+    assert describe_pem("   ") == "it is empty"

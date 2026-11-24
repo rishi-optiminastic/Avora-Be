@@ -21,6 +21,9 @@ class CurrentUser(BaseModel):
     # Capability grant ("task lead": Head of Business, Founder's Office): see every
     # task in the workspace and assign to anyone, with no HR or admin access.
     assigns_org_wide: bool = False
+    # Capability grant ("Founder's Office"): triages the CEO's meeting queue.
+    # Carries no other access - not HR, not admin, not tasks.
+    founders_office: bool = False
 
     @field_validator("role")
     @classmethod

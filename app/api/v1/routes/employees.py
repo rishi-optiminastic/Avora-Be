@@ -33,6 +33,7 @@ from app.schemas.employee import (
     EmployeeRead,
     EmployeeRoleUpdate,
     EmployeeStatusUpdate,
+    FoundersOfficeUpdate,
     OrgWideAssignUpdate,
     PayrollManagerUpdate,
     SelfProfileUpdate,
@@ -213,6 +214,19 @@ async def set_employee_org_wide_assign(
     """Admin-only: let one person assign tasks to anyone in the workspace, across
     every department (a Head of Business), with no HR or admin access."""
     employee = await service.set_assigns_org_wide(admin, employee_id, payload.assigns_org_wide)
+    return EmployeeRead.model_validate(employee)
+
+
+@router.put("/{employee_id}/founders-office", response_model=EmployeeRead)
+async def set_employee_founders_office(
+    employee_id: uuid.UUID,
+    payload: FoundersOfficeUpdate,
+    admin: AdminDep,
+    service: EmployeeServiceDep,
+) -> EmployeeRead:
+    """Admin-only: let one person triage the CEO's meeting queue (the Founder's
+    Office), with no HR or admin access to anything else."""
+    employee = await service.set_founders_office(admin, employee_id, payload.founders_office)
     return EmployeeRead.model_validate(employee)
 
 

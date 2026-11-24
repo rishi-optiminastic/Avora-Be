@@ -18,10 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
 from app.core.deps import get_settings
-from app.repositories.audit import AuditRepository
-from app.repositories.employee import EmployeeRepository
-from app.repositories.quick_meet import QuickMeetRepository
-from app.services.meeting_service import MeetingService, _describe_pem
+from app.services.google_calendar import (
+    SCOPE_EVENTS,
+    GoogleCalendarClient,
+    describe_pem,
+)
 from tests.conftest import _Seed, auth_headers
 
 
@@ -39,7 +40,7 @@ async def test_quick_meet_unconfigured_fails_cleanly(
     assert resp.json()["error"]["code"] == "integration_unavailable"
 
 
-def test_sa_assertion_has_impersonation_and_scope(settings: Settings, db: AsyncSession) -> None:
+def test_sa_assertion_has_impersonation_and_scope(settings: Settings) -> None:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     private_pem = key.private_bytes(
         serialization.Encoding.PEM,
@@ -57,11 +58,7 @@ def test_sa_assertion_has_impersonation_and_scope(settings: Settings, db: AsyncS
             "google_sa_private_key": private_pem,
         }
     )
-    service = MeetingService(
-        configured, EmployeeRepository(db), AuditRepository(db), QuickMeetRepository(db)
-    )
-
-    assertion = service._build_assertion("alice@corp.test")
+    assertion = GoogleCalendarClient(configured).build_assertion("alice@corp.test", SCOPE_EVENTS)
     claims = jwt.decode(
         assertion,
         public_pem,
@@ -147,7 +144,7 @@ def _pem() -> str:
     ).decode()
 
 
-def _signs(settings: Settings, db: AsyncSession, private_key: str) -> bool:
+def _signs(settings: Settings, private_key: str) -> bool:
     """Can the service build a signed assertion from this pasted key?"""
     configured = settings.model_copy(
         update={
@@ -155,45 +152,42 @@ def _signs(settings: Settings, db: AsyncSession, private_key: str) -> bool:
             "google_sa_private_key": private_key,
         }
     )
-    service = MeetingService(
-        configured, EmployeeRepository(db), AuditRepository(db), QuickMeetRepository(db)
-    )
-    return bool(service._build_assertion("alice@corp.test"))
+    return bool(GoogleCalendarClient(configured).build_assertion("alice@corp.test", SCOPE_EVENTS))
 
 
-def test_key_pasted_with_escaped_newlines_is_accepted(settings: Settings, db: AsyncSession) -> None:
+def test_key_pasted_with_escaped_newlines_is_accepted(settings: Settings) -> None:
     """The form straight out of the service-account JSON."""
-    assert _signs(settings, db, _pem().replace("\n", "\\n"))
+    assert _signs(settings, _pem().replace("\n", "\\n"))
 
 
-def test_key_pasted_with_real_newlines_is_accepted(settings: Settings, db: AsyncSession) -> None:
+def test_key_pasted_with_real_newlines_is_accepted(settings: Settings) -> None:
     """What you get when the deploy UI expands the escapes for you."""
-    assert _signs(settings, db, _pem())
+    assert _signs(settings, _pem())
 
 
-def test_key_pasted_with_wrapping_quotes_is_accepted(settings: Settings, db: AsyncSession) -> None:
+def test_key_pasted_with_wrapping_quotes_is_accepted(settings: Settings) -> None:
     """VALUE="-----BEGIN..." — the quotes come along for the ride."""
-    assert _signs(settings, db, f'"{_pem()}"')
-    assert _signs(settings, db, f"'{_pem().replace(chr(10), chr(92) + 'n')}'")
+    assert _signs(settings, f'"{_pem()}"')
+    assert _signs(settings, f"'{_pem().replace(chr(10), chr(92) + 'n')}'")
 
 
-def test_key_with_surrounding_whitespace_is_accepted(settings: Settings, db: AsyncSession) -> None:
-    assert _signs(settings, db, f"  \n{_pem()}\n  ")
+def test_key_with_surrounding_whitespace_is_accepted(settings: Settings) -> None:
+    assert _signs(settings, f"  \n{_pem()}\n  ")
 
 
 def test_a_truncated_key_still_fails(settings: Settings, db: AsyncSession) -> None:
     """Normalising formatting must not paper over a genuinely broken key."""
     with pytest.raises((ValueError, jwt.exceptions.PyJWTError)):
-        _signs(settings, db, "-----BEGIN PRIVATE KEY-----\nnot-a-key\n-----END PRIVATE KEY-----\n")
+        _signs(settings, "-----BEGIN PRIVATE KEY-----\nnot-a-key\n-----END PRIVATE KEY-----\n")
 
 
 def test_describe_pem_names_the_actual_defect_without_leaking_the_key() -> None:
     secret = _pem()
-    assert _describe_pem("") == "it is empty"
-    assert "no BEGIN line" in _describe_pem("MIIEvgIBADANBg")
-    assert "no line breaks" in _describe_pem(
+    assert describe_pem("") == "it is empty"
+    assert "no BEGIN line" in describe_pem("MIIEvgIBADANBg")
+    assert "no line breaks" in describe_pem(
         "-----BEGIN PRIVATE KEY----- MIIE -----END PRIVATE KEY-----"
     )
     # A well-formed key that simply didn't parse must not have its body echoed.
-    described = _describe_pem(secret)
+    described = describe_pem(secret)
     assert "MII" not in described
