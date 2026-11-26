@@ -39,6 +39,7 @@ from app.repositories.recognition import RecognitionRepository
 from app.repositories.reward import RewardRepository
 from app.schemas.auth import CurrentUser
 from app.schemas.reward import (
+    DepartmentMemberRead,
     DepartmentStandingRead,
     PointsBalance,
     RedemptionDecision,
@@ -131,6 +132,23 @@ class RewardService:
         # whiteboard is for.
         since = week_start() if period == "week" else month_start()
         rows = await self._recognitions.department_standings(since=since)
+        # The same `since`, deliberately: the board view draws each department
+        # as a column of the people in it, and a column built from a different
+        # window than its own header is a chart that lies.
+        members = await self._recognitions.department_members(since=since)
+        people = await self._employees.get_many([m.employee_id for m in members])
+        by_department: dict[str, list[DepartmentMemberRead]] = {}
+        for m in members:
+            person = people.get(m.employee_id)
+            by_department.setdefault(m.department, []).append(
+                DepartmentMemberRead(
+                    employee_id=m.employee_id,
+                    employee_name=person.full_name if person else None,
+                    employee_avatar_url=getattr(person, "avatar_url", None),
+                    points=m.points,
+                    awards=m.awards,
+                )
+            )
         top = rows[0].awards if rows else 0
         outright = top > 0 and sum(1 for r in rows if r.awards == top) == 1
         return Whiteboard(
@@ -142,6 +160,7 @@ class RewardService:
                     awards=row.awards,
                     people=row.people,
                     leading=outright and row.awards == top,
+                    members=by_department.get(row.department, []),
                 )
                 for row in rows
             ],

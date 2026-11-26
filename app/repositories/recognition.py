@@ -37,6 +37,16 @@ class DepartmentStanding:
 
 
 @dataclass(frozen=True)
+class DepartmentMember:
+    """One person's recognition inside one department, over the board's window."""
+
+    department: str
+    employee_id: uuid.UUID
+    points: int
+    awards: int
+
+
+@dataclass(frozen=True)
 class Standing:
     """One person's place on the board: what they have earned, and how often."""
 
@@ -120,6 +130,56 @@ class RecognitionRepository:
             Standing(employee_id=r.employee_id, points=int(r.points), awards=int(r.awards))
             for r in rows.all()
         ]
+
+    async def department_members(
+        self, *, since: datetime | None = None, per_department: int = 8
+    ) -> list[DepartmentMember]:
+        """Who was recognised inside each department, over the same window.
+
+        One query for the whole board, like `standings` - fetching a member
+        list per column would be an N+1 on a page whose entire job is showing
+        every department at once.
+
+        Trimming to the top `per_department` happens in Python rather than in
+        SQL: a window function would push this onto a CTE for a list that is
+        already small, and the board only ever draws a few cards per column.
+        """
+        query = (
+            select(
+                Employee.department,
+                Recognition.employee_id,
+                func.coalesce(func.sum(Recognition.points), 0).label("points"),
+                func.count().label("awards"),
+            )
+            .join(Employee, Employee.id == Recognition.employee_id)
+            .where(Employee.department.is_not(None))
+            .group_by(Employee.department, Recognition.employee_id)
+            .order_by(
+                Employee.department,
+                func.count().desc(),
+                func.coalesce(func.sum(Recognition.points), 0).desc(),
+            )
+        )
+        if since is not None:
+            query = query.where(Recognition.created_at >= since)
+        rows = await self._session.execute(query)
+
+        seen: dict[str, int] = {}
+        out: list[DepartmentMember] = []
+        for r in rows.all():
+            taken = seen.get(r.department, 0)
+            if taken >= per_department:
+                continue
+            seen[r.department] = taken + 1
+            out.append(
+                DepartmentMember(
+                    department=r.department,
+                    employee_id=r.employee_id,
+                    points=int(r.points),
+                    awards=int(r.awards),
+                )
+            )
+        return out
 
     async def department_standings(
         self, *, since: datetime | None = None

@@ -630,3 +630,49 @@ async def test_an_unknown_window_is_refused(
         f"{URL}/whiteboard?period=fortnight", headers=auth_headers(settings, seed.report)
     )
     assert resp.status_code == 422
+
+
+# --------------------------------------------------------------------------- #
+# The board view: a column per department
+# --------------------------------------------------------------------------- #
+async def _put_in_department(db: AsyncSession, who: Employee, name: str) -> None:
+    """The shared seed leaves `department` unset, and the board skips anyone
+    without one - so a board test has to put people somewhere first."""
+    who.department = name
+    db.add(who)
+    await db.commit()
+
+
+async def test_whiteboard_columns_carry_the_people_in_each_department(
+    client: AsyncClient, settings: Settings, db: AsyncSession, seed: _Seed
+) -> None:
+    """The board view draws a column per department, so each one needs its members."""
+    await _put_in_department(db, seed.report, "Engineering")
+    await _award(client, settings, seed.manager, seed.report)
+    resp = await client.get(f"{URL}/whiteboard", headers=auth_headers(settings, seed.admin))
+    assert resp.status_code == 200, resp.text
+    departments = resp.json()["departments"]
+    assert departments, "the award above should have put a department on the board"
+    named = {row["department"]: row for row in departments}
+    assert any(row["members"] for row in departments), "a column with no cards is not a column"
+    for row in named.values():
+        # Never more cards than the distinct people the column header claims.
+        assert len(row["members"]) <= row["people"]
+        for member in row["members"]:
+            assert member["awards"] >= 1
+            assert member["points"] >= 0
+
+
+async def test_whiteboard_members_use_the_same_window_as_their_column(
+    client: AsyncClient, settings: Settings, db: AsyncSession, seed: _Seed
+) -> None:
+    """A column built from a wider window than its own header is a chart that lies."""
+    await _put_in_department(db, seed.report, "Engineering")
+    await _award(client, settings, seed.manager, seed.report)
+    for period in ("week", "month"):
+        resp = await client.get(
+            f"{URL}/whiteboard?period={period}", headers=auth_headers(settings, seed.admin)
+        )
+        assert resp.status_code == 200, resp.text
+        for row in resp.json()["departments"]:
+            assert sum(m["awards"] for m in row["members"]) <= row["awards"]

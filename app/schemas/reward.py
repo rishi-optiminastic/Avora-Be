@@ -115,6 +115,16 @@ class StandingRead(BaseModel):
     awards: int
 
 
+class DepartmentMemberRead(BaseModel):
+    """One person on a department's column of the board."""
+
+    employee_id: uuid.UUID
+    employee_name: str | None = None
+    employee_avatar_url: str | None = None
+    points: int
+    awards: int
+
+
 class DepartmentStandingRead(BaseModel):
     """One department's row on the whiteboard."""
 
@@ -127,6 +137,10 @@ class DepartmentStandingRead(BaseModel):
     #: True for the department holding the period. Decided by the server so
     #: every screen crowns the same one.
     leading: bool = False
+    #: Who was recognised in this department, over the SAME window the board
+    #: was built for - so the column and its header can never describe
+    #: different time ranges. Capped server-side; `people` is the true count.
+    members: list[DepartmentMemberRead] = Field(default_factory=list)
 
 
 class Whiteboard(BaseModel):
