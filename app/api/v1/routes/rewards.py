@@ -58,8 +58,12 @@ async def standings(
 async def whiteboard(
     caller: CurrentUserDep,
     service: RewardServiceDep,
+    # Week and month only: the badges themselves are weekly or monthly, so a
+    # board ranked over all time compares a department's whole history against
+    # another's and never changes hands. The point of a whiteboard is that it
+    # can be won again.
     period: Annotated[
-        Literal["week", "month", "all"], Query(description="The window to rank over.")
+        Literal["week", "month"], Query(description="The window to rank over.")
     ] = "month",
 ) -> Whiteboard:
     """Recognition by department, and which one is holding the period.

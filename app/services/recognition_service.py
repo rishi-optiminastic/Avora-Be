@@ -5,19 +5,15 @@ and can add to the thread.
 
 The rules that carry weight:
 
-* **Anyone may recognise anyone.** Awarding used to be limited to a recipient's
-  own reporting line plus HR and admin. On a 29-person org that was 8 possible
-  givers and 21 people with no way to recognise anybody, and the programme was
-  used once in its lifetime. The people who see the work most closely are
-  usually not the ones who sign it off.
-* **But not all awards weigh the same.** An award from the recipient's line
-  (their manager, HR, an admin) is MANAGER and carries the badge's full points;
-  anyone else is PEER and carries half. Both are real recognition; only one is
-  from the person accountable for the work.
-* **Peer awards are rationed, manager ones are not.** `PEER_AWARDS_PER_MONTH`
-  per giver per calendar month. Points buy real things, so the supply has to be
-  bounded or the catalogue prices itself out in a week. A manager recognising
-  their own reports is the job and is already visible to the whole org.
+* **Only a recipient's own line may recognise them** - their reporting
+  manager, HR, or an admin. Awarding was briefly open to everyone, on the
+  reasoning that the people who see the work most closely are not the ones who
+  sign it off. The org has since decided the other way: recognition carries
+  weight because of who gives it, and an award from anybody at all does not.
+* **PEER is therefore unreachable for new awards.** The enum and the
+  half-points pricing stay, because rows awarded while the programme was open
+  still carry it and their points were already spent. Nothing new is written
+  with it.
 * **Never yourself.** Self-awarded recognition is not recognition.
 * **The feed is org-wide.** Recognition only the recipient can see is a private
   message. Colleagues commenting on it is the point of the programme.
@@ -35,9 +31,7 @@ from collections.abc import Sequence
 from app.core.exceptions import AuthorizationError, NotFoundError, ValidationError
 from app.core.recognition_badges import (
     BY_BADGE,
-    PEER_AWARDS_PER_MONTH,
     label_for,
-    month_start,
     points_for,
 )
 from app.models.employee import Employee, Role
@@ -94,9 +88,17 @@ class RecognitionService:
             raise NotFoundError()
         if recipient.id == caller.employee_id:
             raise ValidationError("You can't recognise yourself.")
-        source = _award_source(caller, recipient)
-        if source is RecognitionSource.PEER:
-            await self._check_peer_allowance(caller.employee_id)
+        # Their own line only: the reporting TREE (not just direct reports, so
+        # a skip-level manager counts), plus HR and admin. The same scope that
+        # decides who may see somebody's leave, so a lead carrying an
+        # `executive` role covers their own people exactly as they do
+        # everywhere else - the reporting edge grants it, not the job title.
+        if not await self._employees.can_read(caller, recipient.id):
+            raise AuthorizationError("You can only recognise people in your own team.")
+        # Everyone who gets past that guard is accountable for the work, so
+        # every new award is a MANAGER one. PEER survives only on rows written
+        # while awarding was open to the whole org.
+        source = RecognitionSource.MANAGER
 
         row = await self._recognitions.create(
             employee_id=recipient.id,
@@ -116,20 +118,6 @@ class RecognitionService:
         )
         await self._announce(caller, row, recipient)
         return row
-
-    async def _check_peer_allowance(self, awarder_id: uuid.UUID) -> None:
-        """Refuse a peer award once this month's allowance is used up.
-
-        Counted from the first of the CALENDAR month rather than a rolling 30
-        days, so everyone's allowance refills on the same visible date and
-        nobody has to work out when their window reopens.
-        """
-        given = await self._recognitions.peer_awards_given_since(awarder_id, month_start())
-        if given >= PEER_AWARDS_PER_MONTH:
-            raise ValidationError(
-                f"You have used all {PEER_AWARDS_PER_MONTH} of your peer "
-                "recognitions this month. They refill on the 1st."
-            )
 
     async def _announce(self, caller: CurrentUser, row: Recognition, recipient: Employee) -> None:
         """In-app for the recipient, email for the recipient only.
@@ -302,22 +290,6 @@ class RecognitionService:
                 "They have already put these points towards a reward. Decline "
                 "or cancel that redemption first, then take this back."
             )
-
-
-def _award_source(caller: CurrentUser, recipient: Employee) -> RecognitionSource:
-    """How much standing this award carries - not whether it is allowed.
-
-    Everyone may recognise everyone; what differs is the weight. MANAGER means
-    the caller is accountable for this person's work: their reporting manager,
-    HR, or an admin. Anyone else is a PEER.
-
-    Being *a* manager is not what counts - being THEIR manager is, the same
-    `manager_id` edge that decides scope for leave, regularization and
-    out-of-office.
-    """
-    if caller.role in (Role.ADMIN, Role.HR) or recipient.manager_id == caller.employee_id:
-        return RecognitionSource.MANAGER
-    return RecognitionSource.PEER
 
 
 def _may_unaward(caller: CurrentUser, row: Recognition) -> bool:

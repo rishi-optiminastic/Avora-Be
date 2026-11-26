@@ -91,14 +91,14 @@ async def test_a_manager_recognises_their_own_report(
     assert body["awarded_by_name"] == seed.manager.full_name
 
 
-async def test_a_colleague_outside_the_reporting_line_may_still_recognise(
+async def test_a_colleague_outside_the_reporting_line_cannot_recognise(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:
-    """The rule this replaced returned 403 here.
+    """Recognition carries weight because of who gives it.
 
-    It was the whole problem: the people who see the work most closely are
-    usually not the ones who sign it off, and 21 of 29 had no way to recognise
-    anybody at all.
+    Awarding was briefly open to everyone - the reasoning being that the people
+    who see the work most closely are not the ones who sign it off. The org
+    decided the other way, so this is a refusal again.
     """
     resp = await client.post(
         URL,
@@ -106,30 +106,37 @@ async def test_a_colleague_outside_the_reporting_line_may_still_recognise(
         headers=auth_headers(settings, seed.outsider),
     )
 
-    assert resp.status_code == 201, resp.text
-    assert resp.json()["source"] == "peer", "and it is marked as what it is"
+    assert resp.status_code == 403, resp.text
 
 
-async def test_a_peer_award_is_worth_half_a_manager_one(
+async def test_every_new_award_is_a_manager_one_at_full_points(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:
-    """Both are real recognition; only one is from the person accountable."""
+    """Only the recipient's own line can award now, so there is nobody left to
+    write a PEER row. The enum and the half-points pricing stay for rows
+    written while the programme was open, whose points were already spent."""
     by_manager = await _award(client, settings, seed.manager, seed.report)
-    by_peer = await client.post(
-        URL, json=_award_body(seed.outsider), headers=auth_headers(settings, seed.admin)
-    )
-    peer = await client.post(
-        URL,
-        json=_award_body(seed.manager),
-        headers=auth_headers(settings, seed.report),
+    by_admin = await client.post(
+        URL, json=_award_body(seed.report), headers=auth_headers(settings, seed.admin)
     )
 
-    assert by_peer.status_code == 201
-    assert peer.status_code == 201, peer.text
     assert by_manager["source"] == "manager"
     assert by_manager["points"] == 20, "Win of the Week, in full"
-    assert peer.json()["source"] == "peer"
-    assert peer.json()["points"] == 10, "half, rounded down"
+    assert by_admin.status_code == 201, by_admin.text
+    assert by_admin.json()["source"] == "manager"
+    assert by_admin.json()["points"] == 20
+
+
+async def test_a_report_cannot_recognise_their_own_manager(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """Upward recognition is not in the caller's line: the edge points the
+    other way, and the rule is about accountability, not acquaintance."""
+    resp = await client.post(
+        URL, json=_award_body(seed.manager), headers=auth_headers(settings, seed.report)
+    )
+
+    assert resp.status_code == 403, resp.text
 
 
 async def test_you_cannot_recognise_yourself(

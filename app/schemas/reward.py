@@ -102,8 +102,6 @@ class PointsBalance(BaseModel):
     earned: int
     spent: int
     available: int
-    #: Peer awards this person has left to GIVE this calendar month.
-    peer_awards_left: int
 
 
 class StandingRead(BaseModel):

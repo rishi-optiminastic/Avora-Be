@@ -30,7 +30,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from app.core.exceptions import AuthorizationError, ConflictError, NotFoundError
-from app.core.recognition_badges import PEER_AWARDS_PER_MONTH, month_start, week_start
+from app.core.recognition_badges import month_start, week_start
 from app.models.employee import Employee, Role
 from app.models.reward import RedemptionStatus, RewardItem, RewardRedemption
 from app.repositories.audit import AuditRepository
@@ -84,13 +84,11 @@ class RewardService:
         """
         earned = await self._recognitions.points_earned(employee_id)
         spent = await self._rewards.points_spent_by(employee_id)
-        given = await self._recognitions.peer_awards_given_since(employee_id, month_start())
         return PointsBalance(
             employee_id=employee_id,
             earned=earned,
             spent=spent,
             available=earned - spent,
-            peer_awards_left=max(0, PEER_AWARDS_PER_MONTH - given),
         )
 
     async def standings(
@@ -128,7 +126,10 @@ class RewardService:
         picking one by name would be inventing a result.
         """
         del caller  # org-wide, like the feed it is built from
-        since = week_start() if period == "week" else month_start() if period == "month" else None
+        # Always a bounded window now. An all-time board ranks history against
+        # history and never changes hands, which is the opposite of what a
+        # whiteboard is for.
+        since = week_start() if period == "week" else month_start()
         rows = await self._recognitions.department_standings(since=since)
         top = rows[0].awards if rows else 0
         outright = top > 0 and sum(1 for r in rows if r.awards == top) == 1

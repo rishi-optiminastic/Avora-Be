@@ -26,7 +26,6 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
-from app.core.recognition_badges import PEER_AWARDS_PER_MONTH
 from app.models.employee import Employee, EmployeeStatus, Role
 from tests.conftest import _Seed, auth_headers
 
@@ -180,7 +179,6 @@ async def test_a_fresh_employee_has_nothing(
         "earned": 0,
         "spent": 0,
         "available": 0,
-        "peer_awards_left": PEER_AWARDS_PER_MONTH,
     }
 
 
@@ -416,38 +414,37 @@ async def test_an_out_of_stock_reward_is_refused(
 # --------------------------------------------------------------------------- #
 # The peer allowance
 # --------------------------------------------------------------------------- #
-async def test_peer_awards_are_rationed_per_month(
+async def test_someone_outside_the_line_cannot_award_at_all(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:
-    """Points buy real things, so the supply has to be bounded."""
-    for _ in range(PEER_AWARDS_PER_MONTH):
-        await _award(client, settings, seed.report, seed.outsider)
+    """There is no ration any more because there is no peer award.
 
+    The monthly allowance existed to bound a supply that anybody could mint.
+    With awarding back inside the reporting line, the giver is accountable for
+    the work and the cap has nothing left to protect.
+    """
     resp = await client.post(
         RECOGNITION,
         json={
             "employee_id": str(seed.outsider.id),
             "badge": "team_player",
-            "note": "One too many.",
+            "note": "Not mine to give.",
         },
         headers=auth_headers(settings, seed.report),
     )
 
-    assert resp.status_code == 422, resp.text
-    assert "this month" in resp.json()["error"]["message"].lower()
-    assert (await _balance(client, settings, seed.report))["peer_awards_left"] == 0
+    assert resp.status_code == 403, resp.text
+    assert (await _balance(client, settings, seed.outsider))["earned"] == 0
 
 
-async def test_a_manager_recognising_their_own_reports_is_not_rationed(
+async def test_a_manager_may_recognise_their_own_reports_as_often_as_they_like(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:
     """That is the job, and it is already visible to the whole org."""
-    for _ in range(PEER_AWARDS_PER_MONTH + 3):
+    for _ in range(8):
         await _award(client, settings, seed.manager, seed.report)
 
-    assert (await _balance(client, settings, seed.manager))["peer_awards_left"] == (
-        PEER_AWARDS_PER_MONTH
-    )
+    assert (await _balance(client, settings, seed.report))["earned"] == 8 * 20
 
 
 # --------------------------------------------------------------------------- #
@@ -606,12 +603,24 @@ async def test_the_window_is_reported_back_with_the_board(
     client: AsyncClient, settings: Settings, seed: _Seed
 ) -> None:
     """So a board fetched for the week cannot be captioned as the month."""
-    for period in ("week", "month", "all"):
+    for period in ("week", "month"):
         resp = await client.get(
             f"{URL}/whiteboard?period={period}", headers=auth_headers(settings, seed.report)
         )
         assert resp.status_code == 200, resp.text
         assert resp.json()["period"] == period
+
+
+async def test_an_all_time_board_is_refused(
+    client: AsyncClient, settings: Settings, seed: _Seed
+) -> None:
+    """Dropped on purpose: ranking history against history never changes
+    hands, and a board that cannot be won again is a scoreboard, not a
+    whiteboard."""
+    resp = await client.get(
+        f"{URL}/whiteboard?period=all", headers=auth_headers(settings, seed.report)
+    )
+    assert resp.status_code == 422, resp.text
 
 
 async def test_an_unknown_window_is_refused(
