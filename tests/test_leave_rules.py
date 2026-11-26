@@ -275,10 +275,14 @@ async def test_pending_requests_reserve_the_balance(
     )
     first = await _apply(client, settings, seed.report, _body("planned", _next_weekday(0)))
     assert first.status_code == 201, first.text
-    # Half days count 0.5: nothing is left once the full day is pending.
-    second = await _apply(
-        client, settings, seed.report, _body("half_day", _next_weekday(1), half="first_half")
-    )
+    # The quota is 1 and the first day is still only PENDING, not approved -
+    # a second planned day must still be refused, or a pending request would
+    # reserve nothing.
+    #
+    # Deliberately a second PLANNED day rather than a half day: half days come
+    # off sick leave, which has its own quota, so one would be allowed here and
+    # would prove nothing about planned leave being reserved.
+    second = await _apply(client, settings, seed.report, _body("planned", _next_weekday(1)))
     assert second.status_code == 422, second.text
 
 

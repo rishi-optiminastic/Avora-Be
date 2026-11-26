@@ -35,6 +35,7 @@ from sqlalchemy import (
     LargeBinary,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -154,6 +155,16 @@ class MeetingRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Index("ix_meeting_requests_requester_status", "requester_id", "status"),
         # Upcoming / calendar reads, and the worker that completes past meetings.
         Index("ix_meeting_requests_scheduled", "scheduled_start_at"),
+        # The scheduler's reminder sweep. Partial on the NULL so the index
+        # holds only meetings still waiting for a nudge, rather than every
+        # meeting the company has ever run. Declared here as well as in the
+        # migration: an index that exists only in a migration is one
+        # autogenerate proposes dropping the next time somebody runs it.
+        Index(
+            "ix_meeting_requests_reminder_due",
+            "scheduled_start_at",
+            postgresql_where=text("reminder_sent_at IS NULL"),
+        ),
     )
 
     requester_id: Mapped[uuid.UUID] = mapped_column(
@@ -199,6 +210,12 @@ class MeetingRequest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ForeignKey("employees.id", ondelete="SET NULL"), default=None
     )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    # When the "your meeting is soon" nudge went out. A timestamp rather than a
+    # boolean, and on the row rather than inferred from the activity log,
+    # because it is the ONLY thing making the reminder idempotent: the
+    # scheduler ticks every few minutes against a window measured in tens of
+    # minutes, so without it every tick inside that window sends again.
+    reminder_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
     # Eagerly loaded: every list view shows participant count and attachment
     # count, so leaving these lazy would N+1 the queue on each page.

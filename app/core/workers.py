@@ -89,6 +89,13 @@ EXPECTED_WORKERS: tuple[WorkerSpec, ...] = (
         "Joiner and buddy feedback forms are never sent.",
     ),
     WorkerSpec(
+        "meetings",
+        "Founder meetings",
+        "worker.meeting_scheduler",
+        30,
+        "Failed bookings are never retried, nobody is reminded, and finished meetings stay open.",
+    ),
+    WorkerSpec(
         "ocr",
         "Screenshot OCR",
         "worker.ocr_worker",

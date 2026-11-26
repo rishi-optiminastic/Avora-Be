@@ -61,9 +61,15 @@ class MeetingBookingService:
         request: MeetingRequest,
         slot: MeetingSlot,
         *,
-        actor_id: uuid.UUID,
+        actor_id: uuid.UUID | None,
     ) -> MeetingRequest:
-        """Write the event, or record why it could not be written."""
+        """Write the event, or record why it could not be written.
+
+        `actor_id` is None when the scheduler retries a booking the calendar
+        refused earlier. It feeds the activity log, and a retry genuinely has
+        no human behind it - stamping the requester's name on one would make
+        the trail say they did something they did not do.
+        """
         config = await self._meeting_settings.get_or_create()
         event = await self._claim(request)
         if event is None:
@@ -228,7 +234,7 @@ class MeetingBookingService:
         slot: MeetingSlot,
         created: dict[str, object],
         *,
-        actor_id: uuid.UUID,
+        actor_id: uuid.UUID | None,
     ) -> MeetingRequest:
         event.google_event_id = _text(created.get("id"))
         event.html_link = _text(created.get("htmlLink"))
@@ -258,7 +264,7 @@ class MeetingBookingService:
         event: MeetingEvent,
         reason: str,
         *,
-        actor_id: uuid.UUID,
+        actor_id: uuid.UUID | None,
     ) -> MeetingRequest:
         event.sync_status = EventSyncStatus.FAILED
         event.last_error = reason[:500]

@@ -35,14 +35,14 @@ _HALF_DAY = 0.5
 class LeaveAllocationWrite(BaseModel):
     """HR/Admin set (or clear, with null) an employee's leave-quota override."""
 
-    planned_days: int | None = Field(default=None, ge=0, le=365)
-    sick_days: int | None = Field(default=None, ge=0, le=365)
-    annual_days: int | None = Field(default=None, ge=0, le=365)
-    bereavement_days: int | None = Field(default=None, ge=0, le=365)
-    birthday_days: int | None = Field(default=None, ge=0, le=365)
-    maternity_days: int | None = Field(default=None, ge=0, le=365)
-    paternity_days: int | None = Field(default=None, ge=0, le=365)
-    marriage_days: int | None = Field(default=None, ge=0, le=365)
+    planned_days: float | None = Field(default=None, ge=0, le=365)
+    sick_days: float | None = Field(default=None, ge=0, le=365)
+    annual_days: float | None = Field(default=None, ge=0, le=365)
+    bereavement_days: float | None = Field(default=None, ge=0, le=365)
+    birthday_days: float | None = Field(default=None, ge=0, le=365)
+    maternity_days: float | None = Field(default=None, ge=0, le=365)
+    paternity_days: float | None = Field(default=None, ge=0, le=365)
+    marriage_days: float | None = Field(default=None, ge=0, le=365)
 
     # Days of each type already taken this leave year before Avora held leave
     # records. Counted as USED (the quota is untouched). Null = none.
@@ -63,14 +63,14 @@ class LeaveAllocationWrite(BaseModel):
 
 class LeaveAllocationRead(ORMModel):
     employee_id: uuid.UUID
-    planned_days: int | None
-    sick_days: int | None
-    annual_days: int | None
-    bereavement_days: int | None
-    birthday_days: int | None
-    maternity_days: int | None
-    paternity_days: int | None
-    marriage_days: int | None
+    planned_days: float | None
+    sick_days: float | None
+    annual_days: float | None
+    bereavement_days: float | None
+    birthday_days: float | None
+    maternity_days: float | None
+    paternity_days: float | None
+    marriage_days: float | None
     planned_used_before: float | None
     sick_used_before: float | None
     annual_used_before: float | None

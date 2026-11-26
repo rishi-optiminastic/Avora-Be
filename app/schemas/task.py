@@ -40,6 +40,9 @@ class TaskCreate(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
     project: str | None = Field(default=None, max_length=128)
     project_id: uuid.UUID | None = None
+    #: The goal this work serves. Validated against what the caller may
+    #: already see, so it cannot be used to probe for targets out of scope.
+    target_id: uuid.UUID | None = None
     priority: TaskPriority = TaskPriority.MEDIUM
     # A task may be created already underway - the bulk flow imports work that
     # started before anyone wrote it down. Matches the column default.
@@ -75,6 +78,9 @@ class TaskUpdate(BaseModel):
     description: str | None = Field(default=None, max_length=2000)
     project: str | None = Field(default=None, max_length=128)
     project_id: uuid.UUID | None = None
+    #: The goal this work serves. Validated against what the caller may
+    #: already see, so it cannot be used to probe for targets out of scope.
+    target_id: uuid.UUID | None = None
     priority: TaskPriority | None = None
     status: TaskStatus | None = None
     cadence: TaskCadence | None = None
@@ -109,6 +115,10 @@ class TaskRead(ORMModel):
         default=None, validation_alias=AliasChoices("project_name", "project")
     )
     project_id: uuid.UUID | None
+    #: The linked target and its title, resolved from the relation so a list of
+    #: tasks shows which goal each serves without a second request per row.
+    target_id: uuid.UUID | None = None
+    target_title: str | None = None
     priority: TaskPriority
     status: TaskStatus
     cadence: TaskCadence

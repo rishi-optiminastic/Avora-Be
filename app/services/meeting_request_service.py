@@ -48,7 +48,6 @@ from app.models.meeting_request import (
     OPEN_STATUSES,
     TERMINAL_STATUSES,
     MeetingAttachment,
-    MeetingCategory,
     MeetingRequest,
     MeetingSlot,
     MeetingStatus,
@@ -86,6 +85,7 @@ from app.schemas.meeting_request import (
     SlotResponse,
     SuggestSlotPayload,
 )
+from app.services import meeting_policy, meeting_text
 from app.services.audience import AudienceResolver
 from app.services.meeting_booking_service import MeetingBookingService
 from app.services.notification_service import NotificationService
@@ -802,25 +802,12 @@ class MeetingRequestService:
             if slot is None:
                 raise ValidationError("That time is not on this request.")
         else:
-            # An ACCEPTED proposal outranks the original ask. The requester said
-            # yes to this specific time, and falling back to what they first
-            # asked for would book a meeting nobody agreed to - the exact
-            # failure the slot model exists to prevent.
-            agreed = [s for s in row.slots if s.status is SlotStatus.ACCEPTED]
-            slot = max(agreed, key=lambda s: as_utc(s.created_at), default=None) or next(
-                (s for s in row.slots if s.origin is SlotOrigin.REQUESTER_PREFERRED), None
-            )
+            slot = meeting_policy.default_slot(row)
             if slot is None:
                 raise ValidationError("This request has no time on it.")
-        if slot.status is SlotStatus.DECLINED:
-            raise ValidationError("That time was already refused.")
-        if (
-            slot.origin in (SlotOrigin.FOUNDERS_OFFICE, SlotOrigin.CEO)
-            and slot.status is not SlotStatus.ACCEPTED
-        ):
-            raise ValidationError(
-                "The requester has not accepted that time yet - it cannot be booked."
-            )
+        refusal = meeting_policy.refusal_reason(slot)
+        if refusal is not None:
+            raise ValidationError(refusal)
         return slot
 
     def _open_proposal(self, row: MeetingRequest) -> MeetingSlot | None:
@@ -870,33 +857,14 @@ class MeetingRequestService:
     # ---- notifications ---------------------------------------------------- #
     @staticmethod
     def _subject(row: MeetingRequest) -> str:
-        """What a request may be CALLED in a notification.
-
-        A Personal / Confidential request keeps its title out of every inbox
-        preview: the person who raised it chose that category precisely so its
-        subject would not be visible to anyone but the people deciding it.
-        """
-        if row.category is MeetingCategory.PERSONAL_CONFIDENTIAL:
-            return "a confidential request"
-        return row.title
+        """What a request may be CALLED in a notification. Shared with the
+        scheduler worker, which sends reminders about the same rows."""
+        return meeting_text.subject(row)
 
     @staticmethod
     def _when_label(row: MeetingRequest) -> str:
-        """The agreed time in the request's own zone, for a person to read.
-
-        Rendered in the zone the request was composed in rather than UTC: a
-        notification that says 05:30 for an 11:00 meeting is worse than one
-        that gives no time at all.
-        """
-        if row.scheduled_start_at is None:
-            return ""
-        zone: tzinfo
-        try:
-            zone = ZoneInfo(row.timezone)
-        except (ZoneInfoNotFoundError, ValueError):
-            zone = UTC
-        local = as_utc(row.scheduled_start_at).astimezone(zone)
-        return f"{local:%a} {local.day} {local:%b}, {local:%H:%M}"
+        """The agreed time in the request's own zone, for a person to read."""
+        return meeting_text.when_label(row)
 
     async def _name(self, employee_id: uuid.UUID) -> str:
         employee = await self._employees.get(employee_id)

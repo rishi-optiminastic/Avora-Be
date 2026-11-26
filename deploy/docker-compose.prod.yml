@@ -130,6 +130,16 @@ services:
     <<: *app-image
     command: ["python", "-m", "worker.task_recurrence_scheduler"]
 
+  # Founder Meetings: retries bookings Google refused, reminds people a meeting
+  # is about to start, and closes meetings whose time has passed. A refused
+  # booking is the one state nothing else recovers - no invitation exists to
+  # remind anybody it was meant to happen. Idle until
+  # MEETING_SCHEDULER_ENABLED=true. ONE instance only - two would race on the
+  # same booking.
+  scheduler-meetings:
+    <<: *app-image
+    command: ["python", "-m", "worker.meeting_scheduler"]
+
   # Copies employees' Circle documents into Avora and keeps the fields Circle
   # owns (pay, bank, personal details, appraisals, assets) in step (idle until
   # CIRCLE_API_URL / CIRCLE_API_SECRET are set). Never changes anything in Circle.

@@ -293,6 +293,13 @@ class Settings(BaseSettings):
     task_recurrence_enabled: bool = False
     task_recurrence_tick_seconds: int = 3600  # hourly; the dates are day-grained
 
+    # Founder Meetings scheduler (worker/meeting_scheduler.py): retries
+    # bookings the calendar refused, reminds people a meeting is starting, and
+    # closes meetings whose time has passed. Off by default - a company that
+    # has not named a CEO has nothing for it to do.
+    meeting_scheduler_enabled: bool = False
+    meeting_scheduler_tick_seconds: int = 300  # five minutes
+
     # Untracked-work detection (app/services/untracked_work_service.py): reads
     # OCR'd screen text, matches it against the work-entity catalog, and raises
     # a task where somebody is demonstrably working on a project with nothing

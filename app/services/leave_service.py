@@ -1054,20 +1054,23 @@ class LeaveService:
         def spent_from(kind: LeaveType, day: date) -> LeaveType:
             """The quota ONE leave day actually spends from.
 
-            Half days normally belong to the planned bucket. A band that grants
-            no planned leave - probation - leaves them nothing to spend from, so
-            they used to be counted into a locked card nobody is shown and
-            deducted from nothing at all: a probationer could take two half days
-            every month all year and every balance they could see stayed
-            untouched. HR had been subtracting them from sick leave by hand the
-            whole time, so that is where they go.
+            A HALF DAY ALWAYS SPENDS FROM SICK LEAVE, whatever band the person
+            is in. That is what HR has always done by hand, and the balance
+            sheet they keep is built that way.
 
-            Judged by the band ON THE DAY, never today's. The quota a day spends
-            is settled when the day is taken; re-deciding it later would hand a
-            probationer their sick leave back the moment they were confirmed and
-            overdraw the planned leave they had only just been granted.
+            It used to depend on the band: sick while planned was locked
+            (probation), planned once confirmed. That looked tidier and was
+            wrong in a way nobody saw until a quota was corrected - the day
+            somebody's planned leave was fixed, their half days silently moved
+            off sick and onto planned, changing two balances at once for a
+            reason unrelated to either. A rule that re-points historical days
+            when an unrelated figure changes is not a rule anybody can audit.
+
+            `planned_locked_on` is therefore no longer consulted here. It is
+            still used by the eligibility checks above, which genuinely do
+            depend on the band.
             """
-            if kind is LeaveType.HALF_DAY and planned_locked_on(day):
+            if kind is LeaveType.HALF_DAY:
                 return LeaveType.SICK
             return _quota_bucket(kind) or kind
 

@@ -10,10 +10,9 @@ non-null value overrides it. HR/Admin only (Security rules 5.3, 5.6).
 from __future__ import annotations
 
 import uuid
-
 from datetime import date
 
-from sqlalchemy import Date, ForeignKey, Integer, Numeric, String, UniqueConstraint
+from sqlalchemy import Date, ForeignKey, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -28,14 +27,20 @@ class LeaveAllocation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     # Annual quota overrides, in days. Null = fall back to the org LeavePolicy.
-    planned_days: Mapped[int | None] = mapped_column(Integer, default=None)
-    sick_days: Mapped[int | None] = mapped_column(Integer, default=None)
-    annual_days: Mapped[int | None] = mapped_column(Integer, default=None)
-    bereavement_days: Mapped[int | None] = mapped_column(Integer, default=None)
-    birthday_days: Mapped[int | None] = mapped_column(Integer, default=None)
-    maternity_days: Mapped[int | None] = mapped_column(Integer, default=None)
-    paternity_days: Mapped[int | None] = mapped_column(Integer, default=None)
-    marriage_days: Mapped[int | None] = mapped_column(Integer, default=None)
+    #
+    # Numeric, not Integer, because a quota is genuinely fractional: planned
+    # leave pro-rated from a mid-year confirmation lands on 4.5 days as often
+    # as 4, and an integer column silently truncated it - an employee quietly
+    # lost half a day and nothing anywhere said so. Same precision as the
+    # `*_used_before` columns below, which have always allowed halves.
+    planned_days: Mapped[float | None] = mapped_column(Numeric(5, 1), default=None)
+    sick_days: Mapped[float | None] = mapped_column(Numeric(5, 1), default=None)
+    annual_days: Mapped[float | None] = mapped_column(Numeric(5, 1), default=None)
+    bereavement_days: Mapped[float | None] = mapped_column(Numeric(5, 1), default=None)
+    birthday_days: Mapped[float | None] = mapped_column(Numeric(5, 1), default=None)
+    maternity_days: Mapped[float | None] = mapped_column(Numeric(5, 1), default=None)
+    paternity_days: Mapped[float | None] = mapped_column(Numeric(5, 1), default=None)
+    marriage_days: Mapped[float | None] = mapped_column(Numeric(5, 1), default=None)
 
     # Days of each type already taken THIS leave year before Avora held leave
     # records (Zoho, paper). Counted as used, so the card shows the real quota,

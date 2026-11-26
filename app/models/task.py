@@ -21,6 +21,7 @@ from app.models.employee import Role
 
 if TYPE_CHECKING:
     from app.models.employee import Employee
+    from app.models.target import Target
     from app.models.work_entity import WorkEntity
 
 
@@ -83,6 +84,30 @@ class Task(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         lazy="selectin",
         viewonly=True,
     )
+
+    # The goal this work serves. SET NULL for the same reason as project_id:
+    # retiring a target must not delete the tasks that were done towards it,
+    # and the history of what was worked on is worth more than the link.
+    #
+    # One target per task, mirroring project_id rather than introducing a join
+    # table. A task is a piece of work done towards a goal; if it genuinely
+    # serves two, that is two tasks.
+    target_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("targets.id", ondelete="SET NULL"), default=None, index=True
+    )
+    # Selectin-loaded like project_link, so a list of tasks carries its targets'
+    # titles without an N+1. viewonly - the link is set via target_id.
+    target_link: Mapped[Target | None] = relationship(
+        "Target",
+        primaryjoin="Task.target_id == Target.id",
+        lazy="selectin",
+        viewonly=True,
+    )
+
+    @property
+    def target_title(self) -> str | None:
+        """The linked target's title, for the read model."""
+        return self.target_link.title if self.target_link is not None else None
     priority: Mapped[TaskPriority] = mapped_column(default=TaskPriority.MEDIUM, index=True)
     status: Mapped[TaskStatus] = mapped_column(default=TaskStatus.TODO, index=True)
     cadence: Mapped[TaskCadence] = mapped_column(default=TaskCadence.ONE_TIME, index=True)

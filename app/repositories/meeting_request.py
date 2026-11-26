@@ -195,6 +195,54 @@ class MeetingRequestRepository:
         )
         return list(rows.scalars().all())
 
+    async def due_for_reminder(
+        self, *, now: datetime, until: datetime, limit: int
+    ) -> Sequence[MeetingRequest]:
+        """Confirmed meetings starting soon that nobody has been nudged about.
+
+        `reminder_sent_at IS NULL` is what makes this safe to run every few
+        minutes: once the worker stamps a row it drops out of the window.
+
+        Bounded BELOW by `now` as well as above. A worker that was down over
+        the weekend must not come back and announce Monday's meetings as
+        starting soon when they finished on Friday - the row would still be
+        CONFIRMED (nothing marked it complete while the worker was dead) and
+        would otherwise match on the upper bound alone.
+
+        Not scope-clamped: its only caller is a background job with no human
+        principal to scope to.
+        """
+        rows = await self._session.execute(
+            select(MeetingRequest)
+            .where(
+                MeetingRequest.status == MeetingStatus.CONFIRMED,
+                MeetingRequest.reminder_sent_at.is_(None),
+                MeetingRequest.scheduled_start_at.is_not(None),
+                MeetingRequest.scheduled_start_at >= now,
+                MeetingRequest.scheduled_start_at <= until,
+            )
+            .order_by(MeetingRequest.scheduled_start_at.asc())
+            .limit(limit)
+        )
+        return list(rows.scalars().all())
+
+    async def stuck_scheduling(self, *, limit: int) -> Sequence[MeetingRequest]:
+        """Approved meetings the calendar would not take.
+
+        Both approvers already said yes to these; only Google refused. They are
+        the one state in this feature that nothing recovers on its own, because
+        no invitation exists to remind anybody they were supposed to happen.
+
+        Oldest first, so a backlog is cleared in the order it accumulated.
+        """
+        rows = await self._session.execute(
+            select(MeetingRequest)
+            .where(MeetingRequest.status == MeetingStatus.SCHEDULING_FAILED)
+            .order_by(MeetingRequest.updated_at.asc())
+            .limit(limit)
+        )
+        return list(rows.scalars().all())
+
     # ---- participants ----------------------------------------------------- #
     async def replace_participants(
         self, row: MeetingRequest, employee_ids: Sequence[uuid.UUID]

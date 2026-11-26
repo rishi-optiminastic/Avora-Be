@@ -37,6 +37,7 @@ from app.repositories.employee import EmployeeRepository
 from app.repositories.notification import NotificationRepository
 from app.repositories.personal_access_token import PersonalAccessTokenRepository
 from app.repositories.ping import PingRepository
+from app.repositories.target import TargetRepository
 from app.repositories.task import TaskRepository
 from app.repositories.task_comment import TaskCommentRepository
 from app.repositories.work_entity import WorkEntityRepository
@@ -116,6 +117,7 @@ def _task_service(session: AsyncSession) -> TaskService:
         EmployeeRepository(session),
         AssignmentGrantRepository(session),
         WorkEntityRepository(session),
+        TargetRepository(session),
         TaskCommentRepository(session),
         AuditRepository(session),
         NotificationService(NotificationRepository(session)),

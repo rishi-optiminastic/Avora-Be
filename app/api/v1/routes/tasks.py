@@ -47,6 +47,9 @@ async def list_tasks(
     task_status: Annotated[TaskStatus | None, Query(alias="status")] = None,
     cadence: Annotated[TaskCadence | None, Query()] = None,
     assignee_id: Annotated[uuid.UUID | None, Query()] = None,
+    # The work going towards one goal. Still scoped to the caller, so this
+    # narrows what they may already see rather than opening anything up.
+    target_id: Annotated[uuid.UUID | None, Query()] = None,
     # Only tasks the caller handed out: the follow-up view across workspaces.
     assigned_by_me: Annotated[bool, Query()] = False,
 ) -> Page[TaskRead]:
@@ -58,6 +61,7 @@ async def list_tasks(
         status=task_status,
         cadence=cadence,
         assignee_id=assignee_id,
+        target_id=target_id,
         assigned_by_me=assigned_by_me,
     )
     return Page[TaskRead](

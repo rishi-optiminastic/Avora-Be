@@ -1013,6 +1013,7 @@ def get_task_service(
     employees: Annotated[EmployeeRepository, Depends(get_employee_repo)],
     grants: Annotated[AssignmentGrantRepository, Depends(get_assignment_grant_repo)],
     entities: Annotated[WorkEntityRepository, Depends(get_work_entity_repo)],
+    targets: Annotated[TargetRepository, Depends(get_target_repo)],
     comments: Annotated[TaskCommentRepository, Depends(get_task_comment_repo)],
     audit: Annotated[AuditRepository, Depends(get_audit_repo)],
     notifications: Annotated[NotificationService, Depends(get_notification_service)],
@@ -1020,7 +1021,7 @@ def get_task_service(
     llm: Annotated[LlmService, Depends(get_llm_service)],
 ) -> TaskService:
     return TaskService(
-        tasks, employees, grants, entities, comments, audit, notifications, email, llm
+        tasks, employees, grants, entities, targets, comments, audit, notifications, email, llm
     )
 
 

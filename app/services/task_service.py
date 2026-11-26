@@ -22,6 +22,7 @@ from app.models.task_comment import TaskComment
 from app.repositories.assignment_grant import AssignmentGrantRepository
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
+from app.repositories.target import TargetRepository
 from app.repositories.task import TaskRepository
 from app.repositories.task_comment import TaskCommentRepository
 from app.repositories.work_entity import WorkEntityRepository
@@ -78,6 +79,7 @@ class TaskService:
         employees: EmployeeRepository,
         grants: AssignmentGrantRepository,
         entities: WorkEntityRepository,
+        targets: TargetRepository,
         comments: TaskCommentRepository,
         audit: AuditRepository,
         notifications: NotificationService,
@@ -88,6 +90,7 @@ class TaskService:
         self._employees = employees
         self._grants = grants
         self._entities = entities
+        self._targets = targets
         self._comments = comments
         self._audit = audit
         self._notifications = notifications
@@ -140,6 +143,21 @@ class TaskService:
         if entity is None or not entity.is_active:
             raise ValidationError("Unknown or inactive project.")
 
+    async def _validate_target(self, caller: CurrentUser, target_id: uuid.UUID | None) -> None:
+        """The goal this task serves, checked against what the caller may see.
+
+        Scoped deliberately, unlike `_validate_project`: projects are an
+        admin-curated catalogue everyone can name, while a target is somebody's
+        goal with a number on it. Resolving one the caller cannot read would
+        let them confirm it exists by id, so an out-of-scope target is reported
+        as unknown rather than forbidden.
+        """
+        if target_id is None:
+            return
+        target = await self._targets.get_in_scope(caller, target_id)
+        if target is None:
+            raise ValidationError("Unknown target.")
+
     async def _validate_parent(
         self, caller: CurrentUser, parent_id: uuid.UUID | None, *, task_id: uuid.UUID | None
     ) -> None:
@@ -172,6 +190,7 @@ class TaskService:
         status: TaskStatus | None = None,
         cadence: TaskCadence | None = None,
         assignee_id: uuid.UUID | None = None,
+        target_id: uuid.UUID | None = None,
         assigned_by_me: bool = False,
     ) -> tuple[Sequence[Task], int]:
         return await self._tasks.list_for_scope(
@@ -181,6 +200,7 @@ class TaskService:
             status=status,
             cadence=cadence,
             assignee_id=assignee_id,
+            target_id=target_id,
             assigned_by=caller.employee_id if assigned_by_me else None,
         )
 
@@ -199,6 +219,7 @@ class TaskService:
         if not await self._can_assign_to(caller, payload.assignee_id):
             raise AuthorizationError()
         await self._validate_project(payload.project_id)
+        await self._validate_target(caller, payload.target_id)
         await self._validate_parent(caller, payload.parent_task_id, task_id=None)
         task = await self._tasks.create(payload, assigned_by_id=caller.employee_id)
         await self._audit.append(
@@ -264,6 +285,7 @@ class TaskService:
             if not await self._can_assign_to(caller, item.assignee_id):
                 raise AuthorizationError()
             await self._validate_project(item.project_id)
+            await self._validate_target(caller, item.target_id)
 
         tasks = await self._tasks.create_many(payload.tasks, assigned_by_id=caller.employee_id)
         await self._audit.append(
@@ -358,6 +380,8 @@ class TaskService:
                 raise AuthorizationError()
             if "project_id" in fields:
                 await self._validate_project(payload.project_id)
+            if "target_id" in fields:
+                await self._validate_target(caller, payload.target_id)
 
         # A parent link (from anyone allowed to edit) must be a visible task and
         # must not create a cycle.
@@ -393,6 +417,11 @@ class TaskService:
         # selectin relation still holds the pre-update link until refreshed.
         if "project_id" in fields:
             await self._tasks.reload_project_link(task)
+        # Same for a re-targeted task: the selectin relation still holds the
+        # old target until it is refreshed, so the response would name the goal
+        # the task used to serve.
+        if "target_id" in fields:
+            await self._tasks.reload_target_link(task)
         await self._audit.append(
             actor=str(caller.employee_id),
             action="task.update",

@@ -1,14 +1,14 @@
 """Which quota a half day actually spends from.
 
-A half day is planned time off, so it belongs to the planned bucket - but
-probation grants no planned leave at all. Charging it there deducted it from
-nothing: a probationer could take two half days a month all year and every
-balance they could see stayed exactly where it started. HR had been taking
-those days off sick leave by hand the whole time.
+A HALF DAY ALWAYS COMES OFF SICK LEAVE, in every band. That is what HR has
+always done by hand and what their balance sheet is built from.
 
-So while planned is locked, a half day comes off SICK, and the bucket is
-settled by the band on the day the leave falls - never by today's band, or
-being confirmed would hand back sick leave already spent.
+It used to depend on the band - sick while planned was locked, planned once
+confirmed. That was wrong in a way nobody saw until a quota was corrected: the
+day somebody's planned leave was fixed, their half days silently moved off
+sick and onto planned, changing two balances at once for a reason unrelated to
+either. These tests pin the bucket to sick regardless of band, regardless of
+any override, and regardless of when the day was taken.
 """
 
 from __future__ import annotations
@@ -69,9 +69,7 @@ async def _add_half_day(db: AsyncSession, employee_id: uuid.UUID, day: date) -> 
     await db.commit()
 
 
-async def _balance(
-    client: AsyncClient, settings: Settings, actor: Employee
-) -> dict[str, object]:
+async def _balance(client: AsyncClient, settings: Settings, actor: Employee) -> dict[str, object]:
     resp = await client.get("/api/v1/leaves/balance", headers=auth_headers(settings, actor))
     assert resp.status_code == 200, resp.text
     return resp.json()  # type: ignore[no-any-return]
@@ -142,24 +140,29 @@ async def test_a_pending_half_day_is_reserved_against_sick_too(
 
 
 # --- off probation: the day comes off planned ------------------------------- #
-async def test_a_confirmed_employees_half_day_comes_off_planned(
+async def test_a_confirmed_employees_half_day_still_comes_off_sick(
     client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
 ) -> None:
+    """Confirmation does not move half days onto planned leave."""
     await _set_hire_date(db, seed.report.id, add_months(datetime.now(UTC).date(), -7))
     await _add_half_day(db, seed.report.id, _weekday_before(3))
 
     payload = await _balance(client, settings, seed.report)
 
-    assert payload["half_day_bucket"] == LeaveType.PLANNED.value
-    assert _row(payload, LeaveType.PLANNED)["used"] == 0.5
-    assert _row(payload, LeaveType.SICK)["used"] == 0.0
+    assert payload["half_day_bucket"] == LeaveType.SICK.value
+    assert _row(payload, LeaveType.SICK)["used"] == 0.5
+    assert _row(payload, LeaveType.PLANNED)["used"] == 0.0
 
 
-async def test_a_planned_override_keeps_the_day_on_planned_during_probation(
+async def test_a_planned_override_does_not_pull_the_day_onto_planned(
     client: AsyncClient, db: AsyncSession, settings: Settings, seed: _Seed
 ) -> None:
-    """An override is a real quota HR granted by hand, so there IS something to
-    spend from and the day must not be moved."""
+    """Granting somebody planned leave must not move their half days.
+
+    This is the case that forced the rule: correcting a quota silently
+    re-pointed days already taken, so two balances moved for a reason that had
+    nothing to do with either of them.
+    """
     await _set_hire_date(db, seed.report.id, _weekday_before(30))
     db.add(LeaveAllocation(employee_id=seed.report.id, planned_days=3))
     await db.commit()
@@ -167,9 +170,9 @@ async def test_a_planned_override_keeps_the_day_on_planned_during_probation(
 
     payload = await _balance(client, settings, seed.report)
 
-    assert payload["half_day_bucket"] == LeaveType.PLANNED.value
-    assert _row(payload, LeaveType.PLANNED)["used"] == 0.5
-    assert _row(payload, LeaveType.SICK)["used"] == 0.0
+    assert payload["half_day_bucket"] == LeaveType.SICK.value
+    assert _row(payload, LeaveType.SICK)["used"] == 0.5
+    assert _row(payload, LeaveType.PLANNED)["used"] == 0.0
 
 
 # --- the band on the DAY, not today's --------------------------------------- #
@@ -186,9 +189,9 @@ async def test_confirmation_does_not_refund_a_half_day_taken_on_probation(
 
     payload = await _balance(client, settings, seed.report)
 
-    # A half day applied for TODAY would be planned - they are confirmed now.
-    assert payload["half_day_bucket"] == LeaveType.PLANNED.value
-    # The one already taken stays where it was charged.
+    # Sick either way now: the bucket no longer depends on the band, so there
+    # is nothing for confirmation to move.
+    assert payload["half_day_bucket"] == LeaveType.SICK.value
     assert _row(payload, LeaveType.SICK)["used"] == 0.5
     assert _row(payload, LeaveType.PLANNED)["used"] == 0.0
 

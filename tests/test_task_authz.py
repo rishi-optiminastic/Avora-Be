@@ -20,6 +20,7 @@ from app.repositories.assignment_grant import AssignmentGrantRepository
 from app.repositories.audit import AuditRepository
 from app.repositories.employee import EmployeeRepository
 from app.repositories.notification import NotificationRepository
+from app.repositories.target import TargetRepository
 from app.repositories.task import TaskRepository
 from app.repositories.task_comment import TaskCommentRepository
 from app.repositories.work_entity import WorkEntityRepository
@@ -801,6 +802,7 @@ def _task_service(db: AsyncSession, llm: object) -> TaskService:
         EmployeeRepository(db),
         AssignmentGrantRepository(db),
         WorkEntityRepository(db),
+        TargetRepository(db),
         TaskCommentRepository(db),
         AuditRepository(db),
         NotificationService(NotificationRepository(db)),

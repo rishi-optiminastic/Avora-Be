@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.models.employee import Employee, Role
+from app.models.target import Target
 from app.models.task import Task, TaskCadence, TaskStatus
 from app.models.task_collaborator import TaskCollaborator
 from app.models.work_entity import WorkEntity
@@ -106,6 +107,7 @@ class TaskRepository:
             assigned_by_id=assigned_by_id,
             project=payload.project,
             project_id=payload.project_id,
+            target_id=payload.target_id,
             priority=payload.priority,
             status=payload.status,
             cadence=payload.cadence,
@@ -123,6 +125,7 @@ class TaskRepository:
         # serializing `collaborator_ids` never triggers a lazy load outside async.
         set_committed_value(task, "collaborators", [])
         await self._seed_project_link(task)
+        await self._seed_target_link(task)
         return task
 
     async def create_many(
@@ -138,6 +141,7 @@ class TaskRepository:
                 assigned_by_id=assigned_by_id,
                 project=payload.project,
                 project_id=payload.project_id,
+                target_id=payload.target_id,
                 priority=payload.priority,
                 status=payload.status,
                 cadence=payload.cadence,
@@ -156,6 +160,7 @@ class TaskRepository:
         for task in tasks:
             set_committed_value(task, "collaborators", [])
             await self._seed_project_link(task)
+            await self._seed_target_link(task)
         return tasks
 
     async def _seed_project_link(self, task: Task) -> None:
@@ -168,6 +173,17 @@ class TaskRepository:
             else None
         )
         set_committed_value(task, "project_link", entity)
+
+    async def _seed_target_link(self, task: Task) -> None:
+        """Seed the (selectin) `target_link` on a freshly-created task, for the
+        same reason as `_seed_project_link`: reading `target_title` must never
+        trigger a lazy load outside async."""
+        target = (
+            await self._session.get(Target, task.target_id)
+            if task.target_id is not None
+            else None
+        )
+        set_committed_value(task, "target_link", target)
 
     async def get(self, task_id: uuid.UUID) -> Task | None:
         return await self._session.get(Task, task_id)
@@ -199,6 +215,11 @@ class TaskRepository:
         model shows the new project's name (the relation doesn't auto-sync)."""
         await self._session.refresh(task, attribute_names=["project_link"])
 
+    async def reload_target_link(self, task: Task) -> None:
+        """Re-read a task's linked Target after target_id changed, so the read
+        model shows the new target's title (the relation doesn't auto-sync)."""
+        await self._session.refresh(task, attribute_names=["target_link"])
+
     async def get_in_scope(self, caller: CurrentUser, task_id: uuid.UUID) -> Task | None:
         clause = self._scope_clause(caller)
         stmt = select(Task).where(Task.id == task_id)
@@ -215,6 +236,7 @@ class TaskRepository:
         status: TaskStatus | None = None,
         cadence: TaskCadence | None = None,
         assignee_id: uuid.UUID | None = None,
+        target_id: uuid.UUID | None = None,
         assigned_by: uuid.UUID | None = None,
     ) -> tuple[Sequence[Task], int]:
         stmt = select(Task)
@@ -223,6 +245,10 @@ class TaskRepository:
             stmt = stmt.where(clause)
         if status is not None:
             stmt = stmt.where(Task.status == status)
+        # Narrows within the caller's scope, never past it: the scope clause
+        # above has already been applied.
+        if target_id is not None:
+            stmt = stmt.where(Task.target_id == target_id)
         if cadence is not None:
             stmt = stmt.where(Task.cadence == cadence)
         if assignee_id is not None:
